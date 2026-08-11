@@ -1,0 +1,151 @@
+{
+  "app_name": "Lemon Mandi Billing",
+  "personality": "5 Brutalist Mobile",
+  "personality_one_liner": "A high-contrast, utilitarian ledger interface optimized for fast, outdoor numeric entry and operational clarity.",
+  "color": {
+    "surface": "#FFFFFF",
+    "onSurface": "#111827",
+    "surfaceSecondary": "#F3F4F6",
+    "onSurfaceSecondary": "#1F2937",
+    "surfaceTertiary": "#E5E7EB",
+    "onSurfaceTertiary": "#374151",
+    "surfaceInverse": "#111827",
+    "onSurfaceInverse": "#FFFFFF",
+    "brand": "#166534",
+    "brandPrimary": "#15803D",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#DCFCE7",
+    "onBrandSecondary": "#166534",
+    "brandTertiary": "#22C55E",
+    "onBrandTertiary": "#FFFFFF",
+    "success": "#059669",
+    "onSuccess": "#FFFFFF",
+    "warning": "#D97706",
+    "onWarning": "#FFFFFF",
+    "error": "#DC2626",
+    "onError": "#FFFFFF",
+    "border": "#D1D5DB",
+    "borderStrong": "#374151",
+    "divider": "#E5E7EB"
+  },
+  "typography": {
+    "displayFontFamily": "Space Grotesk",
+    "textFontFamily": "JetBrains Mono",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Use visible, structural spacing rhythms. High density for table rows and lots, but generous tap targets (min 56pt) for primary inputs.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 0,
+    "md": 0,
+    "lg": 0,
+    "pill": 999
+  },
+  "shadow_tier": "0",
+  "navigation": "bottom_tabs",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": "false",
+    "do's": [],
+    "dont's": [
+      "No glassmorphism anywhere. This is a brutalist, utility-first app that relies on hard borders and solid colors for hierarchy."
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-blur",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Home Dashboard",
+      "purpose": "A live operational surface showing today's summaries with a massive, sticky FAB to create a New Patti.",
+      "states": {
+        "loading": "Centered hard-contrast loader.",
+        "empty": "No pattis today. Big blocky button 'Start First Auction'.",
+        "error": "Error fetching stats. Retry block button."
+      },
+      "layout": "Bento-style KPI dashboard at the top (Total Farmers, Pattis, Amount, Daily Bhada Rate) arranged in sharp-edged grid containers with 2pt borders. Below, a tabular list of recent activity. A heavy, sticky 'New Patti' CTA pinned at the bottom-right or full-width at the bottom."
+    },
+    {
+      "name": "New Patti Flow (Multi-step)",
+      "purpose": "Fast, error-free data entry for auction lots, optimized for numeric keypads.",
+      "states": {
+        "loading": "Saving Patti overlay.",
+        "empty": "N/A",
+        "error": "Validation error text inline with the specific input field."
+      },
+      "layout": "Step 1: Select/Add Farmer via Searchable list. Step 2: Add Lots (Form with manual Lot Serial, Bag count, Rate per bag, Select Vendor) with a persistent 'Save & Add Another Lot' button. Step 3: Review Deductions (Hamali, Stationery, Bhada) in a receipt-like layout. Step 4: Final Bill generation. Use KeyboardAvoidingView and numeric keyboards exclusively where applicable."
+    },
+    {
+      "name": "Pattis History",
+      "purpose": "A tabular ledger of past bills with quick access to view details and re-share PDFs.",
+      "states": {
+        "loading": "Skeleton rows of tabular data.",
+        "empty": "High-contrast document icon with 'No bills generated yet'.",
+        "error": "Failed to load history. Full screen error state."
+      },
+      "layout": "Compact rows, aligned numeric columns (Date | Farmer | Total). Use Mono font for all amounts. A prominent 'Filter' bar at the top."
+    },
+    {
+      "name": "Directory (Farmers/Vendors)",
+      "purpose": "Manage lists of farmers and vendors.",
+      "states": {
+        "loading": "List skeleton.",
+        "empty": "Empty state illustration + 'Add First Farmer/Vendor'.",
+        "error": "List load error."
+      },
+      "layout": "Segmented control at the top (Farmers | Vendors). Search bar. List of names with quick 'Edit' actions. Large 'Add New' CTA at the bottom."
+    },
+    {
+      "name": "Admin Settings",
+      "purpose": "Configure default billing factors and rates.",
+      "states": {
+        "loading": "Loading settings.",
+        "empty": "N/A",
+        "error": "Failed to save settings."
+      },
+      "layout": "Form layout with bold labels and mono-spaced numeric inputs for Payment Factor (e.g., 0.90), Default Hamali, Default Stationery. Save button sticky at bottom."
+    }
+  ],
+  "images": {
+    "login_hero": {
+      "url": "https://images.unsplash.com/photo-1528632735386-3bb3ead106f3?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzV8MHwxfHNlYXJjaHwzfHxsZW1vbiUyMGhhcnZlc3QlMjBmYXJtJTIwYWdyaWN1bHR1cmV8ZW58MHx8fHwxNzg1ODI0MTM0fDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Basket of freshly harvested lemons"
+    },
+    "empty_pattis": {
+      "url": "https://images.unsplash.com/photo-1591611032712-5bb11fda016b?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA0MTJ8MHwxfHNlYXJjaHwxfHxyZWNlaXB0JTIwYmlsbCUyMGRvY3VtZW50JTIwZmxhdGxheXxlbnwwfHx8fDE3ODU4MjQxMzR8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Receipts and bills flatlay"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Strictly follow the '5 Brutalist Mobile' personality. Use sharp corners (radius: 0), no shadows, and structural 2pt borders for distinct UI containers.",
+    "Data entry is the core of this app. Use 'JetBrains Mono' for all numerical inputs, tables, and Patti calculations so that decimal points and digits align perfectly.",
+    "Implement comprehensive keyboard handling. The New Patti flow has extensive numeric entry (Lot Serial, Bag counts, Rates); ensure the keyboard never covers the active input using KeyboardAvoidingView, and configure 'keyboardType' appropriately.",
+    "NEVER display vendor details on the generated Patti (bill) meant for the farmer. The vendor data is strictly for internal reports.",
+    "Wire haptics tightly to actions. Provide instant mechanical haptic feedback when adding a lot, toggling segments, or finalizing a Patti.",
+    "Ensure outdoor readability: the primary background must be stark white, text near-black, and primary actions a high-contrast Deep Agricultural Green (#15803D). No subtle low-contrast grays for essential data.",
+    "Provide a PDF generation and sharing mechanism for the final Patti output."
+  ]
+}

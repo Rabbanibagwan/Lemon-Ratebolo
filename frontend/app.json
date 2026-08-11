@@ -1,0 +1,76 @@
+{
+  "expo": {
+    "name": "Lemon Ratebolo",
+    "slug": "lemon-ratebolo",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "lemonratebolo",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.emergent.lemonauctionhub.n49a6j",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Scan Patti QR & Action Book pages",
+        "NSPhotoLibraryUsageDescription": "Import Action Book photos for OCR"
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#000000"
+      },
+      "edgeToEdgeEnabled": true,
+      "package": "com.emergent.lemonauctionhub.n49a6j",
+      "usesCleartextTraffic": true,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.INTERNET",
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/splash-image.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#000000"
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Scan Patti QR & Action Book pages"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Import Action Book photos for OCR",
+          "cameraPermission": "Take Action Book photos for OCR"
+        }
+      ],
+      "@react-native-community/datetimepicker"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "94faf614-28b8-4295-8ecd-e731f6743b61"
+      }
+    },
+    "owner": "rabanibagawan"
+  }
+}

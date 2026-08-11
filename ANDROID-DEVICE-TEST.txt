@@ -1,0 +1,28 @@
+Lemon Ratebolo — Android connectivity (updated)
+================================================
+
+Problem with previous APK
+  Baked URL: http://192.168.1.2:8001
+  Backend was up on PC, but the phone never reached it
+  (no phone IP in server logs). Typical causes: Wi‑Fi isolation,
+  phone on mobile data, or Windows Firewall blocking inbound 8001
+  (firewall rule needs Admin — Access Denied from Cursor).
+
+Fix for this new APK
+  Public HTTPS tunnel → PC backend:
+  https://pie-appointed-soc-replace.trycloudflare.com
+
+Keep these running on the PC while testing:
+  1) Backend:
+       cd backend
+       python -m uvicorn server:app --host 0.0.0.0 --port 8001
+  2) Tunnel (do not close this terminal):
+       npx --yes cloudflared tunnel --url http://127.0.0.1:8001
+     If the tunnel restarts, the URL changes — update eas.json and rebuild.
+
+Login endpoint
+  POST {EXPO_PUBLIC_BACKEND_URL}/api/auth/login
+
+Optional quick check on the phone browser
+  Open: https://pie-appointed-soc-replace.trycloudflare.com/docs
+  If that loads, the new APK should be able to login.
