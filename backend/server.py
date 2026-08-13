@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated, List, Optional
 from pathlib import Path
 
+import certifi
 import jwt
 from dotenv import load_dotenv
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, Query
@@ -31,7 +32,28 @@ JWT_SECRET = os.environ.get("JWT_SECRET", "lemon-mandi-dev-secret-change-in-prod
 JWT_ALG = "HS256"
 JWT_TTL_MINUTES = 60 * 24 * 30
 
-client = AsyncIOMotorClient(MONGO_URL)
+
+def _mongo_client_kwargs(url: str) -> dict:
+    """Atlas/SRV-safe Motor options. Credentials stay in MONGO_URL only."""
+    kwargs: dict = {
+        "serverSelectionTimeoutMS": 30000,
+        "connectTimeoutMS": 20000,
+        "socketTimeoutMS": 20000,
+    }
+    lower = (url or "").lower()
+    # mongodb+srv and Atlas hosts require TLS; pin CA bundle for Render/OpenSSL.
+    if (
+        lower.startswith("mongodb+srv://")
+        or "mongodb.net" in lower
+        or "tls=true" in lower
+        or "ssl=true" in lower
+    ):
+        kwargs["tls"] = True
+        kwargs["tlsCAFile"] = certifi.where()
+    return kwargs
+
+
+client = AsyncIOMotorClient(MONGO_URL, **_mongo_client_kwargs(MONGO_URL))
 db = client[DB_NAME]
 
 pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -40,6 +62,16 @@ DUMMY_HASH = pwd.hash("dummy-password-never-used")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Fail fast with a clear error if Atlas/local Mongo is unreachable.
+    try:
+        await client.admin.command("ping")
+        logger.info("Startup: MongoDB ping ok.")
+    except Exception as e:  # noqa: BLE001
+        logger.error("Startup: MongoDB connection failed: %s", e)
+        raise RuntimeError(
+            "MongoDB connection failed. Check MONGO_URL, Atlas network access, and TLS."
+        ) from e
+
     # Startup: ensure indexes
     await db.shops.create_index("username", unique=True)
     await db.shops.create_index("id", unique=True)
