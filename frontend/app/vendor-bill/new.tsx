@@ -69,11 +69,19 @@ export default function NewVendorBill() {
           setHamali(String(b.hamali));
           setCess(String(b.cess));
           setNotes(b.notes || "");
-          setLines(b.lines.map((l) => ({
-            key: newKey(), lot_id: l.lot_id, lot_no: l.lot_no, farmer_name: l.farmer_name,
-            bags: String(l.bags), auction_rate: String(l.auction_rate),
-            vendor_rate: String(l.vendor_rate),
-          })));
+          setLines(b.lines.map((l) => {
+            const factor = Number(b.vendor_factor ?? 1.06);
+            const marginN = Number(b.margin_per_bag) || 0;
+            const formula = l.auction_rate * factor + marginN;
+            // Only keep an explicit override when it differs from the factor formula.
+            // Otherwise leave empty so Vendor factor / margin changes recalculate rates.
+            const isOverride = Math.abs(Number(l.vendor_rate) - formula) > 0.009;
+            return {
+              key: newKey(), lot_id: l.lot_id, lot_no: l.lot_no, farmer_name: l.farmer_name,
+              bags: String(l.bags), auction_rate: String(l.auction_rate),
+              vendor_rate: isOverride ? String(l.vendor_rate) : "",
+            };
+          }));
         } else if (vendor_id) {
           const v = await api.get<Vendor[]>("/vendors").then((xs) => xs.find((x) => x.id === vendor_id) || null);
           setVendor(v);
@@ -92,6 +100,29 @@ export default function NewVendorBill() {
     if (!isEdit) setDate(workingDateISO);
   }, [workingDateISO, isEdit]);
 
+  const loadUnbilled = useCallback(async (v: Vendor, iso: string, quiet = false) => {
+    try {
+      const day = await api.get<VendorDayLine[]>(`/vendors/${v.id}/unbilled-lines?date=${iso}`);
+      if (!day.length) {
+        if (!quiet) Alert.alert("No lots", `No pending purchases for ${v.name} on ${iso}.`);
+        setLines([]);
+        return;
+      }
+      setLines(day.map((d) => ({
+        key: newKey(),
+        lot_id: d.lot_id, lot_no: d.lot_no, farmer_name: d.farmer_name,
+        bags: String(d.bags), auction_rate: String(d.auction_rate), vendor_rate: "",
+      })));
+    } catch (e: any) {
+      if (!quiet) Alert.alert("Failed", e?.detail || "Could not fetch lots");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isEdit || !vendor) return;
+    void loadUnbilled(vendor, workingDateISO, true);
+  }, [isEdit, vendor, workingDateISO, loadUnbilled]);
+
   const addLine = useCallback(() => {
     setLines((xs) => [...xs, { key: newKey(), lot_id: null, lot_no: "", farmer_name: "", bags: "", auction_rate: "", vendor_rate: "" }]);
   }, []);
@@ -102,21 +133,7 @@ export default function NewVendorBill() {
 
   const autoDraft = async () => {
     if (!vendor) return;
-    try {
-      const day = await api.get<VendorDayLine[]>(`/vendors/${vendor.id}/unbilled-lines?date=${date}`);
-      if (!day.length) {
-        Alert.alert("No lots", `No lots sold to ${vendor.name} on ${date}.`);
-        return;
-      }
-      const drafted: LineDraft[] = day.map((d) => ({
-        key: newKey(),
-        lot_id: d.lot_id, lot_no: d.lot_no, farmer_name: d.farmer_name,
-        bags: String(d.bags), auction_rate: String(d.auction_rate), vendor_rate: "",
-      }));
-      setLines(drafted);
-    } catch (e: any) {
-      Alert.alert("Failed", e?.detail || "Could not fetch lots");
-    }
+    await loadUnbilled(vendor, date, false);
   };
 
   const totals = useMemo(() => {
@@ -170,10 +187,14 @@ export default function NewVendorBill() {
       const b = isEdit
         ? await api.put<VendorBill>(`/vendor-bills/${editId}`, payload)
         : await api.post<VendorBill>("/vendor-bills", payload);
-      const params: Record<string, string> = { id: b.id };
-      if (mode === "print") params.autoPrint = "1";
-      else if (mode === "share") params.autoShare = "1";
-      router.replace({ pathname: "/vendor-bill/[id]", params });
+      router.replace({
+        pathname: "/vendor-bill/[id]",
+        params: {
+          id: b.id,
+          ...(mode === "print" ? { autoPrint: "1" } : {}),
+          ...(mode === "share" ? { autoShare: "1" } : {}),
+        },
+      });
     } catch (e: any) {
       setError(e?.detail || "Failed to save");
     } finally {

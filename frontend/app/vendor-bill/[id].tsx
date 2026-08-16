@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView,
+  ActivityIndicator, Alert, Modal, Pressable, ScrollView,
   StyleSheet, Text, View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -8,10 +8,11 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import { api, ShopProfile, VendorBill } from "@/src/api";
+import { KeyboardFormAvoid } from "@/src/components/KeyboardForm";
 import { useAuth } from "@/src/context/AuthContext";
 import { colors, font, money, spacing } from "@/src/theme";
 import { Button, Input } from "@/src/components/ui";
-import { clampPaperMm } from "@/src/utils/thermal-print";
+import { clampPaperMm, thermalPrintUserMessage } from "@/src/utils/thermal-print";
 import { shareVendorBillPdf, thermalPrintVendorBill } from "@/src/utils/vendor-bill-print";
 
 export default function VendorBillDetail() {
@@ -74,7 +75,7 @@ export default function VendorBillDetail() {
       await thermalPrintVendorBill(b, pf || { shop_name: session.shop_name } as any, paperMm);
     } catch (e) {
       console.warn("thermal print error", e);
-      Alert.alert("Printing failed", "Please ensure a printer is paired and try again.");
+      Alert.alert("Print failed", thermalPrintUserMessage(e));
     } finally { setSharing(false); }
   };
 
@@ -128,6 +129,24 @@ export default function VendorBillDetail() {
         </View>
         {!isDeleted && (
           <>
+            <Pressable
+              onPress={() => router.push({ pathname: "/vendor/[id]", params: { id: b.vendor_id } })}
+              hitSlop={12}
+              testID="bill-ledger"
+              style={{ marginRight: 10 }}
+            >
+              <Ionicons name="book-outline" size={20} color={colors.onSurface} />
+            </Pressable>
+            {isOwner ? (
+              <Pressable
+                onPress={() => router.push({ pathname: "/vendor-payment/new", params: { vendor_id: b.vendor_id } })}
+                hitSlop={12}
+                testID="bill-pay"
+                style={{ marginRight: 10 }}
+              >
+                <Ionicons name="cash-outline" size={20} color={colors.onSurface} />
+              </Pressable>
+            ) : null}
             <Pressable
               onPress={() => router.push({ pathname: "/vendor-bill/new", params: { id: b.id } })}
               hitSlop={12}
@@ -236,7 +255,7 @@ export default function VendorBillDetail() {
       </View>
 
       <Modal transparent visible={showDelete} animationType="fade" onRequestClose={() => setShowDelete(false)}>
-        <KeyboardAvoidingView style={styles.modalRoot} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <KeyboardFormAvoid style={styles.modalRoot}>
           <Pressable style={styles.backdrop} onPress={() => setShowDelete(false)} />
           <View style={styles.modalSheet}>
             <View style={styles.modalHead}>
@@ -250,7 +269,7 @@ export default function VendorBillDetail() {
               <Button label="DELETE" variant="danger" onPress={softDelete} loading={deleting} testID="delete-confirm" />
             </View>
           </View>
-        </KeyboardAvoidingView>
+        </KeyboardFormAvoid>
       </Modal>
     </SafeAreaView>
   );

@@ -13,7 +13,7 @@ import { useWorkingDate } from "@/src/context/WorkingDateContext";
 import { Empty } from "@/src/components/ui";
 import { colors, font, money, spacing } from "@/src/theme";
 import { thermalPrintAndMark } from "@/src/utils/patti-print";
-import { clampPaperMm } from "@/src/utils/thermal-print";
+import { clampPaperMm, thermalPrintUserMessage } from "@/src/utils/thermal-print";
 import { DatePickerModal } from "@/src/components/DatePickerModal";
 import { PrintRangeModal } from "@/src/components/PrintRangeModal";
 import { toISODate } from "@/src/utils/date";
@@ -121,7 +121,7 @@ export default function History() {
       Alert.alert("Print complete", `${ok} printed · ${fail} failed`);
     } catch (e) {
       console.warn("printRange error", e);
-      Alert.alert("Print failed", "Something went wrong. Ensure a printer is paired and try again.");
+      Alert.alert("Print failed", thermalPrintUserMessage(e));
     } finally {
       setPrintingBulk(false);
     }

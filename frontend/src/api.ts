@@ -4,22 +4,60 @@ import { storage } from "@/src/utils/storage";
 export const AUTH_TOKEN_KEY = "lm.auth.token";
 export const AUTH_SHOP_KEY = "lm.auth.shop";
 
-/** Prefer env. On web, match the page hostname so localhost ≠ 127.0.0.1 CORS/PNA doesn't break fetch.
- *  On native (Android/iOS), always use EXPO_PUBLIC_BACKEND_URL — never the device's own localhost. */
-function resolveBackendBase(): string {
-  const fromEnv = (process.env.EXPO_PUBLIC_BACKEND_URL || "").replace(/\/$/, "");
-  // Backend is currently served on 8001 (8000 had stuck reload zombies returning empty 500 → "Failed to fetch").
-  const port = "8001";
-  if (Platform.OS === "web" && typeof window !== "undefined" && window.location?.hostname) {
-    const host = window.location.hostname;
-    return `${window.location.protocol}//${host}:${port}`;
-  }
-  return fromEnv || `http://127.0.0.1:${port}`;
+const USER_CONNECT_ERROR =
+  "Unable to connect to server. Please check your internet connection or try again.";
+
+function stripSlash(url: string): string {
+  return url.replace(/\/$/, "");
 }
 
-export type ApiError = { status: number; detail: string | Record<string, any> };
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+}
 
-async function request<T>(path: string, init: RequestInit = {}, auth = true): Promise<T> {
+/**
+ * Single API origin for every request.
+ * Source of truth: EXPO_PUBLIC_BACKEND_URL (.env for local, eas.json / .env.device for hosted).
+ * Web + loopback only: rewrite hostname to the page host so localhost vs 127.0.0.1 does not break fetch.
+ */
+export function resolveBackendBase(): string {
+  const fromEnv = stripSlash(process.env.EXPO_PUBLIC_BACKEND_URL || "");
+  if (fromEnv) {
+    if (Platform.OS === "web" && typeof window !== "undefined" && window.location?.hostname) {
+      try {
+        const u = new URL(fromEnv);
+        if (isLoopbackHost(u.hostname) && isLoopbackHost(window.location.hostname)) {
+          const port = u.port ? `:${u.port}` : "";
+          return `${u.protocol}//${window.location.hostname}${port}`;
+        }
+      } catch {
+        /* use env as-is */
+      }
+    }
+    return fromEnv;
+  }
+  if (Platform.OS === "web" && typeof window !== "undefined" && isLoopbackHost(window.location.hostname)) {
+    return `${window.location.protocol}//${window.location.hostname}:8001`;
+  }
+  return "http://127.0.0.1:8001";
+}
+
+export type ApiError = {
+  status: number;
+  detail: string | Record<string, any>;
+  /** Transport-level classification when status === 0 */
+  code?: "NETWORK" | "TIMEOUT" | "ABORTED";
+};
+
+export type RequestOptions = {
+  auth?: boolean;
+  /** Abort / fail after this many ms. OCR needs a long window (e.g. 180000). */
+  timeoutMs?: number;
+  signal?: AbortSignal;
+};
+
+async function request<T>(path: string, init: RequestInit = {}, opts: RequestOptions = {}): Promise<T> {
+  const auth = opts.auth !== false;
   const headers = new Headers(init.headers);
   headers.set("Content-Type", "application/json");
   if (auth) {
@@ -27,17 +65,42 @@ async function request<T>(path: string, init: RequestInit = {}, auth = true): Pr
     if (token) headers.set("Authorization", `Bearer ${token}`);
   }
   const url = `${resolveBackendBase()}/api${path}`;
+
+  const controller = new AbortController();
+  const external = opts.signal || init.signal;
+  const onExternalAbort = () => controller.abort();
+  if (external) {
+    if (external.aborted) controller.abort();
+    else external.addEventListener("abort", onExternalAbort, { once: true });
+  }
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  if (opts.timeoutMs && opts.timeoutMs > 0) {
+    timer = setTimeout(() => controller.abort(), opts.timeoutMs);
+  }
+
   let res: Response;
   try {
-    res = await fetch(url, { ...init, headers });
+    res = await fetch(url, { ...init, headers, signal: controller.signal });
   } catch (e: any) {
-    const base = resolveBackendBase();
-    const raw = e?.message || "Network request failed";
-    const tip =
-      raw === "Failed to fetch" || raw === "Network request failed"
-        ? `Cannot reach API at ${base}. Check Wi‑Fi/tunnel and that the backend is running.`
-        : raw;
-    throw { status: 0, detail: tip } as ApiError;
+    const name = e?.name || "";
+    const msg = String(e?.message || e || "");
+    const aborted = name === "AbortError" || /aborted|abort/i.test(msg);
+    if (aborted) {
+      const timedOut = !!opts.timeoutMs && (!external || !external.aborted);
+      if (__DEV__) console.warn(timedOut ? "API timeout" : "API aborted", url, opts.timeoutMs);
+      throw {
+        status: 0,
+        code: timedOut ? "TIMEOUT" : "ABORTED",
+        detail: timedOut
+          ? "OCR is still running longer than expected. Please try again with a clearer crop, or wait and retry."
+          : "Request cancelled.",
+      } as ApiError;
+    }
+    console.warn("API unreachable", resolveBackendBase(), msg);
+    throw { status: 0, code: "NETWORK", detail: USER_CONNECT_ERROR } as ApiError;
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (external) external.removeEventListener("abort", onExternalAbort);
   }
   const text = await res.text();
   const data = text ? safeJson(text) : null;
@@ -63,12 +126,63 @@ function safeJson(t: string): any {
   try { return JSON.parse(t); } catch { return t; }
 }
 
+export function apiErrorMessage(e: unknown, fallback = "Request failed"): string {
+  const err = e as ApiError | undefined;
+  const status = typeof err?.status === "number" ? err.status : undefined;
+  const d = err?.detail;
+  const text =
+    typeof d === "string"
+      ? d
+      : d && typeof d === "object" && "message" in d
+        ? String((d as { message: unknown }).message)
+        : "";
+
+  // Transport failure only (fetch threw). HTTP 4xx/5xx must not be shown as "no internet".
+  if (status === 0) {
+    if (err?.code === "TIMEOUT") {
+      return text || "The extraction is taking longer than expected. Please try again.";
+    }
+    if (err?.code === "ABORTED") {
+      return text || "Request cancelled.";
+    }
+    return USER_CONNECT_ERROR;
+  }
+
+  if (text) {
+    if (__DEV__ && status && status >= 400) {
+      return `${fallback}: ${text} (${status})`;
+    }
+    return text;
+  }
+  if (status && status >= 400) {
+    return __DEV__ ? `${fallback} (${status})` : fallback;
+  }
+  return fallback;
+}
+
+/** Default request timeout — short CRUD. OCR uses a longer explicit timeout. */
+export const DEFAULT_API_TIMEOUT_MS = 45_000;
+/** Action Diary photo OCR: upload + Gemini + parse. Generous wall clock so slow pages don't false-timeout. */
+export const OCR_API_TIMEOUT_MS = 360_000;
+
 export const api = {
-  get: <T>(p: string) => request<T>(p, { method: "GET" }),
-  post: <T>(p: string, body: any, auth = true) => request<T>(p, { method: "POST", body: JSON.stringify(body) }, auth),
-  put: <T>(p: string, body: any) => request<T>(p, { method: "PUT", body: JSON.stringify(body) }),
-  del: <T>(p: string, body?: any) =>
-    request<T>(p, body === undefined ? { method: "DELETE" } : { method: "DELETE", body: JSON.stringify(body) }),
+  get: <T>(p: string, opts?: RequestOptions) =>
+    request<T>(p, { method: "GET" }, { timeoutMs: DEFAULT_API_TIMEOUT_MS, ...opts }),
+  post: <T>(p: string, body: any, authOrOpts: boolean | RequestOptions = true) => {
+    const opts: RequestOptions =
+      typeof authOrOpts === "boolean"
+        ? { auth: authOrOpts, timeoutMs: DEFAULT_API_TIMEOUT_MS }
+        : { timeoutMs: DEFAULT_API_TIMEOUT_MS, ...authOrOpts };
+    return request<T>(p, { method: "POST", body: JSON.stringify(body) }, opts);
+  },
+  put: <T>(p: string, body: any, opts?: RequestOptions) =>
+    request<T>(p, { method: "PUT", body: JSON.stringify(body) }, { timeoutMs: DEFAULT_API_TIMEOUT_MS, ...opts }),
+  del: <T>(p: string, body?: any, opts?: RequestOptions) =>
+    request<T>(
+      p,
+      body === undefined ? { method: "DELETE" } : { method: "DELETE", body: JSON.stringify(body) },
+      { timeoutMs: DEFAULT_API_TIMEOUT_MS, ...opts },
+    ),
 };
 
 // ---------- Types ----------
@@ -174,4 +288,60 @@ export type VendorDashboard = {
 };
 export type VendorDayLine = {
   lot_id: string; lot_no: string; farmer_name: string; bags: number; auction_rate: number;
+};
+export type PendingVendorLine = {
+  lot_id: string; lot_no: string; farmer_name: string; bags: number;
+  auction_rate: number; vendor_rate: number; amount: number;
+};
+export type PendingVendorBill = {
+  vendor_id: string; vendor_name: string; vendor_details?: string | null; phone?: string | null;
+  total_bags: number; goods_total: number; commission_total: number; hamali: number; grand_total: number;
+  lines: PendingVendorLine[];
+};
+
+export type LedgerAccountType = "FARMER" | "VENDOR";
+export type LedgerTxnType = "CREDIT" | "DEBIT";
+export type LedgerSourceType = "MANUAL" | "VENDOR_BILL" | "VENDOR_PAYMENT";
+export type LedgerTxn = {
+  id: string;
+  account_type: LedgerAccountType;
+  farmer_id?: string | null;
+  vendor_id?: string | null;
+  party_name: string;
+  date: string;
+  transaction_type: LedgerTxnType;
+  amount: number;
+  credit: number;
+  debit: number;
+  balance: number;
+  description: string;
+  remarks?: string | null;
+  source_type: LedgerSourceType;
+  source_id: string;
+  created_at: string;
+  updated_at?: string | null;
+};
+export type LedgerParty = {
+  party_id: string;
+  party_name: string;
+  phone?: string | null;
+  details?: string | null;
+  day_credit: number;
+  day_debit: number;
+  balance: number;
+  txn_count: number;
+};
+export type LedgerBillSnap = {
+  id: string; bill_code: string; grand_total: number; paid: number; balance: number; status: string;
+};
+export type LedgerDetail = {
+  account_type: LedgerAccountType;
+  party_id: string;
+  party_name: string;
+  date: string;
+  rows: LedgerTxn[];
+  total_credit: number;
+  total_debit: number;
+  balance: number;
+  bills: LedgerBillSnap[];
 };

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable,
+  Alert, FlatList, Modal, Pressable,
   RefreshControl, StyleSheet, Text, View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -8,6 +8,7 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import { api, Staff } from "@/src/api";
+import { KeyboardFormAvoid } from "@/src/components/KeyboardForm";
 import { Button, Empty, Input } from "@/src/components/ui";
 import { colors, font, spacing } from "@/src/theme";
 
@@ -134,7 +135,7 @@ export default function StaffScreen() {
       />
 
       <Modal visible={modalOpen} transparent animationType="slide" onRequestClose={() => setModalOpen(false)}>
-        <KeyboardAvoidingView style={styles.modalRoot} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <KeyboardFormAvoid style={styles.modalRoot}>
           <Pressable style={styles.backdrop} onPress={() => setModalOpen(false)} />
           <View style={styles.modalSheet}>
             <View style={styles.modalHeader}>
@@ -169,7 +170,7 @@ export default function StaffScreen() {
               </View>
             </View>
           </View>
-        </KeyboardAvoidingView>
+        </KeyboardFormAvoid>
       </Modal>
     </SafeAreaView>
   );

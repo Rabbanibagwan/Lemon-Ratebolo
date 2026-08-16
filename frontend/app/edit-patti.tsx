@@ -1,19 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform,
+  ActivityIndicator, Alert, Modal,
   Pressable, StyleSheet, Text, TextInput, View,
 } from "react-native";
-import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import { api, Farmer, Patti, ShopProfile, Vendor } from "@/src/api";
+import { KeyboardFormAvoid, KeyboardFormScroll } from "@/src/components/KeyboardForm";
 import { useAuth } from "@/src/context/AuthContext";
 import { Button, Input } from "@/src/components/ui";
+import { PartyPicker } from "@/src/components/PartyPicker";
 import { colors, font, money, spacing } from "@/src/theme";
 import { thermalPrintAndMark } from "@/src/utils/patti-print";
-import { clampPaperMm } from "@/src/utils/thermal-print";
+import { clampPaperMm, thermalPrintUserMessage } from "@/src/utils/thermal-print";
 
 type LocalSale = { key: string; vendor_id: string | null; vendor_name: string; bags: string; rate: string };
 type LocalLot = {
@@ -56,9 +57,7 @@ export default function EditPatti() {
   const [receiver, setReceiver] = useState("");
 
   const [farmerPickerOpen, setFarmerPickerOpen] = useState(false);
-  const [farmerSearch, setFarmerSearch] = useState("");
   const [vendorPickerFor, setVendorPickerFor] = useState<{ lotKey: string; saleKey: string } | null>(null);
-  const [vendorSearch, setVendorSearch] = useState("");
 
   const [showDelete, setShowDelete] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
@@ -111,18 +110,6 @@ export default function EditPatti() {
     () => farmers.find((f) => f.id === farmerId)?.name || patti?.farmer_name || "—",
     [farmers, farmerId, patti],
   );
-
-  const filteredFarmers = useMemo(() => {
-    const s = farmerSearch.trim().toLowerCase();
-    if (!s) return farmers;
-    return farmers.filter((f) => f.name.toLowerCase().includes(s) || (f.village || "").toLowerCase().includes(s));
-  }, [farmers, farmerSearch]);
-
-  const filteredVendors = useMemo(() => {
-    const s = vendorSearch.trim().toLowerCase();
-    if (!s) return vendors;
-    return vendors.filter((v) => v.name.toLowerCase().includes(s));
-  }, [vendors, vendorSearch]);
 
   const setLotField = (lotKey: string, patch: Partial<LocalLot>) =>
     setLots((xs) => xs.map((l) => (l.key === lotKey ? { ...l, ...patch } : l)));
@@ -230,7 +217,7 @@ export default function EditPatti() {
       const updated = await thermalPrintAndMark(patti, profile || { shop_name: session.shop_name } as any, paperMm);
       setPatti(updated);
     } catch (e: any) {
-      Alert.alert("Print failed", e?.message || "Ensure a printer is paired and try again. Patti stays Saved (not Printed).");
+      Alert.alert("Print failed", `${thermalPrintUserMessage(e)} Patti stays Saved (not Printed).`);
     } finally {
       setPrinting(false);
     }
@@ -310,15 +297,14 @@ export default function EditPatti() {
         </View>
       </View>
 
-      <KeyboardAwareScrollView
+      <KeyboardFormScroll
         contentContainerStyle={{ padding: spacing.lg, paddingBottom: 160 }}
-        keyboardShouldPersistTaps="handled"
         bottomOffset={100}
       >
         <Text style={styles.section}>FARMER</Text>
         <Pressable
           style={[styles.pickerBtn, readOnly && styles.disabled]}
-          onPress={readOnly ? undefined : () => { setFarmerSearch(""); setFarmerPickerOpen(true); }}
+          onPress={readOnly ? undefined : () => { setFarmerPickerOpen(true); }}
           testID="edit-patti-farmer"
         >
           <Text style={styles.pickerText}>{farmerName}</Text>
@@ -365,7 +351,6 @@ export default function EditPatti() {
                 <Pressable
                   style={[styles.vendorPick, readOnly && styles.disabled]}
                   onPress={readOnly ? undefined : () => {
-                    setVendorSearch("");
                     setVendorPickerFor({ lotKey: lot.key, saleKey: s.key });
                   }}
                   testID={`edit-sale-vendor-${li}-${si}`}
@@ -455,7 +440,7 @@ export default function EditPatti() {
         {readOnly ? (
           <Text style={styles.hint}>Only the shop owner can edit or delete. You can still reprint.</Text>
         ) : null}
-      </KeyboardAwareScrollView>
+      </KeyboardFormScroll>
 
       <View style={styles.footer}>
         <Pressable
@@ -479,96 +464,59 @@ export default function EditPatti() {
         ) : null}
       </View>
 
-      {/* Farmer picker */}
-      <Modal visible={farmerPickerOpen} transparent animationType="slide" onRequestClose={() => setFarmerPickerOpen(false)}>
-        <View style={styles.modalRoot}>
-          <Pressable style={styles.backdrop} onPress={() => setFarmerPickerOpen(false)} />
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>SELECT FARMER</Text>
-              <Pressable onPress={() => setFarmerPickerOpen(false)} hitSlop={12}>
-                <Ionicons name="close" size={22} color={colors.onSurface} />
-              </Pressable>
-            </View>
-            <View style={styles.searchBox}>
-              <Ionicons name="search" size={16} color={colors.muted} />
-              <TextInput
-                value={farmerSearch}
-                onChangeText={setFarmerSearch}
-                placeholder="Search farmer…"
-                placeholderTextColor={colors.muted}
-                style={styles.searchInput}
-                autoFocus
-              />
-            </View>
-            <FlatList
-              data={filteredFarmers}
-              keyExtractor={(x) => x.id}
-              style={{ maxHeight: 360 }}
-              renderItem={({ item }) => (
-                <Pressable
-                  style={styles.listRow}
-                  onPress={() => { setFarmerId(item.id); setFarmerPickerOpen(false); }}
-                >
-                  <Text style={styles.listName}>{item.name}</Text>
-                  {item.village ? <Text style={styles.listMeta}>{item.village}</Text> : null}
-                </Pressable>
-              )}
-            />
-          </View>
-        </View>
-      </Modal>
-
-      {/* Vendor picker */}
-      <Modal visible={!!vendorPickerFor} transparent animationType="slide" onRequestClose={() => setVendorPickerFor(null)}>
-        <View style={styles.modalRoot}>
-          <Pressable style={styles.backdrop} onPress={() => setVendorPickerFor(null)} />
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>SELECT VENDOR</Text>
-              <Pressable onPress={() => setVendorPickerFor(null)} hitSlop={12}>
-                <Ionicons name="close" size={22} color={colors.onSurface} />
-              </Pressable>
-            </View>
-            <View style={styles.searchBox}>
-              <Ionicons name="search" size={16} color={colors.muted} />
-              <TextInput
-                value={vendorSearch}
-                onChangeText={setVendorSearch}
-                placeholder="Search vendor…"
-                placeholderTextColor={colors.muted}
-                style={styles.searchInput}
-                autoFocus
-              />
-            </View>
-            <FlatList
-              data={filteredVendors}
-              keyExtractor={(x) => x.id}
-              style={{ maxHeight: 360 }}
-              renderItem={({ item }) => (
-                <Pressable
-                  style={styles.listRow}
-                  onPress={() => {
-                    if (vendorPickerFor) {
-                      setSaleField(vendorPickerFor.lotKey, vendorPickerFor.saleKey, {
-                        vendor_id: item.id,
-                        vendor_name: item.name,
-                      });
-                    }
-                    setVendorPickerFor(null);
-                  }}
-                >
-                  <Text style={styles.listName}>{item.name}</Text>
-                </Pressable>
-              )}
-            />
-          </View>
-        </View>
-      </Modal>
+      <PartyPicker
+        visible={farmerPickerOpen}
+        kind="farmer"
+        items={farmers}
+        selectedId={farmerId}
+        initialQuery={farmerName !== "—" ? farmerName : ""}
+        onClose={() => setFarmerPickerOpen(false)}
+        onSelect={(item) => { setFarmerId(item.id); setFarmerPickerOpen(false); }}
+        onCreated={(item) => {
+          setFarmers((xs) => [...xs, item as Farmer].sort((a, b) => a.name.localeCompare(b.name)));
+          setFarmerId(item.id);
+          setFarmerPickerOpen(false);
+        }}
+      />
+      <PartyPicker
+        visible={!!vendorPickerFor}
+        kind="vendor"
+        items={vendors}
+        selectedId={
+          vendorPickerFor
+            ? lots.find((l) => l.key === vendorPickerFor.lotKey)?.sales.find((s) => s.key === vendorPickerFor.saleKey)?.vendor_id
+            : undefined
+        }
+        initialQuery={
+          vendorPickerFor
+            ? (lots.find((l) => l.key === vendorPickerFor.lotKey)?.sales.find((s) => s.key === vendorPickerFor.saleKey)?.vendor_name || "")
+            : ""
+        }
+        onClose={() => setVendorPickerFor(null)}
+        onSelect={(item) => {
+          if (vendorPickerFor) {
+            setSaleField(vendorPickerFor.lotKey, vendorPickerFor.saleKey, {
+              vendor_id: item.id,
+              vendor_name: item.name,
+            });
+          }
+          setVendorPickerFor(null);
+        }}
+        onCreated={(item) => {
+          setVendors((xs) => [...xs, item as Vendor].sort((a, b) => a.name.localeCompare(b.name)));
+          if (vendorPickerFor) {
+            setSaleField(vendorPickerFor.lotKey, vendorPickerFor.saleKey, {
+              vendor_id: item.id,
+              vendor_name: item.name,
+            });
+          }
+          setVendorPickerFor(null);
+        }}
+      />
 
       {/* Delete confirm */}
       <Modal visible={showDelete} transparent animationType="fade" onRequestClose={() => setShowDelete(false)}>
-        <KeyboardAvoidingView style={styles.modalRoot} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <KeyboardFormAvoid style={styles.modalRoot}>
           <Pressable style={styles.backdrop} onPress={() => setShowDelete(false)} />
           <View style={styles.modalSheet}>
             <View style={styles.modalHeader}>
@@ -597,7 +545,7 @@ export default function EditPatti() {
               />
             </View>
           </View>
-        </KeyboardAvoidingView>
+        </KeyboardFormAvoid>
       </Modal>
     </SafeAreaView>
   );

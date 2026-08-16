@@ -119,6 +119,16 @@ async def lifespan(app: FastAPI):
     await db.vendor_bills.create_index([("shop_id", 1), ("vendor_id", 1), ("date", -1)])
     await db.vendor_bills.create_index([("shop_id", 1), ("bill_no", -1)])
     await db.vendor_payments.create_index([("shop_id", 1), ("vendor_id", 1), ("date", -1)])
+    await db.account_ledger.create_index([("shop_id", 1), ("account_type", 1), ("farmer_id", 1), ("date", 1)])
+    await db.account_ledger.create_index([("shop_id", 1), ("account_type", 1), ("vendor_id", 1), ("date", 1)])
+    try:
+        await db.account_ledger.create_index(
+            [("shop_id", 1), ("source_type", 1), ("source_id", 1)],
+            unique=True,
+            name="uniq_ledger_source",
+        )
+    except Exception as _e:  # noqa: BLE001
+        logger.warning("Startup: account_ledger unique index skipped: %s", _e)
     logger.info("Startup: indexes ensured.")
     yield
     # Shutdown
@@ -353,6 +363,8 @@ class SaleOut(BaseModel):
     bags: int
     rate_per_bag: float
     gross: float
+    vendor_purchase_status: str = "PENDING"  # PENDING | POSTED
+    vendor_bill_id: Optional[str] = None
 
 
 class LotIn(BaseModel):
@@ -654,6 +666,29 @@ class VendorBillOut(BaseModel):
     updated_at: Optional[datetime] = None
 
 
+class PendingVendorLineOut(BaseModel):
+    lot_id: str
+    lot_no: str
+    farmer_name: str
+    bags: int
+    auction_rate: float
+    vendor_rate: float
+    amount: float
+
+
+class PendingVendorBillOut(BaseModel):
+    vendor_id: str
+    vendor_name: str
+    vendor_details: Optional[str] = None
+    phone: Optional[str] = None
+    total_bags: int
+    goods_total: float
+    commission_total: float
+    hamali: float
+    grand_total: float
+    lines: List[PendingVendorLineOut]
+
+
 class VendorPaymentAllocIn(BaseModel):
     bill_id: str
     amount: float = Field(ge=0)
@@ -693,6 +728,69 @@ class VendorDashboardOut(BaseModel):
 
 class DeleteBody(BaseModel):
     reason: Optional[str] = Field(default=None, max_length=500)
+
+
+class LedgerTxnIn(BaseModel):
+    account_type: str = Field(pattern=r"^(FARMER|VENDOR)$")
+    farmer_id: Optional[str] = None
+    vendor_id: Optional[str] = None
+    date: Optional[str] = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    transaction_type: str = Field(pattern=r"^(CREDIT|DEBIT)$")
+    amount: float = Field(gt=0)
+    description: str = Field(min_length=1, max_length=240)
+    remarks: Optional[str] = Field(default=None, max_length=500)
+
+
+class LedgerTxnOut(BaseModel):
+    id: str
+    account_type: str
+    farmer_id: Optional[str] = None
+    vendor_id: Optional[str] = None
+    party_name: str = ""
+    date: str
+    transaction_type: str
+    amount: float
+    credit: float
+    debit: float
+    balance: float = 0
+    description: str
+    remarks: Optional[str] = None
+    source_type: str
+    source_id: str
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+
+class LedgerPartyOut(BaseModel):
+    party_id: str
+    party_name: str
+    phone: Optional[str] = None
+    details: Optional[str] = None
+    day_credit: float
+    day_debit: float
+    balance: float
+    txn_count: int
+
+
+class LedgerBillSnapOut(BaseModel):
+    id: str
+    bill_code: str
+    grand_total: float
+    paid: float
+    balance: float
+    status: str
+
+
+class LedgerDetailOut(BaseModel):
+    account_type: str
+    party_id: str
+    party_name: str
+    date: str
+    rows: List[LedgerTxnOut]
+    total_credit: float
+    total_debit: float
+    balance: float
+    bills: List[LedgerBillSnapOut] = Field(default_factory=list)
 
 
 # ---------- Merchant profile (owner only edit; all authed users can read) ----------
@@ -948,10 +1046,24 @@ async def update_day(day_id: str, body: AuctionDayIn, user=Depends(owner_only)):
     async for lot in db.lots.find({"auction_day_id": day_id, "shop_id": user["shop_id"]}, {"_id": 0}):
         drv_name, drv_place, drv_bhada = _pick_driver(day["drivers"], lot["lot_no"])
         upd = {"driver_name": drv_name, "driver_place": drv_place}
-        # if bhada wasn't manually overridden (marker), refresh it too
+        # Lot-level bhada: driver amount applies once per lot (not × bags).
         if lot.get("bhada_manual") is not True and drv_bhada is not None:
-            upd["bhada_per_bag"] = drv_bhada
+            total_bags = int(lot.get("total_bags") or 0)
+            if total_bags <= 0:
+                _, pt = _parse_lot_no_str(lot.get("lot_no") or "")
+                total_bags = int(pt or 0)
+            bhada_total_val = float(drv_bhada)
+            upd["bhada_total"] = bhada_total_val
+            upd["bhada_per_bag"] = (
+                round(bhada_total_val / total_bags, 6) if total_bags > 0 else 0.0
+            )
         await db.lots.update_one({"id": lot["id"]}, {"$set": upd})
+        # Keep Farmer Patti in sync with per-lot bhada / driver (preserve patti_no + qr_token).
+        lot2 = {**lot, **upd}
+        try:
+            await _generate_patti_for_lot(user["shop_id"], day, lot2)
+        except Exception:
+            pass
 
     stats = await _day_stats(day)
     return AuctionDayOut(id=day["id"], date=day["date"],
@@ -959,14 +1071,43 @@ async def update_day(day_id: str, body: AuctionDayIn, user=Depends(owner_only)):
 
 
 # ---------- Lots (Action Book) ----------
+def _sale_status(sale: dict) -> str:
+    st = (sale.get("vendor_purchase_status") or "PENDING").upper()
+    return "POSTED" if st == "POSTED" else "PENDING"
+
+
 def _sale_gross(sale: dict) -> float:
-    return _round2(sale["bags"] * sale["rate_per_bag"])
+    return _round2(int(sale.get("bags") or 0) * float(sale.get("rate_per_bag") or 0))
+
+
+def _sale_out(sale: dict) -> SaleOut:
+    return SaleOut(
+        vendor_id=sale["vendor_id"],
+        vendor_name=sale["vendor_name"],
+        bags=int(sale["bags"]),
+        rate_per_bag=float(sale["rate_per_bag"]),
+        gross=_sale_gross(sale),
+        vendor_purchase_status=_sale_status(sale),
+        vendor_bill_id=sale.get("vendor_bill_id"),
+    )
+
+
+def _carry_purchase_meta(old_sales: List[dict], vendor_id: str, bags: int, rate: float) -> tuple[str, Optional[str]]:
+    for s in old_sales or []:
+        if s.get("vendor_id") != vendor_id:
+            continue
+        if int(s.get("bags") or 0) != bags:
+            continue
+        if abs(float(s.get("rate_per_bag") or 0) - rate) > 1e-6:
+            continue
+        return _sale_status(s), s.get("vendor_bill_id")
+    return "PENDING", None
 
 
 async def _hydrate_lot(shop_id: str, lot: dict, patti_id: Optional[str] = None, patti_no: Optional[int] = None) -> LotOut:
     sold_bags = sum(s["bags"] for s in lot.get("sales", []))
     gross_total = _round2(sum(s["bags"] * s["rate_per_bag"] for s in lot.get("sales", [])))
-    sales_out = [SaleOut(**s, gross=_sale_gross(s)) for s in lot.get("sales", [])]
+    sales_out = [_sale_out(s) for s in lot.get("sales", [])]
     # Backward-compat: legacy lots may lack lot_serial_no / total_bags. Derive from lot_no.
     serial = lot.get("lot_serial_no")
     total = lot.get("total_bags")
@@ -1057,19 +1198,20 @@ async def create_lot(body: LotIn, user=Depends(current_user)):
         )
 
     drv_name, drv_place, drv_bhada = _pick_driver(day.get("drivers", []), lot_no_display)
-    # Bhada resolution: prefer explicit bhada_total (circled amount) → derive per-bag.
-    # Fallback: legacy bhada_per_bag input. Fallback: driver.bhada_per_bag × total_bags.
+    # Bhada resolution: prefer explicit bhada_total (circled / lot amount) → derive per-bag for storage.
+    # Legacy: if only bhada_per_bag is sent, treat it as LOT bhada (not × bags) — same circled semantics.
+    # Fallback: driver range amount used once as lot bhada (not multiplied by bags).
     if body.bhada_total is not None:
         bhada_total_val = float(body.bhada_total)
         bhada_per_bag_val = round(bhada_total_val / total_bags, 6) if total_bags > 0 else 0.0
         bhada_manual = True
     elif body.bhada_per_bag is not None:
-        bhada_per_bag_val = float(body.bhada_per_bag)
-        bhada_total_val = round(bhada_per_bag_val * total_bags, 2)
+        bhada_total_val = float(body.bhada_per_bag)
+        bhada_per_bag_val = round(bhada_total_val / total_bags, 6) if total_bags > 0 else 0.0
         bhada_manual = True
     else:
-        bhada_per_bag_val = float(drv_bhada or 0.0)
-        bhada_total_val = round(bhada_per_bag_val * total_bags, 2)
+        bhada_total_val = float(drv_bhada or 0.0)
+        bhada_per_bag_val = round(bhada_total_val / total_bags, 6) if total_bags > 0 else 0.0
         bhada_manual = False
 
     sales_docs: List[dict] = []
@@ -1080,6 +1222,8 @@ async def create_lot(body: LotIn, user=Depends(current_user)):
         sales_docs.append({
             "vendor_id": vendor["id"], "vendor_name": vendor["name"],
             "bags": int(s.bags), "rate_per_bag": float(s.rate_per_bag),
+            "vendor_purchase_status": "PENDING",
+            "vendor_bill_id": None,
         })
 
     doc = {
@@ -1101,9 +1245,13 @@ async def create_lot(body: LotIn, user=Depends(current_user)):
     patti_id: Optional[str] = None
     patti_no: Optional[int] = None
     if sales_docs:
-        patti_doc = await _generate_patti_for_lot(user["shop_id"], day, doc)
-        patti_id = patti_doc.get("id")
-        patti_no = patti_doc.get("patti_no")
+        try:
+            patti_doc = await _generate_patti_for_lot(user["shop_id"], day, doc)
+            patti_id = patti_doc.get("id")
+            patti_no = patti_doc.get("patti_no")
+        except Exception:
+            await db.lots.delete_one({"id": doc["id"], "shop_id": user["shop_id"]})
+            raise
     return await _hydrate_lot(user["shop_id"], doc, patti_id=patti_id, patti_no=patti_no)
 
 
@@ -1115,6 +1263,8 @@ async def update_lot(lot_id: str, body: LotIn, user=Depends(owner_only)):
     farmer = await db.farmers.find_one({"id": body.farmer_id, "shop_id": user["shop_id"]}, {"_id": 0})
     if not farmer:
         raise HTTPException(400, "Farmer not found")
+    existing_lot = await db.lots.find_one({"id": lot_id, "shop_id": user["shop_id"]}, {"_id": 0, "sales": 1})
+    old_sales = (existing_lot or {}).get("sales") or []
 
     sales_sum = sum(int(s.bags) for s in body.sales)
     serial, total_bags, lot_no_display = _resolve_lot_fields(
@@ -1153,12 +1303,13 @@ async def update_lot(lot_id: str, body: LotIn, user=Depends(owner_only)):
         bhada_per_bag_val = round(bhada_total_val / total_bags, 6) if total_bags > 0 else 0.0
         bhada_manual = True
     elif body.bhada_per_bag is not None:
-        bhada_per_bag_val = float(body.bhada_per_bag)
-        bhada_total_val = round(bhada_per_bag_val * total_bags, 2)
+        # Same lot-level semantics as create: value is lot bhada, not per-bag × bags.
+        bhada_total_val = float(body.bhada_per_bag)
+        bhada_per_bag_val = round(bhada_total_val / total_bags, 6) if total_bags > 0 else 0.0
         bhada_manual = True
     else:
-        bhada_per_bag_val = float(drv_bhada or 0.0)
-        bhada_total_val = round(bhada_per_bag_val * total_bags, 2)
+        bhada_total_val = float(drv_bhada or 0.0)
+        bhada_per_bag_val = round(bhada_total_val / total_bags, 6) if total_bags > 0 else 0.0
         bhada_manual = False
 
     sales_docs: List[dict] = []
@@ -1166,9 +1317,12 @@ async def update_lot(lot_id: str, body: LotIn, user=Depends(owner_only)):
         vendor = await db.vendors.find_one({"id": s.vendor_id, "shop_id": user["shop_id"]}, {"_id": 0})
         if not vendor:
             raise HTTPException(400, f"Vendor {s.vendor_id} not found")
+        st, bill_id = _carry_purchase_meta(old_sales, vendor["id"], int(s.bags), float(s.rate_per_bag))
         sales_docs.append({
             "vendor_id": vendor["id"], "vendor_name": vendor["name"],
             "bags": int(s.bags), "rate_per_bag": float(s.rate_per_bag),
+            "vendor_purchase_status": st,
+            "vendor_bill_id": bill_id,
         })
 
     update = {
@@ -1405,6 +1559,18 @@ async def list_pattis(user=Depends(current_user), date: Optional[str] = None, li
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
             raise HTTPException(422, "Invalid date format. Expected YYYY-MM-DD.")
         query["date"] = date
+        # Self-heal: lots saved while patti generation crashed still need a Patti.
+        day = await db.auction_days.find_one({"shop_id": user["shop_id"], "date": date}, {"_id": 0})
+        if day:
+            async for lot in db.lots.find({"shop_id": user["shop_id"], "date": date}, {"_id": 0}):
+                if not lot.get("sales"):
+                    continue
+                has = await db.pattis.find_one(
+                    {"shop_id": user["shop_id"], "lot_id": lot["id"], "deleted": {"$ne": True}},
+                    {"_id": 1},
+                )
+                if not has:
+                    await _generate_patti_for_lot(user["shop_id"], day, lot)
     cur = db.pattis.find(query, {"_id": 0, "shop_id": 0}).sort([("date", -1), ("patti_no", -1)]).limit(limit)
     return [PattiOut(**_patti_read_compat(d)) async for d in cur]
 
@@ -1468,13 +1634,14 @@ def _hydrate_edit_lots(sales_lookup: dict, lots_in: List[PattiEditLotIn], factor
                 {"code": "bags_mismatch",
                  "message": f"Lot {lot_serial}: declared {lot_total} bags but vendors sum to {lot_bags}."},
             )
-        # Bhada: prefer explicit bhada_total (circled) → derive per-bag; else legacy per-bag.
+        # Bhada: prefer explicit bhada_total (circled/lot) → derive per-bag; else treat
+        # bhada_per_bag input as lot-level amount (same circled semantics, not × bags).
         if lot.bhada_total is not None:
             lot_bhada = float(lot.bhada_total)
             lot_bhada_per_bag = round(lot_bhada / lot_total, 6) if lot_total > 0 else 0.0
         else:
-            lot_bhada_per_bag = float(lot.bhada_per_bag or 0)
-            lot_bhada = lot_bhada_per_bag * lot_total
+            lot_bhada = float(lot.bhada_per_bag or 0)
+            lot_bhada_per_bag = round(lot_bhada / lot_total, 6) if lot_total > 0 else 0.0
         lots_out.append({
             "lot_serial_no": lot_serial,
             "total_bags": lot_total,
@@ -1930,6 +2097,180 @@ def _compute_bill(body: VendorBillIn) -> tuple[List[dict], int, float, float, fl
     return lines, bags, _round2(goods), _round2(commission), _round2(goods + commission)
 
 
+async def _set_sales_posted(shop_id: str, vendor_id: str, lines: List[dict], bill_id: str) -> None:
+    """Mark matching lot sales POSTED only after a vendor bill exists."""
+    for L in lines:
+        lot_id = L.get("lot_id")
+        if not lot_id:
+            continue
+        lot = await db.lots.find_one({"id": lot_id, "shop_id": shop_id}, {"_id": 0})
+        if not lot:
+            continue
+        sales = list(lot.get("sales") or [])
+        target_bags = int(L.get("bags") or 0)
+        target_rate = float(L.get("auction_rate") or 0)
+        match = None
+        for s in sales:
+            if s.get("vendor_id") != vendor_id or _sale_status(s) == "POSTED":
+                continue
+            if int(s.get("bags") or 0) == target_bags and abs(float(s.get("rate_per_bag") or 0) - target_rate) < 1e-6:
+                match = s
+                break
+        if match is None:
+            for s in sales:
+                if s.get("vendor_id") == vendor_id and _sale_status(s) != "POSTED":
+                    match = s
+                    break
+        if match is not None:
+            match["vendor_purchase_status"] = "POSTED"
+            match["vendor_bill_id"] = bill_id
+            await db.lots.update_one({"id": lot_id, "shop_id": shop_id}, {"$set": {"sales": sales}})
+
+
+async def _clear_sales_posted(shop_id: str, bill_id: str) -> None:
+    """Return purchases to PENDING when a vendor bill is deleted (so they can be billed again)."""
+    async for lot in db.lots.find({"shop_id": shop_id, "sales.vendor_bill_id": bill_id}, {"_id": 0}):
+        sales = list(lot.get("sales") or [])
+        changed = False
+        for s in sales:
+            if s.get("vendor_bill_id") == bill_id:
+                s["vendor_purchase_status"] = "PENDING"
+                s["vendor_bill_id"] = None
+                changed = True
+        if changed:
+            await db.lots.update_one({"id": lot["id"], "shop_id": shop_id}, {"$set": {"sales": sales}})
+
+
+async def _vendor_bill_code(shop_id: str, bill_no: int) -> str:
+    settings_doc = await db.settings.find_one({"shop_id": shop_id}, {"_id": 0, "vendor_bill_prefix": 1}) or {}
+    prefix = settings_doc.get("vendor_bill_prefix", "VB") or "VB"
+    return f"{prefix}-{int(bill_no):04d}"
+
+
+def _ledger_delta(transaction_type: str, amount: float) -> float:
+    amt = _round2(amount)
+    return amt if transaction_type == "CREDIT" else -amt
+
+
+async def _upsert_ledger_by_source(
+    *,
+    shop_id: str,
+    account_type: str,
+    farmer_id: Optional[str],
+    vendor_id: Optional[str],
+    date: str,
+    transaction_type: str,
+    amount: float,
+    description: str,
+    remarks: Optional[str],
+    source_type: str,
+    source_id: str,
+    deleted: bool = False,
+) -> None:
+    """Idempotent write keyed by (shop_id, source_type, source_id). Never used for Farmer Patti."""
+    now = utc_now()
+    fields = {
+        "account_type": account_type,
+        "farmer_id": farmer_id,
+        "vendor_id": vendor_id,
+        "date": date,
+        "transaction_type": transaction_type,
+        "amount": _round2(amount),
+        "description": (description or "").strip() or source_type,
+        "remarks": remarks,
+        "deleted": deleted,
+        "updated_at": now,
+    }
+    existing = await db.account_ledger.find_one(
+        {"shop_id": shop_id, "source_type": source_type, "source_id": source_id},
+        {"_id": 0, "id": 1},
+    )
+    if existing:
+        await db.account_ledger.update_one({"id": existing["id"], "shop_id": shop_id}, {"$set": fields})
+        return
+    await db.account_ledger.insert_one({
+        "id": uid(),
+        "shop_id": shop_id,
+        "source_type": source_type,
+        "source_id": source_id,
+        "created_at": now,
+        **fields,
+    })
+
+
+async def _sync_vendor_bill_ledger(shop_id: str, bill: dict) -> None:
+    """Posted vendor bill → one CREDIT. Deleted bill → hide that CREDIT. Never duplicates."""
+    code = await _vendor_bill_code(shop_id, int(bill.get("bill_no") or 0))
+    await _upsert_ledger_by_source(
+        shop_id=shop_id,
+        account_type="VENDOR",
+        farmer_id=None,
+        vendor_id=bill.get("vendor_id"),
+        date=bill.get("date") or _today_str(),
+        transaction_type="CREDIT",
+        amount=float(bill.get("grand_total") or 0),
+        description=code,
+        remarks=bill.get("notes"),
+        source_type="VENDOR_BILL",
+        source_id=bill["id"],
+        deleted=bool(bill.get("deleted")),
+    )
+
+
+async def _sync_vendor_payment_ledger(shop_id: str, pay: dict) -> None:
+    """One DEBIT per payment document (source_id = payment id)."""
+    await _upsert_ledger_by_source(
+        shop_id=shop_id,
+        account_type="VENDOR",
+        farmer_id=None,
+        vendor_id=pay.get("vendor_id"),
+        date=pay.get("date") or _today_str(),
+        transaction_type="DEBIT",
+        amount=float(pay.get("amount") or 0),
+        description="Payment",
+        remarks=pay.get("remarks"),
+        source_type="VENDOR_PAYMENT",
+        source_id=pay["id"],
+        deleted=False,
+    )
+
+
+async def _backfill_vendor_ledgers(shop_id: str, vendor_id: Optional[str] = None) -> None:
+    """Fill missing bill/payment rows without creating duplicates on refresh."""
+    bq: dict = {"shop_id": shop_id}
+    if vendor_id:
+        bq["vendor_id"] = vendor_id
+    async for bill in db.vendor_bills.find(bq, {"_id": 0}):
+        await _sync_vendor_bill_ledger(shop_id, bill)
+    pq: dict = {"shop_id": shop_id}
+    if vendor_id:
+        pq["vendor_id"] = vendor_id
+    async for pay in db.vendor_payments.find(pq, {"_id": 0}):
+        await _sync_vendor_payment_ledger(shop_id, pay)
+
+
+def _ledger_match(shop_id: str, account_type: str, party_id: str) -> dict:
+    q: dict = {
+        "shop_id": shop_id,
+        "account_type": account_type,
+        "deleted": {"$ne": True},
+    }
+    if account_type == "FARMER":
+        q["farmer_id"] = party_id
+    else:
+        q["vendor_id"] = party_id
+    return q
+
+
+async def _party_signed_before(shop_id: str, account_type: str, party_id: str, date: str) -> float:
+    match = _ledger_match(shop_id, account_type, party_id)
+    match["date"] = {"$lt": date}
+    total = 0.0
+    async for d in db.account_ledger.find(match, {"_id": 0, "transaction_type": 1, "amount": 1}):
+        total += _ledger_delta(d.get("transaction_type") or "CREDIT", float(d.get("amount") or 0))
+    return _round2(total)
+
+
 async def _bill_to_out(shop_id: str, doc: dict) -> VendorBillOut:
     settings_doc = await db.settings.find_one({"shop_id": shop_id}, {"_id": 0}) or {}
     prefix = settings_doc.get("vendor_bill_prefix", "VB")
@@ -1998,6 +2339,12 @@ async def create_vendor_bill(body: VendorBillIn, user=Depends(current_user)):
         "audit_log": [{"at": utc_now(), "by": user["display_name"], "role": user["role"], "action": "create"}],
     }
     await db.vendor_bills.insert_one(doc)
+    try:
+        await _set_sales_posted(user["shop_id"], vendor["id"], lines, doc["id"])
+    except Exception:
+        await db.vendor_bills.delete_one({"id": doc["id"], "shop_id": user["shop_id"]})
+        raise
+    await _sync_vendor_bill_ledger(user["shop_id"], doc)
     return await _bill_to_out(user["shop_id"], doc)
 
 
@@ -2031,6 +2378,72 @@ async def list_vendor_bills(user=Depends(current_user), vendor_id: Optional[str]
         query["$or"] = or_clauses
     cur = db.vendor_bills.find(query, {"_id": 0}).sort([("date", -1), ("bill_no", -1)]).limit(limit)
     return [await _bill_to_out(user["shop_id"], d) async for d in cur]
+
+
+@api.get("/vendor-bills/pending-summary", response_model=List[PendingVendorBillOut])
+async def pending_vendor_bills(user=Depends(current_user), date: Optional[str] = None):
+    """One row per vendor with PENDING purchases on the working date.
+    Amounts use the same vendor-bill formula as create_vendor_bill (settings defaults)."""
+    d = date or _today_str()
+    settings_doc = await db.settings.find_one({"shop_id": user["shop_id"]}, {"_id": 0}) or {}
+    factor = float(settings_doc.get("vendor_factor", 1.06))
+    margin = float(settings_doc.get("vendor_margin_per_bag", 30.0))
+    commission_per_bag = float(settings_doc.get("commission_per_bag", 10.0))
+    hamali_default = float(settings_doc.get("vendor_hamali_default", 0.0))
+
+    grouped: dict[str, dict] = {}
+    async for lot in db.lots.find({"shop_id": user["shop_id"], "date": d}, {"_id": 0}):
+        for s in lot.get("sales") or []:
+            if _sale_status(s) == "POSTED":
+                continue
+            vid = s["vendor_id"]
+            bags = int(s.get("bags") or 0)
+            auction = float(s.get("rate_per_bag") or 0)
+            vendor_rate = auction * factor + margin
+            amount = bags * vendor_rate
+            row = grouped.get(vid)
+            if not row:
+                row = {
+                    "vendor_id": vid,
+                    "vendor_name": s.get("vendor_name") or "",
+                    "lines": [],
+                    "bags": 0,
+                    "goods": 0.0,
+                }
+                grouped[vid] = row
+            row["lines"].append(PendingVendorLineOut(
+                lot_id=lot["id"],
+                lot_no=lot.get("lot_no") or "",
+                farmer_name=lot.get("farmer_name") or "",
+                bags=bags,
+                auction_rate=_round2(auction),
+                vendor_rate=_round2(vendor_rate),
+                amount=_round2(amount),
+            ))
+            row["bags"] += bags
+            row["goods"] += amount
+
+    out: List[PendingVendorBillOut] = []
+    for vid, row in grouped.items():
+        vendor = await db.vendors.find_one({"id": vid, "shop_id": user["shop_id"]}, {"_id": 0})
+        bags = int(row["bags"])
+        goods = _round2(row["goods"])
+        commission = _round2(bags * commission_per_bag)
+        hamali = _round2(hamali_default)
+        out.append(PendingVendorBillOut(
+            vendor_id=vid,
+            vendor_name=(vendor or {}).get("name") or row["vendor_name"],
+            vendor_details=(vendor or {}).get("details"),
+            phone=(vendor or {}).get("phone"),
+            total_bags=bags,
+            goods_total=goods,
+            commission_total=commission,
+            hamali=hamali,
+            grand_total=_round2(goods + commission + hamali),
+            lines=row["lines"],
+        ))
+    out.sort(key=lambda x: x.vendor_name.lower())
+    return out
 
 
 @api.get("/vendor-bills/{bill_id}", response_model=VendorBillOut)
@@ -2080,6 +2493,11 @@ async def update_vendor_bill(bill_id: str, body: VendorBillIn, user=Depends(curr
         }}},
         return_document=True, projection={"_id": 0},
     )
+    if d:
+        # Re-link lot sales to this bill with latest bags/rates (no duplicate bills).
+        await _clear_sales_posted(user["shop_id"], bill_id)
+        await _set_sales_posted(user["shop_id"], existing["vendor_id"], lines, bill_id)
+        await _sync_vendor_bill_ledger(user["shop_id"], d)
     return await _bill_to_out(user["shop_id"], d)
 
 
@@ -2095,6 +2513,8 @@ async def delete_vendor_bill(bill_id: str, body: DeleteBody, user=Depends(owner_
         return_document=True, projection={"_id": 0},
     )
     if not d: raise HTTPException(404, "Vendor bill not found or already deleted")
+    await _clear_sales_posted(user["shop_id"], bill_id)
+    await _sync_vendor_bill_ledger(user["shop_id"], d)
     return await _bill_to_out(user["shop_id"], d)
 
 
@@ -2146,6 +2566,7 @@ async def receive_payment(body: VendorPaymentIn, user=Depends(owner_only)):
                                       "action": "payment", "changes": {"amount": a.amount,
                                                                         "payment_id": doc["id"]}}}},
         )
+    await _sync_vendor_payment_ledger(user["shop_id"], doc)
     return VendorPaymentOut(**{k: doc[k] for k in [
         "id", "vendor_id", "vendor_name", "date", "amount", "mode", "remarks", "allocations", "created_at"
     ]})
@@ -2200,12 +2621,15 @@ async def unbilled_lines(vendor_id: str, user=Depends(current_user), date: Optio
     out: List[VendorDayLineOut] = []
     async for lot in db.lots.find({"shop_id": user["shop_id"], "date": d}, {"_id": 0}):
         for s in lot.get("sales", []):
-            if s["vendor_id"] == vendor_id:
-                out.append(VendorDayLineOut(
-                    lot_id=lot["id"], lot_no=lot["lot_no"],
-                    farmer_name=lot["farmer_name"], bags=int(s["bags"]),
-                    auction_rate=float(s["rate_per_bag"]),
-                ))
+            if s["vendor_id"] != vendor_id:
+                continue
+            if _sale_status(s) == "POSTED":
+                continue
+            out.append(VendorDayLineOut(
+                lot_id=lot["id"], lot_no=lot["lot_no"],
+                farmer_name=lot["farmer_name"], bags=int(s["bags"]),
+                auction_rate=float(s["rate_per_bag"]),
+            ))
     return out
 
 
@@ -2247,7 +2671,7 @@ _OCR_SYSTEM = """You are an expert OCR system for Indian mandi Action Diaries (h
 Read BOTH columns if present (left column first, top to bottom).
 
 PRIMARY DIARY PATTERN (merchant standard):
-  LOT NO. / TOTAL BAGS    FARMER    (BHADA PER BAG)
+  LOT NO. / TOTAL BAGS    FARMER    (BHADA PER LOT)
   VENDOR    BAGS    AUCTION RATE
   VENDOR    BAGS    AUCTION RATE
 
@@ -2261,8 +2685,8 @@ Means ONE lot:
   lot_serial_no = 1          ← the number BEFORE the slash (NEVER store "1/5" as one field)
   total_bags    = 5          ← the number AFTER the slash
   farmer_name   = "ABDG"
-  bhada_per_bag = 50         ← circled/parens after farmer = ₹ bhada PER BAG (transport rent)
-  bhada_total   = 250        ← compute 50 × 5 when both known
+  bhada_total   = 50         ← circled/parens after farmer = ₹ bhada for the LOT (once, NOT × bags)
+  bhada_per_bag = null       ← optional; do NOT multiply circled amount by bags
   Three vendor sale rows under the SAME lot (not three lots):
     MM bags=2 rate=1000; AB bags=2 rate=1000; MC bags=1 rate=1000
 
@@ -2270,16 +2694,17 @@ Another example:
   3/12 MMA (50)
   ZX 07 850
   MC 05 800
-→ lot 3, bags 12, farmer MMA, bhada 50/bag; vendors ZX 7@850 and MC 5@800.
+→ lot 3, bags 12, farmer MMA, bhada_total=50 (lot once); vendors ZX 7@850 and MC 5@800.
 
 FIELD RULES:
 1. "1/5" is TWO fields: lot_serial_no=1, total_bags=5. NEVER lot_no="1/5" as the only identity.
 2. Same farmer on different headers (1/5 ABDG then 2/6 ABDG) = TWO separate lots → two Farmer Pattis.
 3. Multiple vendor lines under ONE header = ONE lot. Emit one JSON row PER vendor, repeating
-   lot_serial_no, total_bags, farmer_name, bhada_per_bag, bhada_total on each row.
+   lot_serial_no, total_bags, farmer_name, bhada_total on each row.
 4. Do NOT invent extra lots for each vendor. Do NOT invent farmers from vendor names.
 5. Do NOT invent vendor slots that are not on the page.
-6. Parentheses after slash-header = bhada_per_bag (₹), NOT total bags.
+6. Parentheses after slash-header = bhada_total for the lot (₹), NOT per-bag and NOT total bags.
+7. NEVER compute bhada_total = circled × total_bags. Circled amount IS the lot bhada.
 
 ALTERNATE FORMAT (only when there is NO slash like 1/5):
   Header: "<code> <farmer_name> (<total_bags>)" e.g. 135 HRB (12)
@@ -2334,8 +2759,10 @@ def _normalize_ocr_rows(raw_rows: list) -> List[OcrRow]:
                 total = pt
         bhada_total_val = _ocr_flt(r.get("bhada_total"))
         bhada_pb = _ocr_flt(r.get("bhada_per_bag"))
-        if bhada_total_val is None and bhada_pb is not None and total:
-            bhada_total_val = round(bhada_pb * total, 2)
+        # Circled diary amount is LOT bhada. Prefer bhada_total; if only bhada_per_bag was
+        # returned, treat that number as the lot total (do NOT multiply by bags).
+        if bhada_total_val is None and bhada_pb is not None:
+            bhada_total_val = bhada_pb
         if bhada_pb is None and bhada_total_val is not None and total and total > 0:
             bhada_pb = round(bhada_total_val / total, 6)
         rows.append(OcrRow(
@@ -2385,9 +2812,7 @@ def _parse_diary_text(text: str) -> List[OcrRow]:
         nonlocal rows
         if cur_serial is None:
             return
-        bhada_total = None
-        if cur_bhada is not None and cur_total:
-            bhada_total = round(cur_bhada * cur_total, 2)
+        # cur_bhada from (50) is lot-level circled amount — use once, do not x bags
         rows.append(OcrRow(
             lot_serial_no=cur_serial,
             total_bags=cur_total,
@@ -2396,8 +2821,8 @@ def _parse_diary_text(text: str) -> List[OcrRow]:
             vendor_name=(vendor.strip() if vendor else None) or None,
             bags=bags,
             rate_per_bag=rate,
-            bhada_total=bhada_total,
-            bhada_per_bag=cur_bhada,
+            bhada_total=cur_bhada,
+            bhada_per_bag=(round(cur_bhada / cur_total, 6) if (cur_bhada is not None and cur_total) else cur_bhada),
         ))
 
     for ln in lines:
@@ -2470,17 +2895,15 @@ def _call_gemini_vision(image_b64: str, mime_type: str, hint: Optional[str], api
     import requests as _requests
 
     # Prefer Gemini 3 Flash (quota-friendly); Pro if available. Env overrides first.
+    # Cap fallbacks so total wall time stays under the app OCR timeout (~300s).
     preferred = os.environ.get("GEMINI_OCR_MODEL") or "gemini-3-flash-preview"
     models = [
         preferred,
         "gemini-3-flash-preview",
-        "gemini-3.5-flash",
-        "gemini-3.1-pro-preview",
         "gemini-2.0-flash",
-        "gemini-1.5-flash",
     ]
     seen = set()
-    models = [m for m in models if m and not (m in seen or seen.add(m))]
+    models = [m for m in models if m and not (m in seen or seen.add(m))][:2]
     hint_line = f"\nHint from user: {hint}" if hint else ""
     prompt = (
         _OCR_SYSTEM
@@ -2512,7 +2935,8 @@ def _call_gemini_vision(image_b64: str, mime_type: str, hint: Optional[str], api
             if auth_mode == "header":
                 headers["x-goog-api-key"] = key
             try:
-                resp = _requests.post(url, json=payload, headers=headers, timeout=55)
+                # Allow long Gemini runs; client OCR_API_TIMEOUT_MS is 300s.
+                resp = _requests.post(url, json=payload, headers=headers, timeout=180)
                 if resp.status_code == 404:
                     last_err = f"{model} not found"
                     break  # next model
@@ -2601,8 +3025,19 @@ async def ocr_action_diary(body: OcrRequest, user=Depends(current_user)):
             )
         try:
             import asyncio
+            import logging
+            logging.getLogger("uvicorn.error").info(
+                "OCR action-diary: Gemini extract starting (shop=%s, bytes≈%s)",
+                user.get("shop_id"),
+                int(len(img_b64) * 0.75) if img_b64 else 0,
+            )
             full_text, model_name = await asyncio.to_thread(
                 _call_gemini_vision, img_b64, body.mime_type or "image/jpeg", body.hint, api_key
+            )
+            logging.getLogger("uvicorn.error").info(
+                "OCR action-diary: Gemini extract done (model=%s, chars=%s)",
+                model_name,
+                len(full_text or ""),
             )
         except Exception as e:
             raise HTTPException(502, f"OCR model call failed: {e}")
@@ -2625,7 +3060,256 @@ async def ocr_action_diary_text(body: OcrTextRequest, user=Depends(current_user)
     return OcrResponse(rows=rows, model="text-parser", warning=warning)
 
 
+# ---------- Account Ledger ----------
+# Farmer Patti is NEVER a ledger source. Do not insert FARMER_PATTI rows.
+
+def _assert_ledger_party(account_type: str, farmer_id: Optional[str], vendor_id: Optional[str]) -> None:
+    if account_type == "FARMER":
+        if not farmer_id:
+            raise HTTPException(400, "Select a Farmer")
+    elif account_type == "VENDOR":
+        if not vendor_id:
+            raise HTTPException(400, "Select a Vendor")
+    else:
+        raise HTTPException(400, "account_type must be FARMER or VENDOR")
+
+
+async def _ledger_row_out(d: dict, party_name: str, running: float) -> LedgerTxnOut:
+    amt = _round2(float(d.get("amount") or 0))
+    kind = d.get("transaction_type") or "CREDIT"
+    credit = amt if kind == "CREDIT" else 0.0
+    debit = amt if kind == "DEBIT" else 0.0
+    return LedgerTxnOut(
+        id=d["id"],
+        account_type=d.get("account_type") or "",
+        farmer_id=d.get("farmer_id"),
+        vendor_id=d.get("vendor_id"),
+        party_name=party_name,
+        date=d.get("date") or "",
+        transaction_type=kind,
+        amount=amt,
+        credit=credit,
+        debit=debit,
+        balance=_round2(running),
+        description=d.get("description") or "",
+        remarks=d.get("remarks"),
+        source_type=d.get("source_type") or "MANUAL",
+        source_id=d.get("source_id") or d["id"],
+        created_at=d["created_at"],
+        updated_at=d.get("updated_at"),
+    )
+
+
+@api.get("/account-ledger/parties", response_model=List[LedgerPartyOut])
+async def list_ledger_parties(
+    user=Depends(current_user),
+    account_type: str = Query(...),
+    date: Optional[str] = None,
+    q: Optional[str] = None,
+):
+    if account_type not in ("FARMER", "VENDOR"):
+        raise HTTPException(400, "account_type must be FARMER or VENDOR")
+    day = date or _today_str()
+    shop_id = user["shop_id"]
+    if account_type == "VENDOR":
+        await _backfill_vendor_ledgers(shop_id)
+
+    s = (q or "").strip()
+    parties: List[dict] = []
+    if account_type == "FARMER":
+        fq: dict = {"shop_id": shop_id}
+        if s:
+            fq["$or"] = [
+                {"name": {"$regex": s, "$options": "i"}},
+                {"village": {"$regex": s, "$options": "i"}},
+                {"phone": {"$regex": s, "$options": "i"}},
+            ]
+            parties = await db.farmers.find(fq, {"_id": 0}).sort("name", 1).to_list(1000)
+        else:
+            ids = await db.account_ledger.distinct(
+                "farmer_id",
+                {"shop_id": shop_id, "account_type": "FARMER", "date": day, "deleted": {"$ne": True}},
+            )
+            if ids:
+                parties = await db.farmers.find(
+                    {"shop_id": shop_id, "id": {"$in": [i for i in ids if i]}},
+                    {"_id": 0},
+                ).sort("name", 1).to_list(1000)
+    else:
+        vq: dict = {"shop_id": shop_id}
+        if s:
+            vq["$or"] = [
+                {"name": {"$regex": s, "$options": "i"}},
+                {"details": {"$regex": s, "$options": "i"}},
+                {"phone": {"$regex": s, "$options": "i"}},
+            ]
+            parties = await db.vendors.find(vq, {"_id": 0}).sort("name", 1).to_list(1000)
+        else:
+            ids = await db.account_ledger.distinct(
+                "vendor_id",
+                {"shop_id": shop_id, "account_type": "VENDOR", "date": day, "deleted": {"$ne": True}},
+            )
+            if ids:
+                parties = await db.vendors.find(
+                    {"shop_id": shop_id, "id": {"$in": [i for i in ids if i]}},
+                    {"_id": 0},
+                ).sort("name", 1).to_list(1000)
+
+    out: List[LedgerPartyOut] = []
+    for p in parties:
+        pid = p["id"]
+        match = _ledger_match(shop_id, account_type, pid)
+        match["date"] = day
+        day_credit = 0.0
+        day_debit = 0.0
+        n = 0
+        async for t in db.account_ledger.find(match, {"_id": 0, "transaction_type": 1, "amount": 1}):
+            n += 1
+            amt = float(t.get("amount") or 0)
+            if t.get("transaction_type") == "DEBIT":
+                day_debit += amt
+            else:
+                day_credit += amt
+        opening = await _party_signed_before(shop_id, account_type, pid, day)
+        bal = _round2(opening + day_credit - day_debit)
+        details = p.get("village") if account_type == "FARMER" else p.get("details")
+        out.append(LedgerPartyOut(
+            party_id=pid,
+            party_name=p.get("name") or "",
+            phone=p.get("phone"),
+            details=details,
+            day_credit=_round2(day_credit),
+            day_debit=_round2(day_debit),
+            balance=bal,
+            txn_count=n,
+        ))
+    return out
+
+
+@api.get("/account-ledger/detail", response_model=LedgerDetailOut)
+async def get_ledger_detail(
+    user=Depends(current_user),
+    account_type: str = Query(...),
+    party_id: str = Query(...),
+    date: Optional[str] = None,
+):
+    if account_type not in ("FARMER", "VENDOR"):
+        raise HTTPException(400, "account_type must be FARMER or VENDOR")
+    day = date or _today_str()
+    shop_id = user["shop_id"]
+    if account_type == "FARMER":
+        party = await db.farmers.find_one({"id": party_id, "shop_id": shop_id}, {"_id": 0})
+        if not party:
+            raise HTTPException(404, "Farmer not found")
+        name = party.get("name") or ""
+    else:
+        await _backfill_vendor_ledgers(shop_id, party_id)
+        party = await db.vendors.find_one({"id": party_id, "shop_id": shop_id}, {"_id": 0})
+        if not party:
+            raise HTTPException(404, "Vendor not found")
+        name = party.get("name") or ""
+
+    opening = await _party_signed_before(shop_id, account_type, party_id, day)
+    match = _ledger_match(shop_id, account_type, party_id)
+    match["date"] = day
+    docs = [d async for d in db.account_ledger.find(match, {"_id": 0}).sort([("created_at", 1), ("id", 1)])]
+    running = opening
+    rows: List[LedgerTxnOut] = []
+    total_credit = 0.0
+    total_debit = 0.0
+    for d in docs:
+        running = _round2(running + _ledger_delta(d.get("transaction_type") or "CREDIT", float(d.get("amount") or 0)))
+        row = await _ledger_row_out(d, name, running)
+        total_credit += row.credit
+        total_debit += row.debit
+        rows.append(row)
+
+    bills: List[LedgerBillSnapOut] = []
+    if account_type == "VENDOR":
+        async for b in db.vendor_bills.find(
+            {"shop_id": shop_id, "vendor_id": party_id, "date": day, "deleted": {"$ne": True}},
+            {"_id": 0},
+        ).sort("bill_no", 1):
+            gt = float(b.get("grand_total") or 0)
+            paid = float(b.get("paid") or 0)
+            bills.append(LedgerBillSnapOut(
+                id=b["id"],
+                bill_code=await _vendor_bill_code(shop_id, int(b.get("bill_no") or 0)),
+                grand_total=_round2(gt),
+                paid=_round2(paid),
+                balance=_round2(gt - paid),
+                status=b.get("status") or "unpaid",
+            ))
+
+    return LedgerDetailOut(
+        account_type=account_type,
+        party_id=party_id,
+        party_name=name,
+        date=day,
+        rows=rows,
+        total_credit=_round2(total_credit),
+        total_debit=_round2(total_debit),
+        balance=_round2(running),
+        bills=bills,
+    )
+
+
+@api.post("/account-ledger", response_model=LedgerTxnOut, status_code=201)
+async def create_ledger_txn(body: LedgerTxnIn, user=Depends(current_user)):
+    """Manual CREDIT/DEBIT only. Farmer Patti is never written here."""
+    _assert_ledger_party(body.account_type, body.farmer_id, body.vendor_id)
+    shop_id = user["shop_id"]
+    day = body.date or _today_str()
+    party_name = ""
+    party_id = ""
+    if body.account_type == "FARMER":
+        farmer = await db.farmers.find_one({"id": body.farmer_id, "shop_id": shop_id}, {"_id": 0})
+        if not farmer:
+            raise HTTPException(400, "Farmer not found")
+        party_name = farmer.get("name") or ""
+        party_id = body.farmer_id or ""
+    else:
+        vendor = await db.vendors.find_one({"id": body.vendor_id, "shop_id": shop_id}, {"_id": 0})
+        if not vendor:
+            raise HTTPException(400, "Vendor not found")
+        party_name = vendor.get("name") or ""
+        party_id = body.vendor_id or ""
+
+    now = utc_now()
+    tid = uid()
+    doc = {
+        "id": tid,
+        "shop_id": shop_id,
+        "account_type": body.account_type,
+        "farmer_id": body.farmer_id if body.account_type == "FARMER" else None,
+        "vendor_id": body.vendor_id if body.account_type == "VENDOR" else None,
+        "date": day,
+        "transaction_type": body.transaction_type,
+        "amount": _round2(body.amount),
+        "description": body.description.strip(),
+        "remarks": (body.remarks or "").strip() or None,
+        "source_type": "MANUAL",
+        "source_id": tid,
+        "deleted": False,
+        "created_at": now,
+        "updated_at": now,
+    }
+    await db.account_ledger.insert_one(doc)
+    running = await _party_signed_before(shop_id, body.account_type, party_id, day)
+    match = _ledger_match(shop_id, body.account_type, party_id)
+    match["date"] = day
+    async for t in db.account_ledger.find(match, {"_id": 0}).sort([("created_at", 1), ("id", 1)]):
+        running = _round2(running + _ledger_delta(t.get("transaction_type") or "CREDIT", float(t.get("amount") or 0)))
+        if t["id"] == tid:
+            break
+    return await _ledger_row_out(doc, party_name, running)
+
+
 # ---------- Register + CORS ----------
+from backup import register_backup_routes  # noqa: E402
+
+register_backup_routes(api, db, current_user, owner_only)
+
 app.include_router(api)
 
 # Bearer-token API (no cookies) — credentials must be False when using wildcard origins,

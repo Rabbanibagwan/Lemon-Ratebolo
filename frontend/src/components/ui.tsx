@@ -76,7 +76,6 @@ export function Input({
       {label ? <Text style={styles.inputLabel}>{label}</Text> : null}
       <TextInput
         testID={testID}
-        ref={inputRef as any}
         placeholderTextColor={colors.muted}
         style={[
           styles.input,
@@ -84,6 +83,7 @@ export function Input({
           error ? { borderColor: colors.error } : null,
         ]}
         {...rest}
+        ref={inputRef as any}
       />
       {error ? <Text style={styles.errorText}>{error}</Text> : hint ? <Text style={styles.hint}>{hint}</Text> : null}
     </View>

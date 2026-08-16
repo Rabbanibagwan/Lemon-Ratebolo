@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 
 import { api, Settings as SettingsT } from "@/src/api";
 import { useAuth } from "@/src/context/AuthContext";
+import { KeyboardFormScroll } from "@/src/components/KeyboardForm";
 import { Button, Input } from "@/src/components/ui";
 import { colors, font, spacing } from "@/src/theme";
 
@@ -57,8 +58,7 @@ export default function SettingsScreen() {
     <SafeAreaView style={styles.root} edges={["top"]}>
       <View style={styles.header}><Text style={styles.title}>SETTINGS</Text></View>
 
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-        <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 140 }} keyboardShouldPersistTaps="handled">
+      <KeyboardFormScroll contentContainerStyle={{ padding: spacing.lg, paddingBottom: 140 }}>
           <View style={styles.shopCard}>
             <View style={styles.shopIcon}>
               <Ionicons name={isOwner ? "storefront" : "person"} size={22} color={colors.onBrandPrimary} />
@@ -207,6 +207,7 @@ export default function SettingsScreen() {
               <NavRow icon="storefront-outline" label="SHOP PROFILE & BANK" onPress={() => router.push("/shop-profile")} testID="settings-shop-profile" />
               <NavRow icon="people-outline" label="FARMERS & VENDORS" onPress={() => router.push("/(tabs)/directory")} testID="settings-directory" />
               <NavRow icon="id-card-outline" label="STAFF ACCOUNTS" onPress={() => router.push("/staff")} testID="settings-staff" />
+              <NavRow icon="cloud-upload-outline" label="BACKUP & RESTORE" onPress={() => router.push("/backup" as any)} testID="settings-backup" />
             </>
           ) : (
             <View style={styles.roleNote}>
@@ -217,6 +218,9 @@ export default function SettingsScreen() {
             </View>
           )}
 
+          <Text style={[styles.section, { marginTop: spacing.xl }]}>Printing</Text>
+          <NavRow icon="print-outline" label="PRINTER" onPress={() => router.push("/printer")} testID="settings-printer-all" />
+
           <View style={styles.dangerBox}>
             <Text style={styles.dangerTitle}>Session</Text>
             <Pressable onPress={logout} style={styles.logout} testID="settings-logout">
@@ -224,8 +228,7 @@ export default function SettingsScreen() {
               <Text style={styles.logoutText}>LOGOUT</Text>
             </Pressable>
           </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+        </KeyboardFormScroll>
     </SafeAreaView>
   );
 }

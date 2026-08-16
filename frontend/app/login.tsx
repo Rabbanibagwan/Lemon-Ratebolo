@@ -1,9 +1,11 @@
 import { useState } from "react";
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View, Pressable } from "react-native";
+import { StyleSheet, Text, View, Pressable } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 
 import { useAuth } from "@/src/context/AuthContext";
+import { apiErrorMessage } from "@/src/api";
+import { KeyboardFormScroll } from "@/src/components/KeyboardForm";
 import { Button, Input } from "@/src/components/ui";
 import { colors, font, spacing } from "@/src/theme";
 
@@ -26,7 +28,7 @@ export default function Login() {
       await login(username.trim(), password);
       router.replace("/(tabs)");
     } catch (e: any) {
-      setError(e?.detail || "Login failed");
+      setError(apiErrorMessage(e, "Login failed"));
     } finally {
       setLoading(false);
     }
@@ -34,73 +36,65 @@ export default function Login() {
 
   return (
     <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-      >
-        <ScrollView
-          contentContainerStyle={styles.scroll}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          <View style={styles.brand}>
-            <View style={styles.brandBox}>
-              <Text style={styles.brandGlyph}>◤</Text>
-            </View>
-            <Text style={styles.title}>LEMON MANDI</Text>
-            <Text style={styles.subtitle}>Merchant Billing / Patti</Text>
+      <KeyboardFormScroll contentContainerStyle={styles.scroll}>
+        <View style={styles.brand}>
+          <View style={styles.brandBox}>
+            <Text style={styles.brandGlyph}>◤</Text>
           </View>
+          <Text style={styles.title}>LEMON MANDI</Text>
+          <Text style={styles.subtitle}>Merchant Billing / Patti</Text>
+        </View>
 
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Sign in to your shop</Text>
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Sign in to your shop</Text>
 
-            <Input
-              label="Username"
-              value={username}
-              onChangeText={setUsername}
-              autoCapitalize="none"
-              autoCorrect={false}
-              placeholder="e.g. ram_traders"
-              testID="login-username-input"
-              returnKeyType="next"
-            />
-            <Input
-              label="Password"
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry
-              placeholder="Enter password"
-              testID="login-password-input"
-              returnKeyType="go"
-              onSubmitEditing={onLogin}
-            />
+          <Input
+            label="Username"
+            value={username}
+            onChangeText={setUsername}
+            autoCapitalize="none"
+            autoCorrect={false}
+            placeholder="e.g. ram_traders"
+            testID="login-username-input"
+            returnKeyType="next"
+          />
+          <Input
+            label="Password"
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry
+            placeholder="Enter password"
+            testID="login-password-input"
+            returnKeyType="go"
+            onSubmitEditing={onLogin}
+          />
 
-            {error ? <Text style={styles.err}>{error}</Text> : null}
+          {error ? <Text style={styles.err}>{error}</Text> : null}
 
-            <Button
-              label="LOGIN"
-              onPress={onLogin}
-              loading={loading}
-              testID="login-submit-button"
-              style={{ marginTop: spacing.sm }}
-            />
+          <Button
+            label="LOGIN"
+            onPress={onLogin}
+            loading={loading}
+            testID="login-submit-button"
+            style={{ marginTop: spacing.sm }}
+          />
 
-            <View style={styles.footRow}>
-              <Text style={styles.footText}>New shop? </Text>
-              <Pressable onPress={() => router.push("/signup")} testID="login-goto-signup">
-                <Text style={styles.footLink}>CREATE ACCOUNT →</Text>
-              </Pressable>
-            </View>
+          <View style={styles.footRow}>
+            <Text style={styles.footText}>New shop? </Text>
+            <Pressable onPress={() => router.push("/signup")} testID="login-goto-signup">
+              <Text style={styles.footLink}>CREATE ACCOUNT →</Text>
+            </Pressable>
           </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+        </View>
+      </KeyboardFormScroll>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.surface },
-  scroll: { padding: spacing.lg, flexGrow: 1, justifyContent: "center", gap: spacing.xl },
+  // flex-start (not center) so Android can scroll the focused field above the keyboard
+  scroll: { padding: spacing.lg, paddingTop: spacing.xl, paddingBottom: 80, flexGrow: 1, gap: spacing.xl },
   brand: { alignItems: "flex-start", gap: spacing.md },
   brandBox: {
     width: 64, height: 64, backgroundColor: colors.brandPrimary,

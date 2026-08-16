@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
-  Alert, Image, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView,
+  Alert, Image, Linking, Modal, Platform, Pressable,
   StyleSheet, Text, View, ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -9,12 +9,23 @@ import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
 
-import { api } from "@/src/api";
+import { api, apiErrorMessage, OCR_API_TIMEOUT_MS, type ApiError } from "@/src/api";
 import { setOcrSession, OcrExtractedRow, BLANK_LOT_ROWS, DEMO_OCR_ROWS } from "@/src/ocr-session";
+import { KeyboardFormScroll } from "@/src/components/KeyboardForm";
 import { Button, Input } from "@/src/components/ui";
 import { colors, font, spacing } from "@/src/theme";
 
 type Stage = "pick" | "crop" | "ready";
+
+const OCR_STATUS_STEPS = [
+  "Uploading image…",
+  "Reading Action Diary…",
+  "Extracting lot numbers & bags…",
+  "Identifying farmer & bhada…",
+  "Identifying vendors & rates…",
+  "Preparing extracted data…",
+  "Almost complete…",
+] as const;
 
 export default function OcrCapture() {
   const router = useRouter();
@@ -30,7 +41,10 @@ export default function OcrCapture() {
   const [keyConfigured, setKeyConfigured] = useState(false);
   const [cropInsets, setCropInsets] = useState({ top: 0, bottom: 0, left: 0, right: 0 });
   const [processing, setProcessing] = useState(false);
+  const [statusIdx, setStatusIdx] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const inFlightRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
 
   // Env / Settings key → Extract works without the yellow paste box.
   useEffect(() => {
@@ -49,7 +63,23 @@ export default function OcrCapture() {
     return () => { cancelled = true; };
   }, []);
 
+  // Keep loading overlay alive while OCR runs (no fake %).
+  useEffect(() => {
+    if (!processing) {
+      setStatusIdx(0);
+      return;
+    }
+    const stepId = setInterval(() => {
+      setStatusIdx((i) => (i + 1) % OCR_STATUS_STEPS.length);
+    }, 5000);
+    return () => clearInterval(stepId);
+  }, [processing]);
+
+  // Do NOT abort OCR on unmount — Strict Mode remounts / brief focus loss must not cancel a valid extract.
+  // User can leave the screen; the in-flight guard still prevents duplicate submits while mounted.
+
   const reset = () => {
+    if (processing) return;
     setStage("pick");
     setRawUri(null);
     setImageUri(null);
@@ -59,6 +89,7 @@ export default function OcrCapture() {
   };
 
   const pickImage = async (source: "camera" | "gallery") => {
+    if (processing) return;
     setError(null);
     try {
       const perm = source === "camera"
@@ -128,12 +159,17 @@ export default function OcrCapture() {
         const height = Math.max(40, size.h - top - Math.round((insets.bottom / 100) * size.h));
         actions = [{ crop: { originX: left, originY: top, width, height } }];
       }
-      actions.push({ resize: { width: 1600 } });
+      // Cap width for upload speed while keeping handwriting readable.
+      actions.push({ resize: { width: 1400 } });
       const manipulated = await ImageManipulator.manipulateAsync(
         uri,
         actions,
-        { compress: 0.85, format: ImageManipulator.SaveFormat.JPEG, base64: true },
+        { compress: 0.82, format: ImageManipulator.SaveFormat.JPEG, base64: true },
       );
+      if (__DEV__) {
+        const kb = Math.round(((manipulated.base64 || "").length * 0.75) / 1024);
+        console.log("[ocr] image ready", { kb, uri: manipulated.uri?.slice?.(0, 48) });
+      }
       setImageUri(manipulated.uri);
       setImageBase64(manipulated.base64 || null);
       setStage("ready");
@@ -148,6 +184,7 @@ export default function OcrCapture() {
   };
 
   const openManualReview = (warning?: string) => {
+    if (processing) return;
     goToPreview(
       BLANK_LOT_ROWS,
       "manual",
@@ -155,31 +192,54 @@ export default function OcrCapture() {
     );
   };
 
+  const classifyOcrError = (e: unknown): string => {
+    const err = e as ApiError | undefined;
+    if (err?.code === "TIMEOUT" || /timed out|taking longer|longer than expected/i.test(String(err?.detail || ""))) {
+      return "OCR is taking longer than usual. Please keep the app open and try again — do not assume it failed mid-extract.";
+    }
+    if (err?.code === "NETWORK" || err?.status === 0) {
+      return apiErrorMessage(e, "Unable to connect to the server. Please check your internet connection and try again.");
+    }
+    const text = apiErrorMessage(e, "We could not extract the information from this image. Please try again.");
+    if (/not valid|API key|NO_CLOUD_OCR_KEY|401|403/i.test(text)) {
+      return text;
+    }
+    if (/blurry|unreadable|no rows|nothing extracted|select a clear/i.test(text)) {
+      return text.includes("clear") ? text : "Please select a clear Action Diary image.";
+    }
+    if (/502|OCR model|Gemini|quota/i.test(text)) {
+      return "We could not extract the information from this image. Please try again.";
+    }
+    return text;
+  };
+
   /** Primary path: extract lots from the diary photo via Gemini. */
   const runOcr = async () => {
-    if (!imageBase64) return;
+    if (!imageBase64 || inFlightRef.current) return;
+    inFlightRef.current = true;
     setError(null);
     setProcessing(true);
+    setStatusIdx(0);
+    const ac = new AbortController();
+    abortRef.current = ac;
+    if (__DEV__) console.log("[ocr] started", { bytesApprox: Math.round(imageBase64.length * 0.75), timeoutMs: OCR_API_TIMEOUT_MS });
     try {
       const payload: Record<string, unknown> = {
         image_base64: imageBase64,
         mime_type: "image/jpeg",
-        hint: hint.trim() || "Standard diary: 1/5 ABDG (50) then MM 02 1000. 1=Lot, 5=Bags, (50)=Bhada/bag. Multi vendors = one lot.",
+        hint: hint.trim() || "Standard diary: 1/5 ABDG (50) then MM 02 1000. 1=Lot, 5=Bags, (50)=Lot Bhada once. Multi vendors = one lot.",
       };
       if (geminiKey.trim()) {
         payload.gemini_api_key = geminiKey.trim();
         payload.persist_key = true;
       }
-      const cloud = Promise.race([
-        api.post<{ rows: OcrExtractedRow[]; model: string; warning?: string }>(
-          "/ocr/action-diary",
-          payload,
-        ),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("OCR timed out")), 60000),
-        ),
-      ]);
-      const resp = await cloud;
+      if (__DEV__) console.log("[ocr] upload / request started");
+      const resp = await api.post<{ rows: OcrExtractedRow[]; model: string; warning?: string }>(
+        "/ocr/action-diary",
+        payload,
+        { timeoutMs: OCR_API_TIMEOUT_MS, signal: ac.signal },
+      );
+      if (__DEV__) console.log("[ocr] response received", { rows: resp.rows?.length, model: resp.model, warning: resp.warning });
       if (resp.warning === "NO_CLOUD_OCR_KEY") {
         setNeedKey(true);
         setKeyConfigured(false);
@@ -189,37 +249,42 @@ export default function OcrCapture() {
       setNeedKey(false);
       setKeyConfigured(true);
       if (!resp.rows?.length) {
-        setError(resp.warning || "Nothing extracted. Retake a clearer photo, or enter manually.");
+        setError(resp.warning || "We could not extract the information from this image. Please try again.");
         return;
       }
       goToPreview(resp.rows, resp.model, resp.warning);
     } catch (e: any) {
-      const msg = typeof e?.detail === "string" ? e.detail : (e?.detail?.message || e?.message || "OCR failed");
-      const text = String(msg);
-      if (/not valid|API key|NO_CLOUD_OCR_KEY|401|403/i.test(text)) {
+      if (__DEV__) console.warn("[ocr] failed", e?.code, e?.status, e?.detail || e?.message);
+      if ((e as ApiError)?.code === "ABORTED" && ac.signal.aborted && !inFlightRef.current) {
+        return;
+      }
+      const text = classifyOcrError(e);
+      if (/not valid|API key|NO_CLOUD_OCR_KEY|401|403/i.test(text) || /Gemini API key/i.test(String((e as ApiError)?.detail || ""))) {
         setNeedKey(true);
         setKeyConfigured(false);
         setError(
           "Saved Gemini key is invalid or missing. Paste a fresh key from aistudio.google.com/apikey below, then Extract again.",
         );
-      } else if (text.includes("timed out")) {
-        setError("Extraction timed out. Try a tighter crop and Extract again.");
       } else {
         setError(text);
       }
     } finally {
+      inFlightRef.current = false;
+      abortRef.current = null;
       setProcessing(false);
     }
   };
 
   const runTextParse = async () => {
-    if (!pasteText.trim()) return;
+    if (!pasteText.trim() || inFlightRef.current) return;
+    inFlightRef.current = true;
     setError(null);
     setProcessing(true);
     try {
       const resp = await api.post<{ rows: OcrExtractedRow[]; model: string; warning?: string }>(
         "/ocr/action-diary-text",
         { text: pasteText },
+        { timeoutMs: 60_000 },
       );
       if (!resp.rows?.length) {
         setError(resp.warning || "Could not parse text. Example:\n1/5 ABDG (50)\nMM 2 1000\nAB 2 1000");
@@ -227,8 +292,9 @@ export default function OcrCapture() {
       }
       goToPreview(resp.rows, resp.model, resp.warning);
     } catch (e: any) {
-      setError(e?.detail || e?.message || "Parse failed");
+      setError(classifyOcrError(e));
     } finally {
+      inFlightRef.current = false;
       setProcessing(false);
     }
   };
@@ -240,7 +306,7 @@ export default function OcrCapture() {
   return (
     <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} hitSlop={12} testID="ocr-back">
+        <Pressable onPress={() => !processing && router.back()} hitSlop={12} testID="ocr-back" disabled={processing}>
           <Ionicons name="chevron-back" size={24} color={colors.onSurface} />
         </Pressable>
         <View style={{ flex: 1 }}>
@@ -251,16 +317,15 @@ export default function OcrCapture() {
         </View>
       </View>
 
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-        <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 220 }} keyboardShouldPersistTaps="handled">
+      <KeyboardFormScroll contentContainerStyle={{ padding: spacing.lg, paddingBottom: 220 }}>
           {stage === "pick" ? (
             <>
               <View style={styles.captureRow}>
-                <Pressable style={styles.captureTile} onPress={() => pickImage("camera")} testID="ocr-camera">
+                <Pressable style={styles.captureTile} onPress={() => pickImage("camera")} testID="ocr-camera" disabled={processing}>
                   <Ionicons name="camera-outline" size={32} color={colors.onSurface} />
                   <Text style={styles.captureLabel}>CAPTURE PHOTO</Text>
                 </Pressable>
-                <Pressable style={styles.captureTile} onPress={() => pickImage("gallery")} testID="ocr-gallery">
+                <Pressable style={styles.captureTile} onPress={() => pickImage("gallery")} testID="ocr-gallery" disabled={processing}>
                   <Ionicons name="images-outline" size={32} color={colors.onSurface} />
                   <Text style={styles.captureLabel}>SELECT FROM GALLERY</Text>
                 </Pressable>
@@ -273,7 +338,7 @@ export default function OcrCapture() {
                 <Text style={styles.tipsText}>4. Review & edit → Save / Save & Print</Text>
               </View>
 
-              <Pressable style={styles.pasteToggle} onPress={() => setShowPaste((v) => !v)} testID="ocr-paste-toggle">
+              <Pressable style={styles.pasteToggle} onPress={() => setShowPaste((v) => !v)} testID="ocr-paste-toggle" disabled={processing}>
                 <Ionicons name="document-text-outline" size={16} color={colors.onSurface} />
                 <Text style={styles.pasteToggleText}>{showPaste ? "HIDE TEXT PASTE" : "OR PASTE DIARY TEXT"}</Text>
               </Pressable>
@@ -287,14 +352,15 @@ export default function OcrCapture() {
                     placeholder={"1/5 ABDG (50)\nMM 2 1000\nAB 2 1000\nMC 1 1000"}
                     testID="ocr-paste-text"
                   />
-                  <Button label={processing ? "PARSING…" : "PARSE TEXT → REVIEW"} onPress={runTextParse} loading={processing} testID="ocr-parse-text" />
+                  <Button label={processing ? "PARSING…" : "PARSE TEXT → REVIEW"} onPress={runTextParse} loading={processing} disabled={processing} testID="ocr-parse-text" />
                 </View>
               ) : null}
 
               <Pressable
                 style={[styles.pasteToggle, { marginTop: spacing.sm }]}
-                onPress={() => goToPreview(DEMO_OCR_ROWS, "demo", "Sample extraction — edit every field before saving.")}
+                onPress={() => !processing && goToPreview(DEMO_OCR_ROWS, "demo", "Sample extraction — edit every field before saving.")}
                 testID="ocr-open-sample-preview"
+                disabled={processing}
               >
                 <Ionicons name="eye-outline" size={16} color={colors.onSurface} />
                 <Text style={styles.pasteToggleText}>OPEN SAMPLE REVIEW SCREEN</Text>
@@ -333,12 +399,13 @@ export default function OcrCapture() {
               ))}
               <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.md }}>
                 <View style={{ flex: 1 }}>
-                  <Button label="RETAKE" variant="secondary" onPress={reset} testID="ocr-retake-crop" />
+                  <Button label="RETAKE" variant="secondary" onPress={reset} disabled={processing} testID="ocr-retake-crop" />
                 </View>
                 <View style={{ flex: 1.4 }}>
                   <Button
                     label="CONFIRM CROP → OCR"
                     onPress={() => rawUri && finalizeCrop(rawUri, cropInsets)}
+                    disabled={processing}
                     testID="ocr-confirm-crop"
                   />
                 </View>
@@ -350,9 +417,9 @@ export default function OcrCapture() {
             <View>
               <View style={styles.previewBox}>
                 <Image source={{ uri: imageUri }} style={styles.preview} resizeMode="cover" />
-                <Pressable style={styles.retakeBtn} onPress={reset} testID="ocr-retake">
+                <Pressable style={styles.retakeBtn} onPress={reset} disabled={processing} testID="ocr-retake">
                   <Ionicons name="close" size={16} color={colors.onBrandPrimary} />
-                  <Text style={styles.retakeText}>RETAKE</Text>
+                  <Text style={styles.retakeText}>CHANGE IMAGE</Text>
                 </Pressable>
               </View>
               <View style={{ marginTop: spacing.lg }}>
@@ -387,8 +454,22 @@ export default function OcrCapture() {
             </View>
           ) : null}
 
-          {error ? <Text style={styles.err}>{error}</Text> : null}
-        </ScrollView>
+          {error && !processing ? (
+            <View style={styles.errBox} testID="ocr-error">
+              <Text style={styles.err}>{error}</Text>
+              {stage === "ready" && imageBase64 ? (
+                <View style={styles.errActions}>
+                  <View style={{ flex: 1 }}>
+                    <Button label="TRY AGAIN" onPress={runOcr} testID="ocr-try-again" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Button label="CHANGE IMAGE" variant="secondary" onPress={reset} testID="ocr-change-image" />
+                  </View>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+        </KeyboardFormScroll>
 
         {stage === "ready" && imageUri ? (
           <View style={styles.footer}>
@@ -396,21 +477,29 @@ export default function OcrCapture() {
               label={processing ? "EXTRACTING…" : "EXTRACT FROM PHOTO"}
               onPress={runOcr}
               loading={processing}
+              disabled={processing}
               testID="ocr-extract"
             />
-            {processing ? (
-              <View style={styles.procHint}>
-                <ActivityIndicator size="small" color={colors.brandPrimary} />
-                <Text style={styles.procHintText}>Reading diary page… usually 5–20 seconds.</Text>
-              </View>
-            ) : (
+            {!processing ? (
               <Pressable onPress={() => openManualReview()} style={styles.autoLink} testID="ocr-manual">
                 <Text style={styles.autoLinkText}>Skip — enter lots manually</Text>
               </Pressable>
-            )}
+            ) : null}
           </View>
         ) : null}
-      </KeyboardAvoidingView>
+
+      <Modal visible={processing} transparent animationType="fade" statusBarTranslucent>
+        <View style={styles.overlay} testID="ocr-extracting-overlay">
+          <View style={styles.overlayCard}>
+            <Text style={styles.overlayTitle}>EXTRACTING DATA</Text>
+            <ActivityIndicator size="large" color={colors.brandPrimary} style={{ marginVertical: spacing.lg }} />
+            <Text style={styles.overlayWait} testID="ocr-extract-wait">
+              Extracting data... Please wait.
+            </Text>
+            <Text style={styles.overlayStatus}>{OCR_STATUS_STEPS[statusIdx]}</Text>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -471,8 +560,6 @@ const styles = StyleSheet.create({
     borderTopWidth: 2, borderTopColor: colors.borderStrong,
     padding: spacing.lg, backgroundColor: colors.surface, gap: spacing.sm,
   },
-  procHint: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
-  procHintText: { fontSize: 11, color: colors.muted, fontFamily: font.display, flex: 1 },
   autoLink: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
     paddingVertical: 8,
@@ -490,9 +577,29 @@ const styles = StyleSheet.create({
   keyLink: {
     fontSize: 12, color: colors.brandPrimary, fontFamily: font.display, fontWeight: "800", textDecorationLine: "underline",
   },
+  errBox: { marginTop: spacing.md, gap: spacing.sm },
   err: {
-    marginTop: spacing.md,
     color: colors.error, backgroundColor: "#FEE2E2", borderWidth: 2, borderColor: colors.error,
     padding: spacing.sm, fontFamily: font.display, fontWeight: "700",
+  },
+  errActions: { flexDirection: "row", gap: spacing.sm },
+
+  overlay: {
+    flex: 1, backgroundColor: "rgba(17,24,39,0.72)",
+    alignItems: "center", justifyContent: "center", padding: spacing.xl,
+  },
+  overlayCard: {
+    width: "100%", maxWidth: 360, backgroundColor: colors.surface,
+    borderWidth: 2, borderColor: colors.borderStrong, padding: spacing.xl, alignItems: "center",
+  },
+  overlayTitle: {
+    fontSize: 18, fontWeight: "900", letterSpacing: 1.5, fontFamily: font.display, color: colors.onSurface,
+  },
+  overlayStatus: {
+    marginTop: spacing.sm, fontSize: 13, fontWeight: "800", fontFamily: font.display, color: colors.brandPrimary, textAlign: "center",
+  },
+  overlayWait: {
+    fontSize: 15, letterSpacing: 0.3, fontWeight: "800",
+    color: colors.onSurface, fontFamily: font.display, textAlign: "center",
   },
 });
