@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  ActivityIndicator, Alert, Image, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView,
+  ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView,
   StyleSheet, Text, View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -8,12 +8,13 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import { api, Patti, Settings, ShopProfile } from "@/src/api";
+import { KeyboardFormAvoid } from "@/src/components/KeyboardForm";
 import { useAuth } from "@/src/context/AuthContext";
 import { colors, font, money, spacing } from "@/src/theme";
 import { Button, Input } from "@/src/components/ui";
 import { qrDataUri } from "@/src/utils/qr";
 import { thermalPrintAndMark, sharePattiPdf } from "@/src/utils/patti-print";
-import { clampPaperMm } from "@/src/utils/thermal-print";
+import { clampPaperMm, thermalPrintUserMessage } from "@/src/utils/thermal-print";
 
 export default function PattiDetail() {
   const { id, fresh, autoPrint, autoShare } = useLocalSearchParams<{ id: string; fresh?: string; autoPrint?: string; autoShare?: string }>();
@@ -46,8 +47,13 @@ export default function PattiDetail() {
       setProfile(pf);
       setSettings(st);
       setReceiver(d.receiver_name || "");
-      const uri = await qrDataUri(d.qr_token, 260);
-      setQr(uri);
+      try {
+        const uri = await qrDataUri(d.qr_token, 260);
+        setQr(uri);
+      } catch (e) {
+        console.warn("patti QR render error", e);
+        setQr(null);
+      }
     } catch {
       setP(null);
     } finally {
@@ -102,7 +108,7 @@ export default function PattiDetail() {
       setP(updated);
     } catch (e) {
       console.warn("thermal print error", e);
-      Alert.alert("Printing failed", "Please ensure a printer is available and try again. Patti stays Saved (not Printed).");
+      Alert.alert("Print failed", `${thermalPrintUserMessage(e)} Patti stays Saved (not Printed).`);
     } finally {
       setSharing(false);
     }
@@ -303,7 +309,7 @@ export default function PattiDetail() {
 
       {/* Edit receiver modal */}
       <Modal visible={showReceiver} transparent animationType="fade" onRequestClose={() => setShowReceiver(false)}>
-        <KeyboardAvoidingView style={styles.modalRoot} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <KeyboardFormAvoid style={styles.modalRoot}>
           <Pressable style={styles.backdrop} onPress={() => setShowReceiver(false)} />
           <View style={styles.modalSheet}>
             <View style={styles.modalHeader}>
@@ -329,7 +335,7 @@ export default function PattiDetail() {
               <Button label="SAVE RECEIVER" onPress={saveReceiver} loading={savingReceiver} testID="receiver-save" />
             </View>
           </View>
-        </KeyboardAvoidingView>
+        </KeyboardFormAvoid>
       </Modal>
     </SafeAreaView>
   );

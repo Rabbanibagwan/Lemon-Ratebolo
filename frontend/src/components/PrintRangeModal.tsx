@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 
+import { KeyboardFormAvoid } from "@/src/components/KeyboardForm";
 import { colors, font, spacing } from "@/src/theme";
 
 type Props = {
@@ -60,7 +61,7 @@ export function PrintRangeModal({
       onRequestClose={onCancel}
       statusBarTranslucent
     >
-      <View style={styles.backdrop}>
+      <KeyboardFormAvoid style={styles.backdrop}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onCancel} testID="print-range-backdrop" />
         <View style={styles.sheet}>
           <View style={styles.head}>
@@ -126,7 +127,7 @@ export function PrintRangeModal({
             </Pressable>
           </View>
         </View>
-      </View>
+      </KeyboardFormAvoid>
     </Modal>
   );
 }

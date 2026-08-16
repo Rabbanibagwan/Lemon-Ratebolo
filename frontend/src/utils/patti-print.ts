@@ -5,9 +5,10 @@ import { Alert, Platform, Share } from "react-native";
 
 import { api, Patti, ShopProfile } from "@/src/api";
 import { qrDataUri, qrDataUriThermal } from "@/src/utils/qr";
+import { printThermalDocument } from "@/src/utils/thermal-connection";
+import { encodeFarmerPattiEscPos } from "@/src/utils/thermal-escpos-docs";
+import { resolvePrintPaperMm } from "@/src/utils/printer-prefs";
 import {
-  clampPaperMm,
-  printThermalHtmlOnly,
   thermalBaseCss,
   thermalMetrics,
 } from "@/src/utils/thermal-print";
@@ -133,7 +134,7 @@ export function renderThermalPattiHtml(p: Patti, profile: ShopProfile, qrUri: st
   const mobile = (profile.mobile || "").trim();
   return `
   <!doctype html><html><head><meta charset="utf-8"/>
-  <meta name="viewport" content="width=${m.w}, initial-scale=1"/>
+  <meta name="viewport" content="width=${m.widthPx}, initial-scale=1, maximum-scale=1"/>
   <title>Patti #${p.patti_no}</title>
   <style>${thermalBaseCss(m)}</style></head><body>
   <div id="slip" class="patti">
@@ -163,12 +164,19 @@ export function renderThermalPattiHtml(p: Patti, profile: ShopProfile, qrUri: st
   </body></html>`;
 }
 
-export async function thermalPrintPatti(p: Patti, profile: ShopProfile, paperMm: number = 80): Promise<void> {
-  const mm = clampPaperMm(paperMm);
+export async function thermalPrintPatti(p: Patti, profile: ShopProfile, paperMm?: number): Promise<void> {
+  const mm = await resolvePrintPaperMm(paperMm);
   const m = thermalMetrics(mm);
+  // Always generate QR — previous working format required it on the slip.
   const qrUri = await qrDataUriThermal(p.qr_token, Math.max(220, m.qrPx * 2));
   const html = renderThermalPattiHtml(p, profile, qrUri, mm);
-  await printThermalHtmlOnly(html, mm);
+  // Prefer the previous HTML thermal layout (merchant / farmer / lot rows / QR).
+  // ESC/POS is used only when Bluetooth is the active connection.
+  await printThermalDocument({
+    html,
+    escposBase64: encodeFarmerPattiEscPos(p, profile, mm, p.qr_token),
+    paperMm: mm,
+  });
 }
 
 export async function markPattiPrinted(pattiId: string): Promise<Patti> {

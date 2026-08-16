@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable,
+  Alert, Platform, Pressable,
   StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { KeyboardAwareScrollView, KeyboardStickyView } from "react-native-keyboard-controller";
@@ -8,13 +8,16 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
-import { api, AuctionDay, Farmer, Lot, Vendor } from "@/src/api";
-import { Button, Empty, Input } from "@/src/components/ui";
+import { api, apiErrorMessage, AuctionDay, Farmer, Lot, Vendor } from "@/src/api";
+import { Input } from "@/src/components/ui";
+import { PartyPicker } from "@/src/components/PartyPicker";
 import { colors, font, money, spacing } from "@/src/theme";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
 
 type LocalSale = { key: string; vendor_id: string | null; vendor_name: string; bags: string; rate: string };
 const newKey = () => `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+/** Android number-pad often hides the Next/Done key; numeric keeps it available. */
+const integerKeyboard = Platform.OS === "android" ? "numeric" : "number-pad";
 
 export default function AddLot() {
   const { id, day: dayId } = useLocalSearchParams<{ id?: string; day?: string }>();
@@ -38,15 +41,7 @@ export default function AddLot() {
   const [saving, setSaving] = useState(false);
 
   const [farmerPickerOpen, setFarmerPickerOpen] = useState(false);
-  const [farmerSearch, setFarmerSearch] = useState("");
-  const [showAddFarmer, setShowAddFarmer] = useState(false);
-  const [newFarmerName, setNewFarmerName] = useState("");
-  const [newFarmerVillage, setNewFarmerVillage] = useState("");
-
   const [vendorPickerFor, setVendorPickerFor] = useState<string | null>(null);
-  const [vendorSearch, setVendorSearch] = useState("");
-  const [showAddVendor, setShowAddVendor] = useState(false);
-  const [newVendorName, setNewVendorName] = useState("");
 
   // Refs for smart auto-advance
   const lotNoRef = useRef<TextInput | null>(null);
@@ -86,15 +81,14 @@ export default function AddLot() {
     })();
   }, [id, isEdit, dayId, workingDateISO]);
 
-  // Auto-fill total bhada from driver when serial/total-bags/driver combine (only if not manually overridden)
+  // Auto-fill lot Bhada from driver once (circled/lot amount — NOT × bags)
   useEffect(() => {
     if (bhadaManual || !day) return;
     const n = parseInt(lotSerial.trim(), 10);
-    const bags = parseInt(totalBags.trim(), 10);
-    if (!isFinite(n) || n <= 0 || !isFinite(bags) || bags <= 0) return;
+    if (!isFinite(n) || n <= 0) return;
     const drv = day.drivers.find((d) => n >= d.range_from && n <= d.range_to);
-    if (drv) setBhada(String(drv.bhada_per_bag * bags));
-  }, [lotSerial, totalBags, day, bhadaManual]);
+    if (drv) setBhada(String(drv.bhada_per_bag));
+  }, [lotSerial, day, bhadaManual]);
 
   const currentDriver = useMemo(() => {
     const n = parseInt(lotSerial.trim(), 10);
@@ -103,15 +97,6 @@ export default function AddLot() {
   }, [day, lotSerial]);
 
   const farmer = farmers.find((f) => f.id === farmerId) || null;
-
-  const filteredFarmers = useMemo(() => {
-    const q = farmerSearch.trim().toLowerCase();
-    return q ? farmers.filter((f) => f.name.toLowerCase().includes(q)) : farmers;
-  }, [farmers, farmerSearch]);
-  const filteredVendors = useMemo(() => {
-    const q = vendorSearch.trim().toLowerCase();
-    return q ? vendors.filter((v) => v.name.toLowerCase().includes(q)) : vendors;
-  }, [vendors, vendorSearch]);
 
   const soldBags = useMemo(() => sales.reduce((s, x) => s + (Number(x.bags) || 0), 0), [sales]);
   const totalGross = useMemo(() => sales.reduce((s, x) => s + (Number(x.bags) || 0) * (Number(x.rate) || 0), 0), [sales]);
@@ -126,39 +111,6 @@ export default function AddLot() {
   };
   const removeSale = (k: string) =>
     setSales((xs) => (xs.length === 1 ? xs : xs.filter((s) => s.key !== k)));
-
-  const onFarmerAddSave = async () => {
-    if (!newFarmerName.trim()) return;
-    try {
-      const f = await api.post<Farmer>("/farmers", {
-        name: newFarmerName.trim(),
-        village: newFarmerVillage.trim() || null,
-      });
-      setFarmers((xs) => [...xs, f].sort((a, b) => a.name.localeCompare(b.name)));
-      setFarmerId(f.id);
-      setShowAddFarmer(false);
-      setFarmerPickerOpen(false);
-      setNewFarmerName(""); setNewFarmerVillage("");
-    } catch (e: any) {
-      Alert.alert("Failed", e?.detail || "Could not add");
-    }
-  };
-  const onVendorAddSave = async () => {
-    if (!newVendorName.trim()) return;
-    try {
-      const v = await api.post<Vendor>("/vendors", { name: newVendorName.trim() });
-      setVendors((xs) => [...xs, v].sort((a, b) => a.name.localeCompare(b.name)));
-      if (vendorPickerFor) updateSale(vendorPickerFor, { vendor_id: v.id, vendor_name: v.name });
-      setShowAddVendor(false); setNewVendorName("");
-      // Auto-advance to bags field
-      setTimeout(() => {
-        if (vendorPickerFor) bagsRefs.current[vendorPickerFor]?.focus();
-      }, 100);
-      setVendorPickerFor(null);
-    } catch (e: any) {
-      Alert.alert("Failed", e?.detail || "Could not add");
-    }
-  };
 
   const save = async (mode: "save" | "print" | "share" = "save") => {
     setError(null);
@@ -188,6 +140,9 @@ export default function AddLot() {
     };
 
     try {
+      if (__DEV__) {
+        console.log("[lots] save payload", JSON.stringify(payload));
+      }
       setSaving(true);
       const savedLot = isEdit
         ? await api.put<Lot>(`/lots/${id}`, payload)
@@ -217,8 +172,7 @@ export default function AddLot() {
       } else if (e?.status === 422 && typeof e?.detail === "object" && e.detail?.code === "bags_mismatch") {
         setError(e.detail.message || "Bags mismatch");
       } else {
-        const d = e?.detail;
-        setError(typeof d === "string" ? d : (d?.message || "Failed to save"));
+        setError(apiErrorMessage(e, "Farmer Patti generation failed"));
       }
     } finally {
       setSaving(false);
@@ -268,10 +222,11 @@ export default function AddLot() {
                 value={lotSerial}
                 onChangeText={(v) => setLotSerial(v.replace(/[^0-9]/g, ""))}
                 placeholder="e.g. 1"
-                keyboardType="number-pad"
+                keyboardType={integerKeyboard}
                 testID="lot-serial"
                 inputRef={lotNoRef}
                 returnKeyType="next"
+                blurOnSubmit={false}
                 onSubmitEditing={() => totalBagsRef.current?.focus()}
               />
             </View>
@@ -281,11 +236,12 @@ export default function AddLot() {
                 value={totalBags}
                 onChangeText={(v) => setTotalBags(v.replace(/[^0-9]/g, ""))}
                 placeholder="e.g. 5"
-                keyboardType="number-pad"
+                keyboardType={integerKeyboard}
                 testID="lot-total-bags"
                 inputRef={totalBagsRef}
                 returnKeyType="next"
-                onSubmitEditing={() => setFarmerPickerOpen(true)}
+                blurOnSubmit={false}
+                onSubmitEditing={() => bhadaRef.current?.focus()}
               />
             </View>
             <View style={{ flex: 1 }}>
@@ -298,7 +254,8 @@ export default function AddLot() {
                 testID="lot-bhada"
                 inputRef={bhadaRef}
                 returnKeyType="next"
-                onSubmitEditing={addSale}
+                blurOnSubmit={false}
+                onSubmitEditing={() => setFarmerPickerOpen(true)}
               />
             </View>
           </View>
@@ -309,14 +266,12 @@ export default function AddLot() {
               <Text style={styles.driverBannerText}>
                 Driver: <Text style={{ fontWeight: "900" }}>{currentDriver.name}</Text>
                 {currentDriver.place ? ` · ${currentDriver.place}` : ""}
-                {" · ₹"}{currentDriver.bhada_per_bag}/bag
-                {totalBags && parseInt(totalBags, 10) > 0 ? ` → ₹${currentDriver.bhada_per_bag * parseInt(totalBags, 10)} total` : ""}
+                {" · Lot Bhada ₹"}{currentDriver.bhada_per_bag}
               </Text>
               {bhadaManual && (
                 <Pressable onPress={() => {
                   setBhadaManual(false);
-                  const bags = parseInt(totalBags.trim(), 10);
-                  setBhada(String(currentDriver.bhada_per_bag * (isFinite(bags) && bags > 0 ? bags : 1)));
+                  setBhada(String(currentDriver.bhada_per_bag));
                 }} hitSlop={10}>
                   <Text style={styles.driverBannerReset}>RESET</Text>
                 </Pressable>
@@ -360,7 +315,7 @@ export default function AddLot() {
               <Text style={styles.smallLabel}>Vendor</Text>
               <Pressable
                 style={styles.pickBox}
-                onPress={() => { setVendorPickerFor(s.key); setVendorSearch(""); }}
+                onPress={() => { setVendorPickerFor(s.key); }}
                 testID={`sale-vendor-${idx}`}
               >
                 <Text style={[styles.pickBoxText, !s.vendor_id && { color: colors.muted }]} numberOfLines={1}>
@@ -375,11 +330,12 @@ export default function AddLot() {
                     label="Bags"
                     value={s.bags}
                     onChangeText={(v) => updateSale(s.key, { bags: v.replace(/[^0-9]/g, "") })}
-                    keyboardType="number-pad"
+                    keyboardType={integerKeyboard}
                     placeholder="0"
                     testID={`sale-bags-${idx}`}
                     inputRef={(r) => { bagsRefs.current[s.key] = r; }}
                     returnKeyType="next"
+                    blurOnSubmit={false}
                     onSubmitEditing={() => rateRefs.current[s.key]?.focus()}
                   />
                 </View>
@@ -392,9 +348,13 @@ export default function AddLot() {
                     placeholder="0"
                     testID={`sale-rate-${idx}`}
                     inputRef={(r) => { rateRefs.current[s.key] = r; }}
-                    returnKeyType="done"
+                    returnKeyType={idx < sales.length - 1 ? "next" : "done"}
+                    blurOnSubmit={idx >= sales.length - 1}
                     onSubmitEditing={() => {
-                      // Do not auto-add a new vendor row. User must explicitly click "+ ADD ANOTHER VENDOR".
+                      const next = sales[idx + 1];
+                      if (!next) return;
+                      if (!next.vendor_id) setVendorPickerFor(next.key);
+                      else bagsRefs.current[next.key]?.focus();
                     }}
                   />
                 </View>
@@ -450,156 +410,59 @@ export default function AddLot() {
         </View>
       </KeyboardStickyView>
 
-      {/* Farmer picker */}
-      <Modal visible={farmerPickerOpen} animationType="slide" transparent onRequestClose={() => setFarmerPickerOpen(false)}>
-        <View style={styles.modalRoot}>
-          <Pressable style={styles.backdrop} onPress={() => setFarmerPickerOpen(false)} />
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>SELECT FARMER</Text>
-              <Pressable onPress={() => setFarmerPickerOpen(false)} hitSlop={12}>
-                <Ionicons name="close" size={22} color={colors.onSurface} />
-              </Pressable>
-            </View>
-            <View style={styles.searchRow}>
-              <Ionicons name="search" size={16} color={colors.muted} />
-              <TextInput
-                value={farmerSearch}
-                onChangeText={setFarmerSearch}
-                placeholder="Search farmers…"
-                placeholderTextColor={colors.muted}
-                style={styles.searchInput}
-                testID="farmer-search"
-              />
-            </View>
-            <FlatList
-              data={filteredFarmers}
-              keyExtractor={(x) => x.id}
-              keyboardShouldPersistTaps="handled"
-              style={{ maxHeight: 380 }}
-              contentContainerStyle={{ padding: spacing.lg, gap: spacing.sm }}
-              ListEmptyComponent={<Empty title="No farmers" subtitle="Tap add below" />}
-              renderItem={({ item }) => (
-                <Pressable
-                  onPress={() => {
-                    setFarmerId(item.id);
-                    setFarmerPickerOpen(false);
-                    setTimeout(() => bhadaRef.current?.focus(), 200);
-                  }}
-                  style={[styles.pickRow, item.id === farmerId && styles.pickRowSelected]}
-                  testID={`farmer-pick-${item.id}`}
-                >
-                  <View style={styles.avatar}><Text style={styles.avatarText}>{item.name.charAt(0).toUpperCase()}</Text></View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.pickTitle}>{item.name}</Text>
-                    <Text style={styles.pickMeta}>{item.village || "—"}</Text>
-                  </View>
-                </Pressable>
-              )}
-              ListFooterComponent={
-                <Pressable style={styles.addRow} onPress={() => setShowAddFarmer(true)} testID="farmer-add-btn">
-                  <Ionicons name="add-circle-outline" size={20} color={colors.brandPrimary} />
-                  <Text style={styles.addRowText}>ADD NEW FARMER</Text>
-                </Pressable>
-              }
-            />
-          </View>
-        </View>
-      </Modal>
-
-      {/* Vendor picker */}
-      <Modal visible={!!vendorPickerFor} animationType="slide" transparent onRequestClose={() => setVendorPickerFor(null)}>
-        <View style={styles.modalRoot}>
-          <Pressable style={styles.backdrop} onPress={() => setVendorPickerFor(null)} />
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>SELECT VENDOR</Text>
-              <Pressable onPress={() => setVendorPickerFor(null)} hitSlop={12}>
-                <Ionicons name="close" size={22} color={colors.onSurface} />
-              </Pressable>
-            </View>
-            <View style={styles.searchRow}>
-              <Ionicons name="search" size={16} color={colors.muted} />
-              <TextInput
-                value={vendorSearch}
-                onChangeText={setVendorSearch}
-                placeholder="Search vendors…"
-                placeholderTextColor={colors.muted}
-                style={styles.searchInput}
-                testID="vendor-search"
-              />
-            </View>
-            <FlatList
-              data={filteredVendors}
-              keyExtractor={(x) => x.id}
-              keyboardShouldPersistTaps="handled"
-              style={{ maxHeight: 380 }}
-              contentContainerStyle={{ padding: spacing.lg, gap: spacing.sm }}
-              ListEmptyComponent={<Empty title="No vendors" subtitle="Tap add below" />}
-              renderItem={({ item }) => (
-                <Pressable
-                  onPress={() => {
-                    if (vendorPickerFor) {
-                      updateSale(vendorPickerFor, { vendor_id: item.id, vendor_name: item.name });
-                      const k = vendorPickerFor;
-                      setVendorPickerFor(null);
-                      setTimeout(() => bagsRefs.current[k]?.focus(), 200);
-                    }
-                  }}
-                  style={styles.pickRow}
-                  testID={`vendor-pick-${item.id}`}
-                >
-                  <View style={styles.avatar}><Text style={styles.avatarText}>{item.name.charAt(0).toUpperCase()}</Text></View>
-                  <Text style={[styles.pickTitle, { flex: 1 }]}>{item.name}</Text>
-                </Pressable>
-              )}
-              ListFooterComponent={
-                <Pressable style={styles.addRow} onPress={() => setShowAddVendor(true)} testID="vendor-add-btn">
-                  <Ionicons name="add-circle-outline" size={20} color={colors.brandPrimary} />
-                  <Text style={styles.addRowText}>ADD NEW VENDOR</Text>
-                </Pressable>
-              }
-            />
-          </View>
-        </View>
-      </Modal>
-
-      {/* Add farmer / vendor inline modals */}
-      <Modal visible={showAddFarmer} transparent animationType="fade" onRequestClose={() => setShowAddFarmer(false)}>
-        <KeyboardAvoidingView style={styles.modalRoot} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-          <Pressable style={styles.backdrop} onPress={() => setShowAddFarmer(false)} />
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>ADD FARMER</Text>
-              <Pressable onPress={() => setShowAddFarmer(false)} hitSlop={12}>
-                <Ionicons name="close" size={22} color={colors.onSurface} />
-              </Pressable>
-            </View>
-            <View style={{ padding: spacing.lg }}>
-              <Input label="Name" value={newFarmerName} onChangeText={setNewFarmerName} autoCapitalize="words" testID="new-farmer-name" />
-              <Input label="Village (optional)" value={newFarmerVillage} onChangeText={setNewFarmerVillage} testID="new-farmer-village" />
-              <Button label="ADD" onPress={onFarmerAddSave} testID="new-farmer-save" />
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-      <Modal visible={showAddVendor} transparent animationType="fade" onRequestClose={() => setShowAddVendor(false)}>
-        <KeyboardAvoidingView style={styles.modalRoot} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-          <Pressable style={styles.backdrop} onPress={() => setShowAddVendor(false)} />
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>ADD VENDOR</Text>
-              <Pressable onPress={() => setShowAddVendor(false)} hitSlop={12}>
-                <Ionicons name="close" size={22} color={colors.onSurface} />
-              </Pressable>
-            </View>
-            <View style={{ padding: spacing.lg }}>
-              <Input label="Name" value={newVendorName} onChangeText={setNewVendorName} autoCapitalize="words" testID="new-vendor-name" />
-              <Button label="ADD" onPress={onVendorAddSave} testID="new-vendor-save" />
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
+      <PartyPicker
+        visible={farmerPickerOpen}
+        kind="farmer"
+        items={farmers}
+        selectedId={farmerId}
+        onClose={() => setFarmerPickerOpen(false)}
+        onSelect={(item) => {
+          setFarmerId(item.id);
+          setFarmerPickerOpen(false);
+          const first = sales[0];
+          if (!first) return;
+          setTimeout(() => {
+            if (!first.vendor_id) setVendorPickerFor(first.key);
+            else bagsRefs.current[first.key]?.focus();
+          }, 200);
+        }}
+        onCreated={(item) => {
+          setFarmers((xs) => [...xs, item as Farmer].sort((a, b) => a.name.localeCompare(b.name)));
+          setFarmerId(item.id);
+          setFarmerPickerOpen(false);
+          const first = sales[0];
+          if (!first) return;
+          setTimeout(() => {
+            if (!first.vendor_id) setVendorPickerFor(first.key);
+            else bagsRefs.current[first.key]?.focus();
+          }, 200);
+        }}
+      />
+      <PartyPicker
+        visible={!!vendorPickerFor}
+        kind="vendor"
+        items={vendors}
+        selectedId={sales.find((s) => s.key === vendorPickerFor)?.vendor_id}
+        initialQuery={sales.find((s) => s.key === vendorPickerFor)?.vendor_name || ""}
+        onClose={() => setVendorPickerFor(null)}
+        onSelect={(item) => {
+          if (vendorPickerFor) {
+            const k = vendorPickerFor;
+            updateSale(k, { vendor_id: item.id, vendor_name: item.name });
+            setVendorPickerFor(null);
+            setTimeout(() => bagsRefs.current[k]?.focus(), 200);
+          }
+        }}
+        onCreated={(item) => {
+          setVendors((xs) => [...xs, item as Vendor].sort((a, b) => a.name.localeCompare(b.name)));
+          if (vendorPickerFor) {
+            const k = vendorPickerFor;
+            updateSale(k, { vendor_id: item.id, vendor_name: item.name });
+            setVendorPickerFor(null);
+            setTimeout(() => bagsRefs.current[k]?.focus(), 200);
+          }
+        }}
+      />
     </SafeAreaView>
   );
 }

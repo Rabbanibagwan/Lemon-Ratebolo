@@ -1,17 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
-  Alert, FlatList, Image, Modal, Pressable,
-  StyleSheet, Text, TextInput, View,
+  Alert, Image, Pressable,
+  StyleSheet, Text, View,
 } from "react-native";
 import { KeyboardAwareScrollView, KeyboardStickyView } from "react-native-keyboard-controller";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
-import { api, AuctionDay, Farmer, Lot, Patti, ShopProfile, Vendor } from "@/src/api";
+import { api, apiErrorMessage, AuctionDay, Farmer, Lot, Patti, ShopProfile, Vendor } from "@/src/api";
 import { getOcrSession, clearOcrSession } from "@/src/ocr-session";
 import { Input } from "@/src/components/ui";
-import { colors, font, money, spacing } from "@/src/theme";
+import { PartyPicker, findExactParty } from "@/src/components/PartyPicker";
+import { colors, font, spacing } from "@/src/theme";
 import { thermalPrintAndMark } from "@/src/utils/patti-print";
 import { clampPaperMm } from "@/src/utils/thermal-print";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
@@ -24,16 +25,28 @@ type VendorDraft = {
   rate_per_bag: string;
 };
 
+type LotWorkflowStatus =
+  | "ready"
+  | "saving"
+  | "saved"
+  | "printing"
+  | "printed"
+  | "duplicate"
+  | "error";
+
 type LotDraft = {
   key: string;
   lot_serial_no: string;
   total_bags: string;
   farmer_name: string;
   farmer_id?: string | null;
-  bhada_per_bag: string; // review UI: Bhada / Bag (editable)
+  bhada_total: string; // lot-level circled bhada (NOT per bag)
   vendors: VendorDraft[];
   saving?: boolean;
   saved?: boolean;
+  printed?: boolean;
+  patti_id?: string | null;
+  status?: LotWorkflowStatus;
   error?: string | null;
 };
 
@@ -93,29 +106,25 @@ function rowsToLots(raw: any[]): LotDraft[] {
     const gkey = `${serial}#${farmer.toLowerCase()}`;
     let lot = map.get(gkey);
     if (!lot) {
-      // Prefer explicit per-bag; else derive from total.
-      let bhadaPerBag = "";
-      if (r.bhada_per_bag != null) bhadaPerBag = String(r.bhada_per_bag);
-      else if (r.bhada_total != null && Number(total) > 0) {
-        bhadaPerBag = String(Math.round((Number(r.bhada_total) / Number(total)) * 1000) / 1000);
-      }
+      // Circled diary amount is lot bhada once — prefer bhada_total; never divide/multiply by bags.
+      let bhadaTotal = "";
+      if (r.bhada_total != null) bhadaTotal = String(r.bhada_total);
+      else if (r.bhada_per_bag != null) bhadaTotal = String(r.bhada_per_bag);
       lot = {
         key: newKey(),
         lot_serial_no: serial,
         total_bags: total,
         farmer_name: farmer,
         farmer_id: null,
-        bhada_per_bag: bhadaPerBag,
+        bhada_total: bhadaTotal,
         vendors: [],
       };
       map.set(gkey, lot);
     } else {
       if (!lot.total_bags && total) lot.total_bags = total;
-      if (!lot.bhada_per_bag) {
-        if (r.bhada_per_bag != null) lot.bhada_per_bag = String(r.bhada_per_bag);
-        else if (r.bhada_total != null && Number(lot.total_bags) > 0) {
-          lot.bhada_per_bag = String(Math.round((Number(r.bhada_total) / Number(lot.total_bags)) * 1000) / 1000);
-        }
+      if (!lot.bhada_total) {
+        if (r.bhada_total != null) lot.bhada_total = String(r.bhada_total);
+        else if (r.bhada_per_bag != null) lot.bhada_total = String(r.bhada_per_bag);
       }
     }
     if (r.vendor_name || r.bags != null) {
@@ -203,29 +212,54 @@ export default function OcrPreview() {
     null | { lotKey: string; kind: "farmer" } | { lotKey: string; vendorKey: string; kind: "vendor" }
   >(null);
   const [pickerQuery, setPickerQuery] = useState("");
-  const pickerList = useMemo(() => {
-    if (!pickerFor) return [];
-    const list = pickerFor.kind === "farmer" ? farmers : vendors;
-    const q = pickerQuery.trim().toLowerCase();
-    return q ? list.filter((x) => x.name.toLowerCase().includes(q)) : list.slice(0, 200);
-  }, [pickerFor, pickerQuery, farmers, vendors]);
 
   const updateLot = (lotKey: string, patch: Partial<LotDraft>) =>
-    setLots((xs) => xs.map((l) => (l.key === lotKey ? { ...l, ...patch } : l)));
+    setLots((xs) =>
+      xs.map((l) => {
+        if (l.key !== lotKey) return l;
+        const next: LotDraft = { ...l, ...patch };
+        if (
+          patch.lot_serial_no !== undefined ||
+          patch.total_bags !== undefined ||
+          patch.farmer_name !== undefined ||
+          patch.vendors !== undefined ||
+          patch.bhada_total !== undefined
+        ) {
+          if (l.status === "duplicate" || l.status === "error") {
+            next.status = "ready";
+            if (patch.error === undefined) next.error = null;
+          }
+        }
+        return next;
+      }),
+    );
 
   const updateVendor = (lotKey: string, vendorKey: string, patch: Partial<VendorDraft>) =>
     setLots((xs) => xs.map((l) => {
       if (l.key !== lotKey) return l;
-      return { ...l, vendors: l.vendors.map((v) => (v.key === vendorKey ? { ...v, ...patch } : v)) };
+      const next: LotDraft = {
+        ...l,
+        vendors: l.vendors.map((v) => (v.key === vendorKey ? { ...v, ...patch } : v)),
+      };
+      if (l.status === "duplicate" || l.status === "error") {
+        next.status = "ready";
+        next.error = null;
+      }
+      return next;
     }));
 
   const addVendor = (lotKey: string) => {
     setLots((xs) => xs.map((l) => {
       if (l.key !== lotKey) return l;
-      return {
+      const next: LotDraft = {
         ...l,
         vendors: [...l.vendors, { key: newKey(), vendor_name: "", vendor_id: null, bags: "", rate_per_bag: "" }],
       };
+      if (l.status === "duplicate" || l.status === "error") {
+        next.status = "ready";
+        next.error = null;
+      }
+      return next;
     }));
   };
 
@@ -246,7 +280,7 @@ export default function OcrPreview() {
       total_bags: "",
       farmer_name: "",
       farmer_id: null,
-      bhada_per_bag: "",
+      bhada_total: "",
       vendors: [{ key: newKey(), vendor_name: "", vendor_id: null, bags: "", rate_per_bag: "" }],
     }]);
   };
@@ -263,7 +297,7 @@ export default function OcrPreview() {
 
   const findOrCreateFarmer = useCallback(async (name: string): Promise<string | null> => {
     if (!name.trim()) return null;
-    const found = farmers.find((f) => f.name.toLowerCase() === name.trim().toLowerCase());
+    const found = findExactParty(farmers, name);
     if (found) return found.id;
     const created = await api.post<Farmer>("/farmers", { name: name.trim() });
     setFarmers((xs) => [...xs, created]);
@@ -272,9 +306,8 @@ export default function OcrPreview() {
 
   const findOrCreateVendor = useCallback(async (name: string): Promise<string | null> => {
     if (!name.trim()) return null;
-    const found = vendors.find((v) => v.name.toLowerCase() === name.trim().toLowerCase());
+    const found = findExactParty(vendors, name);
     if (found) return found.id;
-    // Vendor Details is mandatory in API — use a clear OCR placeholder.
     const created = await api.post<Vendor>("/vendors", {
       name: name.trim(),
       details: `OCR · ${name.trim()}`,
@@ -286,43 +319,60 @@ export default function OcrPreview() {
   const saveAll = async (mode: "save" | "print" = "save") => {
     if (!day) { setError("Working-date auction day not loaded"); return; }
     setError(null); setSummary(null);
+    setSaving(true);
 
-    // Validate every lot before creating any Pattis (OCR must never save unverified data).
-    const blockers: string[] = [];
-    for (const lot of lots) {
+    let ok = 0;
+    let fail = 0;
+    let dup = 0;
+    const createdPattiIds: string[] = [];
+
+    // Snapshot pending lots — each is validated/saved independently (no all-or-nothing).
+    const pending = lots.filter(
+      (l) => !l.saved && l.status !== "saved" && l.status !== "printed" && l.status !== "printing",
+    );
+
+    for (const lot of pending) {
+      // Per-lot validation
       if (!lot.lot_serial_no.trim() || !lot.total_bags.trim() || !lot.farmer_name.trim()) {
-        blockers.push(`Lot ${lot.lot_serial_no || "?"} — missing Lot No. / Total Bags / Farmer.`);
+        updateLot(lot.key, {
+          status: "error",
+          error: `Lot ${lot.lot_serial_no || "?"} — missing Lot No. / Total Bags / Farmer.`,
+        });
+        fail += 1;
         continue;
       }
-      const filled = lot.vendors.filter((v) => v.vendor_name.trim() && Number(v.bags) > 0 && Number(v.rate_per_bag) > 0);
+      const filled = lot.vendors.filter(
+        (v) => v.vendor_name.trim() && Number(v.bags) > 0 && Number(v.rate_per_bag) > 0,
+      );
       if (!filled.length) {
-        blockers.push(`Lot ${lot.lot_serial_no} — add at least one vendor sale.`);
+        updateLot(lot.key, {
+          status: "error",
+          error: `Lot ${lot.lot_serial_no} — add at least one vendor sale.`,
+        });
+        fail += 1;
         continue;
       }
       const st = auctionStatus({ ...lot, vendors: filled });
-      if (!st.ok) blockers.push(st.message);
-    }
-    if (blockers.length) {
-      setError(blockers[0]);
-      Alert.alert("Fix before save", blockers.slice(0, 4).join("\n"));
-      return;
-    }
+      if (!st.ok) {
+        updateLot(lot.key, { status: "error", error: st.message });
+        fail += 1;
+        continue;
+      }
 
-    setSaving(true);
-    let ok = 0, fail = 0;
-    const createdPattiIds: string[] = [];
-
-    for (const lot of lots) {
-      updateLot(lot.key, { saving: true, error: null });
+      updateLot(lot.key, { saving: true, status: "saving", error: null });
       try {
-        let fid = lot.farmer_id || fuzzyMatchId(lot.farmer_name, farmers.map((x) => ({ id: x.id, name: x.name })));
+        let fid =
+          lot.farmer_id ||
+          fuzzyMatchId(lot.farmer_name, farmers.map((x) => ({ id: x.id, name: x.name })));
         if (!fid) fid = await findOrCreateFarmer(lot.farmer_name);
         if (!fid) throw new Error("Failed to find/create farmer");
 
         const sales: { vendor_id: string; bags: number; rate_per_bag: number }[] = [];
         for (const v of lot.vendors) {
           if (!v.vendor_name.trim() || !(Number(v.bags) > 0)) continue;
-          let vid = v.vendor_id || fuzzyMatchId(v.vendor_name, vendors.map((x) => ({ id: x.id, name: x.name })));
+          let vid =
+            v.vendor_id ||
+            fuzzyMatchId(v.vendor_name, vendors.map((x) => ({ id: x.id, name: x.name })));
           if (!vid) vid = await findOrCreateVendor(v.vendor_name);
           if (!vid) throw new Error("Failed to find/create vendor");
           sales.push({ vendor_id: vid, bags: Number(v.bags), rate_per_bag: Number(v.rate_per_bag) });
@@ -335,50 +385,137 @@ export default function OcrPreview() {
           farmer_id: fid,
           sales,
         };
-        if (lot.bhada_per_bag.trim() !== "") {
-          payload.bhada_per_bag = Number(lot.bhada_per_bag);
+        if (lot.bhada_total.trim() !== "") {
+          payload.bhada_total = Number(lot.bhada_total);
         }
+        if (__DEV__) console.log("[lots] OCR save payload", JSON.stringify(payload));
         const savedLot = await api.post<Lot>("/lots", payload);
-        if (savedLot?.patti_id) createdPattiIds.push(savedLot.patti_id);
-        updateLot(lot.key, { saving: false, saved: true, error: null });
+        const pattiId = savedLot?.patti_id || null;
+        if (pattiId) createdPattiIds.push(pattiId);
+        updateLot(lot.key, {
+          saving: false,
+          saved: true,
+          status: "saved",
+          error: null,
+          patti_id: pattiId,
+        });
         ok += 1;
       } catch (e: any) {
-        let msg = e?.detail || e?.message || "Failed";
-        if (typeof msg === "object") {
-          msg = msg?.message || (msg?.code === "duplicate_lot" ? "Duplicate lot" : "Failed");
-        }
-        updateLot(lot.key, { saving: false, saved: false, error: String(msg) });
+        const isDup = typeof e?.detail === "object" && e.detail?.code === "duplicate_lot";
+        const msg = isDup
+          ? "Lot already exists"
+          : apiErrorMessage(e, "Farmer Patti generation failed");
+        updateLot(lot.key, {
+          saving: false,
+          saved: false,
+          status: isDup ? "duplicate" : "error",
+          error: String(msg),
+        });
+        if (isDup) dup += 1;
         fail += 1;
       }
     }
 
-    setSaving(false);
-    setSummary({ ok, fail });
-    if (fail === 0 && ok > 0) {
-      if (mode === "print" && createdPattiIds.length > 0) {
+    // SAVE & PRINT: print every successfully saved patti (including already-saved unprinted).
+    if (mode === "print") {
+      const extraIds = lots
+        .filter((l) => (l.saved || l.status === "saved") && !l.printed && l.patti_id)
+        .map((l) => l.patti_id as string)
+        .filter((id) => !createdPattiIds.includes(id));
+      const toPrint = [...createdPattiIds, ...extraIds];
+      if (toPrint.length > 0) {
         try {
           const [profile, settingsDoc] = await Promise.all([
             api.get<ShopProfile>("/shop/profile").catch(() => null),
             api.get<any>("/settings").catch(() => null),
           ]);
           const paperMm = clampPaperMm(settingsDoc?.thermal_paper_width_mm || 80);
-          for (const pid of createdPattiIds) {
+          for (const pid of toPrint) {
+            setLots((xs) =>
+              xs.map((l) =>
+                l.patti_id === pid ? { ...l, status: "printing" as LotWorkflowStatus } : l,
+              ),
+            );
             try {
               const patti = await api.get<Patti>(`/pattis/${pid}`);
-              await thermalPrintAndMark(patti, profile || { shop_name: "" } as any, paperMm);
+              await thermalPrintAndMark(patti, profile || ({ shop_name: "" } as any), paperMm);
+              setLots((xs) =>
+                xs.map((l) =>
+                  l.patti_id === pid
+                    ? { ...l, status: "printed" as LotWorkflowStatus, printed: true }
+                    : l,
+                ),
+              );
             } catch (e) {
               console.warn("print patti failed", pid, e);
+              setLots((xs) =>
+                xs.map((l) =>
+                  l.patti_id === pid
+                    ? {
+                        ...l,
+                        status: "saved" as LotWorkflowStatus,
+                        error: "Saved but print failed — tap SAVE & PRINT to retry print",
+                      }
+                    : l,
+                ),
+              );
             }
           }
         } catch (e) {
           console.warn("print pipeline failed", e);
         }
       }
+    }
+
+    setSaving(false);
+    setSummary({ ok, fail });
+
+    // fail = duplicates + validation/API errors still open on this screen
+    const stillOpen = fail;
+
+    const parts = [
+      ok ? `${ok} saved` : null,
+      mode === "print" && createdPattiIds.length ? `${createdPattiIds.length} sent to printer` : null,
+      dup ? `${dup} duplicate kept on screen` : null,
+      fail - dup > 0 ? `${fail - dup} failed` : null,
+    ].filter(Boolean);
+
+    if (ok > 0 || fail > 0) {
       Alert.alert(
-        "Saved",
-        `${ok} lot${ok === 1 ? "" : "s"} saved — one Farmer Patti per lot. Vendor purchase data is ready for Vendor Bills.`,
-        [{ text: "OK", onPress: () => { clearOcrSession(); router.replace("/action-diary"); } }],
+        ok > 0 ? (fail > 0 ? "Partial success" : "Saved") : "Nothing saved",
+        parts.join(" · ") +
+          (stillOpen > 0
+            ? "\n\nEdit or remove remaining lots, then SAVE / SAVE & PRINT again."
+            : ""),
       );
+    }
+
+    // Leave review open while duplicates/errors remain.
+    if (stillOpen === 0 && ok > 0) {
+      clearOcrSession();
+      router.replace("/action-diary");
+    }
+  };
+
+  const statusLabel = (lot: LotDraft): { text: string; style: "ok" | "pending" | "warn" | "err" } | null => {
+    switch (lot.status) {
+      case "saving":
+        return { text: "SAVING…", style: "pending" };
+      case "saved":
+        return { text: "✓ SAVED", style: "ok" };
+      case "printing":
+        return { text: "PRINTING…", style: "pending" };
+      case "printed":
+        return { text: "✓ PRINTED", style: "ok" };
+      case "duplicate":
+        return { text: "⚠ DUPLICATE", style: "warn" };
+      case "error":
+        return { text: "ERROR", style: "err" };
+      default:
+        if (lot.saving) return { text: "SAVING…", style: "pending" };
+        if (lot.printed) return { text: "✓ PRINTED", style: "ok" };
+        if (lot.saved) return { text: "✓ SAVED", style: "ok" };
+        return null;
     }
   };
 
@@ -415,18 +552,52 @@ export default function OcrPreview() {
         ) : null}
         {lots.map((lot, li) => {
           const st = auctionStatus(lot);
+          const badge = statusLabel(lot);
+          const isDup = lot.status === "duplicate";
+          const isDone = lot.saved || lot.status === "saved" || lot.status === "printed" || lot.status === "printing";
           return (
-            <View key={lot.key} style={[styles.lotCard, lot.saved && styles.lotSaved, !!lot.error && styles.lotErr]} testID={`ocr-lot-card-${li}`}>
+            <View
+              key={lot.key}
+              style={[
+                styles.lotCard,
+                isDone && styles.lotSaved,
+                (isDup || lot.status === "error" || !!lot.error) && styles.lotErr,
+                isDup && styles.lotDup,
+              ]}
+              testID={`ocr-lot-card-${li}`}
+            >
               <View style={styles.lotHead}>
                 <Text style={styles.lotHeadText}>LOT {lot.lot_serial_no || li + 1}</Text>
-                {lot.saving ? <Text style={styles.statusPending}>SAVING…</Text> : null}
-                {lot.saved ? <Text style={styles.statusOk}>✓ SAVED</Text> : null}
-                {!lot.saved && !lot.saving ? (
+                {badge ? (
+                  <Text
+                    style={
+                      badge.style === "ok"
+                        ? styles.statusOk
+                        : badge.style === "warn"
+                          ? styles.statusWarn
+                          : badge.style === "err"
+                            ? styles.statusErr
+                            : styles.statusPending
+                    }
+                  >
+                    {badge.text}
+                  </Text>
+                ) : null}
+                {!isDone ? (
                   <Pressable onPress={() => removeLot(lot.key)} hitSlop={10} testID={`ocr-lot-remove-${li}`}>
                     <Ionicons name="close-circle-outline" size={18} color={colors.error} />
                   </Pressable>
                 ) : null}
               </View>
+
+              {isDup ? (
+                <View style={styles.dupBanner} testID={`ocr-lot-dup-banner-${li}`}>
+                  <Ionicons name="warning" size={16} color="#92400E" />
+                  <Text style={styles.dupBannerText}>
+                    Lot {lot.lot_serial_no || "?"} — Lot already exists
+                  </Text>
+                </View>
+              ) : null}
 
               <View style={{ flexDirection: "row", gap: spacing.sm }}>
                 <View style={{ flex: 1 }}>
@@ -449,9 +620,9 @@ export default function OcrPreview() {
                 </View>
                 <View style={{ flex: 1 }}>
                   <Input
-                    label="BHADA / BAG ₹"
-                    value={lot.bhada_per_bag}
-                    onChangeText={(v) => updateLot(lot.key, { bhada_per_bag: v.replace(/[^0-9.]/g, "") })}
+                    label="LOT BHADA ₹"
+                    value={lot.bhada_total}
+                    onChangeText={(v) => updateLot(lot.key, { bhada_total: v.replace(/[^0-9.]/g, "") })}
                     keyboardType="decimal-pad"
                     testID={`ocr-bhada-${li}`}
                   />
@@ -547,7 +718,20 @@ export default function OcrPreview() {
                 <Text style={styles.statusMsg}>{st.message}</Text>
                 <Text style={styles.statusMeta}>{st.sold} / {st.total} bags</Text>
               </View>
-              {lot.error ? <Text style={styles.lotError}>{lot.error}</Text> : null}
+              {lot.error && !isDup ? <Text style={styles.lotError}>{lot.error}</Text> : null}
+
+              {isDup || lot.status === "error" ? (
+                <View style={styles.dupActions}>
+                  <Pressable
+                    style={styles.dupRemoveBtn}
+                    onPress={() => removeLot(lot.key)}
+                    testID={`ocr-lot-close-dup-${li}`}
+                  >
+                    <Text style={styles.dupRemoveBtnText}>CLOSE / REMOVE DUPLICATE</Text>
+                  </Pressable>
+                  <Text style={styles.dupHint}>Edit Lot No. above, then tap SAVE or SAVE & PRINT</Text>
+                </View>
+              ) : null}
             </View>
           );
         })}
@@ -567,7 +751,9 @@ export default function OcrPreview() {
       <KeyboardStickyView>
         <View style={styles.footer}>
           {summary ? (
-            <Text style={styles.sumLine}>{summary.ok} saved · {summary.fail} failed · edit failed lots and retry.</Text>
+            <Text style={styles.sumLine}>
+              {summary.ok} saved · {summary.fail} not saved · edit or remove remaining, then retry.
+            </Text>
           ) : null}
           {error ? <Text style={styles.err}>{error}</Text> : null}
           <View style={{ flexDirection: "row", gap: spacing.sm }}>
@@ -593,44 +779,22 @@ export default function OcrPreview() {
         </View>
       </KeyboardStickyView>
 
-      <Modal visible={!!pickerFor} transparent animationType="slide" onRequestClose={() => setPickerFor(null)}>
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>
-                LINK {pickerFor?.kind === "farmer" ? "FARMER" : "VENDOR"}
-              </Text>
-              <Pressable onPress={() => setPickerFor(null)} hitSlop={10} testID="ocr-picker-close">
-                <Ionicons name="close" size={22} color={colors.onSurface} />
-              </Pressable>
-            </View>
-            <TextInput
-              style={styles.modalSearch}
-              value={pickerQuery}
-              onChangeText={setPickerQuery}
-              placeholder="Search…"
-              placeholderTextColor={colors.muted}
-              autoFocus
-              testID="ocr-picker-search"
-            />
-            <FlatList
-              data={pickerList}
-              keyExtractor={(x) => x.id}
-              contentContainerStyle={{ paddingBottom: 40 }}
-              renderItem={({ item }) => (
-                <Pressable style={styles.pickerItem} onPress={() => pickMaster(item.id, item.name)} testID={`ocr-picker-item-${item.id}`}>
-                  <Text style={styles.pickerItemText}>{item.name}</Text>
-                </Pressable>
-              )}
-              ListEmptyComponent={() => (
-                <View style={styles.pickerEmpty}>
-                  <Text style={styles.pickerEmptyText}>No matches. Name will be saved as a new master record.</Text>
-                </View>
-              )}
-            />
-          </View>
-        </View>
-      </Modal>
+      <PartyPicker
+        visible={!!pickerFor}
+        kind={pickerFor?.kind === "vendor" ? "vendor" : "farmer"}
+        items={pickerFor?.kind === "vendor" ? vendors : farmers}
+        initialQuery={pickerQuery}
+        onClose={() => { setPickerFor(null); setPickerQuery(""); }}
+        onSelect={(item) => pickMaster(item.id, item.name)}
+        onCreated={(item) => {
+          if (pickerFor?.kind === "vendor") {
+            setVendors((xs) => [...xs, item as Vendor]);
+          } else {
+            setFarmers((xs) => [...xs, item as Farmer]);
+          }
+          pickMaster(item.id, item.name);
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -674,10 +838,24 @@ const styles = StyleSheet.create({
   },
   lotSaved: { borderColor: "#059669", backgroundColor: "#ECFDF5" },
   lotErr: { borderColor: colors.error },
+  lotDup: { borderColor: "#D97706", backgroundColor: "#FFFBEB" },
   lotHead: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: spacing.sm },
   lotHeadText: { flex: 1, fontFamily: font.display, fontWeight: "900", letterSpacing: 1, fontSize: 13, color: colors.onSurface },
   statusPending: { fontSize: 11, color: colors.muted, fontFamily: font.display, fontWeight: "800" },
   statusOk: { fontSize: 11, color: "#065F46", fontFamily: font.display, fontWeight: "800" },
+  statusWarn: { fontSize: 11, color: "#92400E", fontFamily: font.display, fontWeight: "800" },
+  statusErr: { fontSize: 11, color: colors.error, fontFamily: font.display, fontWeight: "800" },
+  dupBanner: {
+    flexDirection: "row", alignItems: "center", gap: 8, marginBottom: spacing.sm,
+    backgroundColor: "#FEF3C7", borderWidth: 2, borderColor: "#F59E0B", padding: spacing.sm,
+  },
+  dupBannerText: { flex: 1, color: "#78350F", fontFamily: font.display, fontSize: 13, fontWeight: "800" },
+  dupActions: { marginTop: spacing.sm, gap: 6 },
+  dupRemoveBtn: {
+    borderWidth: 2, borderColor: colors.error, paddingVertical: 10, alignItems: "center", backgroundColor: "#FEE2E2",
+  },
+  dupRemoveBtnText: { fontFamily: font.display, fontWeight: "900", letterSpacing: 0.5, fontSize: 11, color: colors.error },
+  dupHint: { fontSize: 11, color: colors.muted, fontFamily: font.display, fontWeight: "600" },
 
   section: {
     marginTop: spacing.sm, marginBottom: 6,

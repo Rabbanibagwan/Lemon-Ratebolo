@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import {
-  FlatList, KeyboardAvoidingView, Modal, Platform, Pressable,
+  FlatList, Modal, Pressable,
   RefreshControl, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -8,6 +8,7 @@ import { useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import { api, Farmer, Vendor } from "@/src/api";
+import { KeyboardFormAvoid } from "@/src/components/KeyboardForm";
 import { Button, Empty, Input } from "@/src/components/ui";
 import { colors, font, spacing } from "@/src/theme";
 
@@ -194,10 +195,7 @@ export default function Directory() {
       </Pressable>
 
       <Modal visible={!!modal} transparent animationType="fade" onRequestClose={close}>
-        <KeyboardAvoidingView
-          style={styles.modalRoot}
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
-        >
+        <KeyboardFormAvoid style={styles.modalRoot}>
           <Pressable style={styles.backdrop} onPress={close} />
           <View style={styles.modalCard} testID="directory-modal">
             <View style={styles.modalHeader}>
@@ -254,7 +252,7 @@ export default function Directory() {
               <Button label={modal?.editing ? "SAVE" : "ADD"} onPress={save} loading={saving} testID="modal-save" style={{ flex: 2 }} />
             </View>
           </View>
-        </KeyboardAvoidingView>
+        </KeyboardFormAvoid>
       </Modal>
     </SafeAreaView>
   );

@@ -4,9 +4,10 @@ import * as Sharing from "expo-sharing";
 import { Alert, Platform, Share } from "react-native";
 
 import { ShopProfile, VendorBill } from "@/src/api";
+import { printThermalDocument } from "@/src/utils/thermal-connection";
+import { encodeVendorBillEscPos } from "@/src/utils/thermal-escpos-docs";
+import { resolvePrintPaperMm } from "@/src/utils/printer-prefs";
 import {
-  clampPaperMm,
-  printThermalHtmlOnly,
   thermalBaseCss,
   thermalMetrics,
 } from "@/src/utils/thermal-print";
@@ -132,7 +133,7 @@ export function renderThermalVendorBillHtml(b: VendorBill, profile: ShopProfile,
     </div>`).join("");
   return `
   <!doctype html><html><head><meta charset="utf-8"/>
-  <meta name="viewport" content="width=${m.w}, initial-scale=1"/>
+  <meta name="viewport" content="width=${m.widthPx}, initial-scale=1, maximum-scale=1"/>
   <title>${escapeHtml(b.bill_code)}</title>
   <style>${thermalBaseCss(m)}</style></head><body>
   <div id="slip">
@@ -166,11 +167,15 @@ export function renderThermalVendorBillHtml(b: VendorBill, profile: ShopProfile,
 export async function thermalPrintVendorBill(
   b: VendorBill,
   profile: ShopProfile,
-  paperMm: number = 80,
+  paperMm?: number,
 ): Promise<void> {
-  const mm = clampPaperMm(paperMm);
+  const mm = await resolvePrintPaperMm(paperMm);
   const html = renderThermalVendorBillHtml(b, profile, mm);
-  await printThermalHtmlOnly(html, mm);
+  await printThermalDocument({
+    html,
+    escposBase64: encodeVendorBillEscPos(b, profile, mm),
+    paperMm: mm,
+  });
 }
 
 export async function shareVendorBillPdf(

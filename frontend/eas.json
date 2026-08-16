@@ -10,12 +10,16 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://pie-appointed-soc-replace.trycloudflare.com"
+        "EXPO_PUBLIC_BACKEND_URL": "https://lemon-ratebolo.onrender.com"
       }
     },
     "production": {
+      "distribution": "internal",
       "android": {
-        "buildType": "app-bundle"
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_BACKEND_URL": "https://lemon-ratebolo.onrender.com"
       }
     }
   },

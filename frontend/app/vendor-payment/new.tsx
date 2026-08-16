@@ -9,20 +9,21 @@ import { Ionicons } from "@expo/vector-icons";
 
 import { api, Vendor, VendorBill } from "@/src/api";
 import { Button, Input } from "@/src/components/ui";
+import { useWorkingDate } from "@/src/context/WorkingDateContext";
 import { colors, font, money, spacing } from "@/src/theme";
 
-const today = () => new Date().toISOString().slice(0, 10);
 const MODES = ["cash", "upi", "bank", "cheque"] as const;
 type Mode = typeof MODES[number];
 
 export default function NewVendorPayment() {
   const { vendor_id } = useLocalSearchParams<{ vendor_id: string }>();
   const router = useRouter();
+  const { workingDateISO } = useWorkingDate();
 
   const [vendor, setVendor] = useState<Vendor | null>(null);
   const [openBills, setOpenBills] = useState<VendorBill[]>([]);
   const [amount, setAmount] = useState("");
-  const [date, setDate] = useState(today());
+  const [date, setDate] = useState(workingDateISO);
   const [mode, setMode] = useState<Mode>("cash");
   const [remarks, setRemarks] = useState("");
   const [alloc, setAlloc] = useState<Record<string, string>>({}); // bill_id -> "amount"
@@ -45,6 +46,7 @@ export default function NewVendorPayment() {
   }, [vendor_id]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { setDate(workingDateISO); }, [workingDateISO]);
 
   const amountN = Number(amount) || 0;
   const allocN = useMemo(() => Object.values(alloc).reduce((s, v) => s + (Number(v) || 0), 0), [alloc]);
