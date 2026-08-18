@@ -192,7 +192,8 @@ export default function Reports() {
         (r.farmer_name || "").toLowerCase().includes(s) ||
         (r.driver_name || "").toLowerCase().includes(s) ||
         (r.action || "").toLowerCase().includes(s) ||
-        (r.by || "").toLowerCase().includes(s)
+        (r.by || "").toLowerCase().includes(s) ||
+        (r.remark || "").toLowerCase().includes(s)
       );
     });
   }, [auditRows, search]);
@@ -215,10 +216,10 @@ export default function Reports() {
     if (!isOwner) return;
     void runExport(async () => {
       if (action === "print") {
-        await thermalPrintDriverReport(d, workingDateISO, merchant, settings);
+        await thermalPrintDriverReport(d, workingDateISO, merchant, settings, auctionDrivers);
         notify("Printed", "Driver report sent to the thermal printer.");
       } else {
-        const result = await shareDriverThermalReport(d, workingDateISO, merchant, settings);
+        const result = await shareDriverThermalReport(d, workingDateISO, merchant, settings, auctionDrivers);
         if (result === "shared") notify("Shared", "Driver report PDF opened in the share sheet.");
         else if (result === "downloaded") {
           notify("Downloaded", "Driver report PDF downloaded (same layout as Print).");
@@ -594,43 +595,47 @@ function AuditLogView({
         ListHeaderComponent={
           rows.length ? (
             <View style={styles.thRow}>
-              <Text style={[styles.th, { flex: 0.55 }]}>PATTI</Text>
-              <Text style={[styles.th, { flex: 0.7 }]}>LOT</Text>
-              <Text style={[styles.th, { flex: 0.45, textAlign: "right" }]}>BAGS</Text>
-              <Text style={[styles.th, { flex: 1.1 }]}>FARMER</Text>
-              <Text style={[styles.th, { flex: 0.9 }]}>DRIVER</Text>
-              <Text style={[styles.th, { flex: 0.85 }]}>ACTION</Text>
-              <Text style={[styles.th, { flex: 1.1 }]}>DATE/TIME</Text>
+              <Text style={[styles.th, { flex: 0.5 }]}>PATTI</Text>
+              <Text style={[styles.th, { flex: 0.65 }]}>LOT</Text>
+              <Text style={[styles.th, { flex: 0.4, textAlign: "right" }]}>BAGS</Text>
+              <Text style={[styles.th, { flex: 0.95 }]}>FARMER</Text>
+              <Text style={[styles.th, { flex: 0.8 }]}>ACTION</Text>
+              <Text style={[styles.th, { flex: 1.05 }]}>REMARK</Text>
+              <Text style={[styles.th, { flex: 0.75 }]}>USER</Text>
+              <Text style={[styles.th, { flex: 1.05 }]}>DATE/TIME</Text>
             </View>
           ) : null
         }
         renderItem={({ item }) => (
           <View style={styles.row} testID={`audit-row-${item.id}`}>
-            <Text style={[styles.mono, styles.strong, { flex: 0.55 }]} numberOfLines={1}>
+            <Text style={[styles.mono, styles.strong, { flex: 0.5 }]} numberOfLines={1}>
               #{item.patti_no}
             </Text>
-            <Text style={[styles.mono, { flex: 0.7 }]} numberOfLines={1}>
+            <Text style={[styles.mono, { flex: 0.65 }]} numberOfLines={1}>
               {item.lot_no || "—"}
             </Text>
-            <Text style={[styles.mono, { flex: 0.45, textAlign: "right" }]}>{item.bags}</Text>
-            <Text style={[styles.cellDim, { flex: 1.1 }]} numberOfLines={1}>
+            <Text style={[styles.mono, { flex: 0.4, textAlign: "right" }]}>{item.bags}</Text>
+            <Text style={[styles.cellDim, { flex: 0.95 }]} numberOfLines={1}>
               {item.farmer_name || "—"}
-            </Text>
-            <Text style={[styles.cellDim, { flex: 0.9 }]} numberOfLines={1}>
-              {item.driver_name || "—"}
             </Text>
             <Text
               style={[
                 styles.mono,
                 styles.strong,
-                { flex: 0.85 },
+                { flex: 0.8 },
                 item.action === "DELETED" ? { color: colors.error } : null,
               ]}
               numberOfLines={1}
             >
               {item.action}
             </Text>
-            <Text style={[styles.cellDim, { flex: 1.1 }]} numberOfLines={2}>
+            <Text style={[styles.cellDim, { flex: 1.05 }]} numberOfLines={2}>
+              {item.remark || "—"}
+            </Text>
+            <Text style={[styles.cellDim, { flex: 0.75 }]} numberOfLines={1}>
+              {item.by || "—"}
+            </Text>
+            <Text style={[styles.cellDim, { flex: 1.05 }]} numberOfLines={2}>
               {formatAuditWhen(item.at)}
             </Text>
           </View>

@@ -7,7 +7,7 @@ import type { DriverRange, Patti, PattiAuditLogEntry, Settings, VendorBill } fro
 import { EscPosBuilder, rupees } from "@/src/utils/escpos";
 import { printThermalDocument } from "@/src/utils/thermal-connection";
 import { resolvePrintPaperMm } from "@/src/utils/printer-prefs";
-import { thermalBaseCss, thermalMetrics } from "@/src/utils/thermal-print";
+import { thermalBaseCss, thermalMetrics, injectThermalPageSize, estimateThermalHeightMm, clampPaperMm } from "@/src/utils/thermal-print";
 import { buildXlsxBytes, bytesToBase64 } from "@/src/utils/simple-xlsx";
 
 /** Auction-day driver ranges used for Entry Book "driver receiving". */
@@ -358,21 +358,22 @@ export function renderDriverThermalHtml(
   dateISO: string,
   shopName: string,
   paperMm: number = 80,
+  drivers?: DriverRangeRef[],
 ): string {
   const m = thermalMetrics(paperMm);
-  const totals = driverDetailTotals(d.pattis);
+  const totals = driverDetailTotals(d.pattis, drivers);
   const rows = d.pattis
     .map((p) => {
-      const recv = isPattiReceived(p);
+      const recv = isPattiReceived(p, drivers);
       const strike = recv ? "strike" : "";
-      return `<tr>
+      return `<tr class="row">
         <td>${p.patti_no}</td>
         <td class="wrap">${escHtml(lotLabel(p))}</td>
         <td class="wrap">${escHtml(p.farmer_name || "—")}</td>
         <td class="r">${p.total_bags}</td>
         <td class="r">${fmtMoney(p.bhada_total)}</td>
         <td class="r ${strike}">${fmtMoney(p.net_payable)}</td>
-        <td class="wrap">${escHtml(receiverDisplay(p))}</td>
+        <td class="wrap">${escHtml(receiverDisplay(p, drivers))}</td>
       </tr>`;
     })
     .join("");
@@ -407,7 +408,7 @@ export function renderDriverThermalHtml(
         <col class="c5"/><col class="c6"/><col class="c7"/>
       </colgroup>
       <thead>
-        <tr>
+        <tr class="row">
           <th>PT</th><th>LOT</th><th>FARMER</th><th class="r">BG</th>
           <th class="r">BHADA</th><th class="r">PAY</th><th>RECV</th>
         </tr>
@@ -430,12 +431,13 @@ export async function thermalPrintDriverReport(
   dateISO: string,
   shopName: string,
   settings?: Settings | null,
+  drivers?: DriverRangeRef[],
 ): Promise<void> {
   const mm = await resolvePrintPaperMm(settings?.thermal_paper_width_mm);
-  const html = renderDriverThermalHtml(d, dateISO, shopName, mm);
+  const html = renderDriverThermalHtml(d, dateISO, shopName, mm, drivers);
   await printThermalDocument({
     html,
-    escposBase64: encodeDriverReportEscPos(d, dateISO, shopName, mm),
+    escposBase64: encodeDriverReportEscPos(d, dateISO, shopName, mm, drivers),
     paperMm: mm,
   });
 }
@@ -449,9 +451,10 @@ export async function shareDriverThermalReport(
   dateISO: string,
   shopName: string,
   settings?: Settings | null,
+  drivers?: DriverRangeRef[],
 ): Promise<"shared" | "downloaded" | "printed"> {
   const mm = await resolvePrintPaperMm(settings?.thermal_paper_width_mm);
-  const html = renderDriverThermalHtml(d, dateISO, shopName, mm);
+  const html = renderDriverThermalHtml(d, dateISO, shopName, mm, drivers);
   const safeName = `driver-${(d.driver_name || "report").replace(/[^\w.\-]+/g, "_")}-${dateISO}.pdf`;
   const title = `Driver ${d.driver_name}`;
 
@@ -462,7 +465,14 @@ export async function shareDriverThermalReport(
     return exportPdfBytes(bytes, safeName, title, "share");
   }
 
-  const { uri } = await Print.printToFileAsync({ html });
+  const w = clampPaperMm(mm);
+  const heightMm = estimateThermalHeightMm(html, w);
+  const htmlPaged = injectThermalPageSize(html, w, heightMm);
+  const { uri } = await Print.printToFileAsync({
+    html: htmlPaged,
+    width: Math.round(w * 2.834645),
+    height: Math.round(heightMm * 2.834645),
+  });
   if (!uri) throw new Error("Could not generate Driver PDF");
   return shareOrDownloadFile({
     uri,
@@ -479,9 +489,10 @@ export function encodeDriverReportEscPos(
   dateISO: string,
   shopName: string,
   paperMm: number,
+  drivers?: DriverRangeRef[],
 ): string {
   const b = new EscPosBuilder(paperMm);
-  const totals = driverDetailTotals(d.pattis);
+  const totals = driverDetailTotals(d.pattis, drivers);
   b.init()
     .align("center")
     .bold(true)
@@ -499,14 +510,14 @@ export function encodeDriverReportEscPos(
     .hr()
     .line("PT LOT FARMER BG BHADA PAY RECV");
   for (const p of d.pattis) {
-    const recv = isPattiReceived(p);
+    const recv = isPattiReceived(p, drivers);
     const pay = rupees(p.net_payable);
     b.wrapped(`#${p.patti_no} ${lotLabel(p)} ${p.farmer_name || "—"}`);
     b.kv(
       `${p.total_bags}b  ${rupees(p.bhada_total)}${recv ? " *" : ""}`,
       recv ? `(${pay})` : pay,
     );
-    b.line(`  Recv: ${receiverDisplay(p)}`);
+    b.line(`  Recv: ${receiverDisplay(p, drivers)}`);
   }
   b.hr()
     .kv("Total Bags", String(totals.total_bags))
@@ -683,7 +694,7 @@ export function auditReportAoa(
     [shopName.toUpperCase(), "AUDIT LOG"],
     ["Date", dateISO],
     [],
-    ["Patti No.", "Lot No.", "Bags", "Farmer Name", "Driver Name", "Action", "Date/Time", "By"],
+    ["Patti No.", "Lot No.", "Bags", "Farmer", "Action", "Remark", "User", "Date/Time"],
   ];
   for (const r of entries) {
     rows.push([
@@ -691,10 +702,10 @@ export function auditReportAoa(
       r.lot_no || "-",
       r.bags,
       r.farmer_name || "",
-      r.driver_name || "-",
       r.action || "",
-      auditWhenLabel(r.at),
+      r.remark || "",
       r.by || "",
+      auditWhenLabel(r.at),
     ]);
   }
   return rows;

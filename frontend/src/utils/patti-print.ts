@@ -172,18 +172,19 @@ export function renderThermalPattiHtml(p: Patti, profile: ShopProfile, qrUri: st
     <div class="hr"></div>
     <div class="kv farmer"><span class="k">FARMER</span><span class="bold v wrap">${escapeHtml(p.farmer_name)}</span></div>
     <div class="kv"><span class="k">DATE</span><span>${date}</span></div>
-    ${p.driver_name ? `<div class="kv"><span class="k">Driver</span><span class="wrap">${escapeHtml(p.driver_name)}</span></div>` : ""}
+    ${p.driver_name ? `<div class="kv"><span class="k">DRIVER</span><span class="wrap">${escapeHtml(p.driver_name)}${p.driver_place ? " · " + escapeHtml(p.driver_place) : ""}</span></div>` : ""}
     <div class="hr"></div>
     <div class="row th"><span class="lot">LOT</span><span class="mid">BAGS × RATE</span><span class="right">AMOUNT</span></div>
     ${lines}
     <div class="hr"></div>
-    <div class="kv"><span>Gross</span><span>${fmt(p.farmer_gross)}</span></div>
+    <div class="kv"><span>Gross total</span><span>${fmt(p.farmer_gross)}</span></div>
     <div class="kv"><span>Hamali</span><span>- ${fmt(p.hamali_total)}</span></div>
     <div class="kv"><span>Bhada</span><span>- ${fmt(p.bhada_total)}</span></div>
     <div class="kv"><span>Stationery</span><span>- ${fmt(p.stationery_total)}</span></div>
-    <div class="kv bold"><span>Deduction</span><span>- ${fmt(p.deductions_total)}</span></div>
+    <div class="kv bold"><span>Total deduction</span><span>- ${fmt(p.deductions_total)}</span></div>
     <div class="netbox"><span class="bold">NET PAYABLE</span><span class="huge">${fmt(p.net_payable)}</span></div>
-    ${p.receiver_name ? `<div class="kv"><span class="k">Receiver</span><span class="bold wrap">${escapeHtml(p.receiver_name)}</span></div>` : ""}
+    <div class="kv"><span class="k">RECEIVER</span><span class="bold wrap">${escapeHtml(p.receiver_name || "—")}</span></div>
+    <div class="kv"><span class="k">STATUS</span><span class="bold">${p.status === "received" ? "RECEIVED" : "PENDING"}</span></div>
     <img class="qr" src="${qrUri}" alt="QR"/>
     <div class="center">Scan at counter</div>
   </div>

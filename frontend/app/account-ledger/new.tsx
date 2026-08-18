@@ -5,14 +5,17 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
-import { api, apiErrorMessage, Farmer, LedgerAccountType, LedgerTxnType, Vendor } from "@/src/api";
+import { api, Farmer, LedgerAccountType, LedgerTxnType, Vendor, apiErrorMessage } from "@/src/api";
+import { routeParam } from "@/src/utils/route-params";
 import { Button, Input } from "@/src/components/ui";
 import { PartyPicker } from "@/src/components/PartyPicker";
 import { colors, font, spacing } from "@/src/theme";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
 
 export default function NewLedgerTxn() {
-  const { kind, party_id } = useLocalSearchParams<{ kind?: string; party_id?: string }>();
+  const params = useLocalSearchParams<{ kind?: string; party_id?: string }>();
+  const kind = routeParam(params.kind);
+  const party_id = routeParam(params.party_id) || undefined;
   const router = useRouter();
   const { workingDateISO, displayDate } = useWorkingDate();
   const accountType: LedgerAccountType = (kind || "").toUpperCase() === "VENDOR" ? "VENDOR" : "FARMER";

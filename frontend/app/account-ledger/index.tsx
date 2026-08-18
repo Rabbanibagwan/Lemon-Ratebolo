@@ -27,8 +27,9 @@ export default function AccountLedgerHome() {
         `/account-ledger/parties?account_type=${tab}&date=${workingDateISO}${qs}`,
       );
       setRows(data);
-    } catch {
+    } catch (e) {
       setRows([]);
+      console.warn("Ledger parties failed", e);
     } finally {
       setLoading(false);
     }

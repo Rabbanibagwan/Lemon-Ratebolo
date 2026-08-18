@@ -238,9 +238,14 @@ export default function EditPatti() {
 
   const softDelete = async () => {
     if (!patti || !isOwner) return;
+    const reason = deleteReason.trim();
+    if (!reason) {
+      Alert.alert("Remark required", "Enter a delete remark before confirming.");
+      return;
+    }
     try {
       setDeleting(true);
-      await api.del(`/pattis/${patti.id}`, { reason: deleteReason.trim() || null });
+      await api.del(`/pattis/${patti.id}`, { reason });
       setShowDelete(false);
       Alert.alert("Deleted", `Patti #${patti.patti_no} deleted.`);
       router.back();
@@ -551,7 +556,7 @@ export default function EditPatti() {
                 Soft-delete Patti #{patti.patti_no} for {farmerName}. You can restore it later from reports if needed.
               </Text>
               <Input
-                label="Reason (optional)"
+                label="Delete remark (required)"
                 value={deleteReason}
                 onChangeText={setDeleteReason}
                 placeholder="e.g. Wrong farmer"
@@ -562,6 +567,7 @@ export default function EditPatti() {
                 variant="danger"
                 onPress={softDelete}
                 loading={deleting}
+                disabled={!deleteReason.trim()}
                 testID="edit-delete-confirm"
               />
             </View>
