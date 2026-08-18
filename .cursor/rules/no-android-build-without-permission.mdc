@@ -1,0 +1,19 @@
+---
+description: Never create Android/EAS builds unless the user explicitly approves
+alwaysApply: true
+---
+
+# No Android build without permission
+
+After code changes: run/check locally, open the development preview, then STOP.
+
+Do **not** create an Android build, run EAS Build, generate APK/AAB, publish, submit, or trigger any production/development build automatically.
+
+Forbidden unless the user explicitly says **"CREATE ANDROID BUILD"** or **"I APPROVE THE BUILD"**:
+- `eas build`
+- `eas submit`
+- `npx eas-cli build`
+- `gradlew assemble*` / `bundle*`
+- any APK/AAB generation
+
+Workflow: request → code changes → local preview → user tests and gives feedback → corrections if needed → stop.

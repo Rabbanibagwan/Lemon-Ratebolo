@@ -13,7 +13,7 @@ type AuthState = {
 const Ctx = createContext<AuthState | null>(null);
 
 type TokenRes = {
-  access_token: string; shop_id: string; shop_name: string; username: string;
+  access_token: string; id?: string; shop_id: string; shop_name: string; username: string;
   role: "owner" | "counter"; display_name: string;
 };
 
@@ -43,12 +43,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const persist = async (t: TokenRes) => {
     await storage.secureSet(AUTH_TOKEN_KEY, t.access_token);
+    // Prefer server user id (staff id for counter). Fall back to shop_id for older tokens.
     const s: Session = {
-      id: t.shop_id, shop_id: t.shop_id, shop_name: t.shop_name,
+      id: t.id || t.shop_id, shop_id: t.shop_id, shop_name: t.shop_name,
       username: t.username, role: t.role, display_name: t.display_name,
     };
-    await storage.setItem(AUTH_SHOP_KEY, JSON.stringify(s));
     setSession(s);
+    try {
+      const fresh = await api.get<Session>("/auth/me");
+      setSession(fresh);
+      await storage.setItem(AUTH_SHOP_KEY, JSON.stringify(fresh));
+    } catch {
+      await storage.setItem(AUTH_SHOP_KEY, JSON.stringify(s));
+    }
   };
 
   const login = useCallback(async (username: string, password: string) => {

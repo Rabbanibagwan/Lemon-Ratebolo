@@ -52,7 +52,6 @@ export default function TabLayout() {
         options={{
           title: "Auction",
           tabBarIcon: ({ color, size }) => <Ionicons name="book-outline" color={color} size={size} />,
-          href: isOwner ? undefined : null,
         }}
       />
       <Tabs.Screen
@@ -75,7 +74,6 @@ export default function TabLayout() {
         options={{
           title: "Reports",
           tabBarIcon: ({ color, size }) => <Ionicons name="stats-chart-outline" color={color} size={size} />,
-          href: isOwner ? undefined : null,
         }}
       />
       <Tabs.Screen

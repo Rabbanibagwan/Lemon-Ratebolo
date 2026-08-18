@@ -248,14 +248,78 @@ export type Patti = {
   receiver_name: string; receiver_updated_at: string | null; receiver_updated_by: string | null;
   status: "pending" | "received"; created_at: string;
   printed?: boolean; printed_at?: string | null; print_count?: number;
+  /** Staff user ids who have already printed this Patti (one print each). */
+  staff_print_user_ids?: string[];
+  created_by_user_id?: string | null;
+  created_by_role?: string | null;
 };
 
 export type Dashboard = {
   today_pattis: number; today_bags: number; today_farmer_payout: number; today_gross: number;
   today_lots: number; today_pending: number; total_farmers: number; total_vendors: number;
 };
+
+/** Merchant prepaid bag wallet (owner-only). Staff never uses this. */
+export type BagWallet = {
+  shop_id: string;
+  free_allocated: number;
+  free_used: number;
+  free_remaining: number;
+  purchased_bags: number;
+  purchased_used: number;
+  purchased_remaining: number;
+  total_available: number;
+  price_per_bag: number;
+  low_balance: boolean;
+};
+
+export type BagPurchase = {
+  id: string;
+  bags: number;
+  price_per_bag: number;
+  base_amount: number;
+  gst_percent: number;
+  gst_amount: number;
+  total_amount: number;
+  status: "PENDING" | "PAID" | string;
+  created_at: string;
+  paid_at?: string | null;
+};
+
+export type BagUsageRow = {
+  id: string;
+  shop_id: string;
+  patti_id: string;
+  lot_id?: string | null;
+  bags: number;
+  free_bags: number;
+  purchased_bags: number;
+  price_applied: number;
+  kind: string;
+  status: string;
+  at: string;
+  note?: string | null;
+};
 export type ReportRow = { key: string; label: string; pattis: number; bags: number; gross: number; net: number };
 export type LotReportRow = { lot_no: string; bags: number; gross: number; farmer_name: string; driver_name: string | null; date: string; patti_no: number | null };
+
+/** Permanent Farmer Patti audit (DELETED / REPRINTED). Merchant/Admin only. */
+export type PattiAuditLogEntry = {
+  id: string;
+  at: string;
+  action_date: string;
+  by: string;
+  by_user_id?: string | null;
+  role: string;
+  action: "DELETED" | "REPRINTED" | string;
+  patti_id: string;
+  patti_no: number;
+  lot_no: string;
+  bags: number;
+  farmer_name: string;
+  driver_name: string | null;
+  patti: Record<string, unknown>;
+};
 
 
 // ---------- Vendor Billing ----------

@@ -3,21 +3,60 @@ import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import * as FileSystem from "expo-file-system/legacy";
 
-import type { Patti, Settings, VendorBill } from "@/src/api";
+import type { DriverRange, Patti, PattiAuditLogEntry, Settings, VendorBill } from "@/src/api";
 import { EscPosBuilder, rupees } from "@/src/utils/escpos";
 import { printThermalDocument } from "@/src/utils/thermal-connection";
 import { resolvePrintPaperMm } from "@/src/utils/printer-prefs";
 import { thermalBaseCss, thermalMetrics } from "@/src/utils/thermal-print";
 import { buildXlsxBytes, bytesToBase64 } from "@/src/utils/simple-xlsx";
 
-export function isPattiReceived(p: Patti): boolean {
-  return p.status === "received";
+/** Auction-day driver ranges used for Entry Book "driver receiving". */
+export type DriverRangeRef = Pick<DriverRange, "range_from" | "range_to" | "name">;
+
+/** Primary lot Sri / serial for a Patti (1 Patti = 1 Lot). */
+export function pattiLotSerial(p: Patti): number | null {
+  const lots = p.lots || [];
+  if (!lots.length) return null;
+  const n = Number(lots[0].lot_serial_no);
+  if (Number.isFinite(n)) return n;
+  const m = String(lots[0].lot_no || "").match(/^(\d+)/);
+  return m ? Number(m[1]) : null;
 }
 
-export function receiverDisplay(p: Patti): string {
-  if (!isPattiReceived(p)) return "—";
-  const name = (p.receiver_name || "").trim();
-  return name || "—";
+/**
+ * Driver receiving: receiver empty (or still default = driver name), driver assigned,
+ * and lot Sri falls in that driver's FROM–TO range. Does not mutate Patti records.
+ */
+export function isDriverRangeReceived(p: Patti, drivers: DriverRangeRef[]): boolean {
+  const driverName = (p.driver_name || "").trim();
+  if (!driverName || !drivers.length) return false;
+  const recv = (p.receiver_name || "").trim();
+  // Representative name entered (different from driver) → not driver-auto-received.
+  if (recv && recv.toLowerCase() !== driverName.toLowerCase()) return false;
+  const serial = pattiLotSerial(p);
+  if (serial == null) return false;
+  const key = driverName.toLowerCase();
+  return drivers.some((d) => {
+    const n = (d.name || "").trim().toLowerCase();
+    return n === key && serial >= Number(d.range_from) && serial <= Number(d.range_to);
+  });
+}
+
+export function isPattiReceived(p: Patti, drivers?: DriverRangeRef[]): boolean {
+  if (p.status === "received") return true;
+  if (drivers && drivers.length) return isDriverRangeReceived(p, drivers);
+  return false;
+}
+
+export function receiverDisplay(p: Patti, drivers?: DriverRangeRef[]): string {
+  if (p.status === "received") {
+    return (p.receiver_name || "").trim() || "—";
+  }
+  if (drivers && drivers.length && isDriverRangeReceived(p, drivers)) {
+    const d = (p.driver_name || "").trim();
+    return d ? `Driver/${d}` : "—";
+  }
+  return "—";
 }
 
 export function lotLabel(p: Patti): string {
@@ -114,7 +153,7 @@ export function groupDrivers(pattis: Patti[]): DriverSummary[] {
   return out;
 }
 
-export function driverDetailTotals(pattis: Patti[]): DriverDetailTotals {
+export function driverDetailTotals(pattis: Patti[], drivers?: DriverRangeRef[]): DriverDetailTotals {
   let total_bags = 0;
   let total_bhada = 0;
   let gross_payable = 0;
@@ -124,7 +163,7 @@ export function driverDetailTotals(pattis: Patti[]): DriverDetailTotals {
     total_bhada += p.bhada_total || 0;
     const pay = p.net_payable || 0;
     gross_payable += pay;
-    if (isPattiReceived(p)) received_amount += pay;
+    if (isPattiReceived(p, drivers)) received_amount += pay;
   }
   return {
     total_bags,
@@ -135,8 +174,11 @@ export function driverDetailTotals(pattis: Patti[]): DriverDetailTotals {
   };
 }
 
-export function farmerTotals(pattis: Patti[]) {
-  return driverDetailTotals(pattis);
+export function farmerTotals(pattis: Patti[], drivers?: DriverRangeRef[]) {
+  const base = driverDetailTotals(pattis, drivers);
+  let total_gross = 0;
+  for (const p of pattis) total_gross += p.farmer_gross || 0;
+  return { ...base, total_gross };
 }
 
 export function vendorTotals(bills: VendorBill[]) {
@@ -160,12 +202,81 @@ export function escHtml(s: string): string {
   );
 }
 
+/** A4 points (72 dpi) for expo-print printToFileAsync — must match @page size. */
+export const A4_WIDTH_PT = 595.28;
+export const A4_HEIGHT_PT = 841.89;
+
+/**
+ * Print ONLY the provided HTML document (report content).
+ * Never use expo-print on web — its web impl ignores `html` and runs window.print()
+ * on the whole app (tabs/nav/garbage text outside the report).
+ */
+async function printDedicatedHtmlDocument(html: string): Promise<void> {
+  if (typeof document === "undefined") {
+    throw new Error("Print is only available in a browser or native app");
+  }
+
+  const frame = document.createElement("iframe");
+  frame.setAttribute("title", "report-print");
+  frame.setAttribute("aria-hidden", "true");
+  frame.style.cssText =
+    "position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0;pointer-events:none;";
+  document.body.appendChild(frame);
+
+  const win = frame.contentWindow;
+  const doc = win?.document;
+  if (!win || !doc) {
+    try {
+      document.body.removeChild(frame);
+    } catch {
+      /* ignore */
+    }
+    throw new Error("Could not create print frame");
+  }
+
+  doc.open();
+  doc.write(html);
+  doc.close();
+
+  await new Promise<void>((resolve) => {
+    const done = () => resolve();
+    if (doc.readyState === "complete") setTimeout(done, 30);
+    else win.addEventListener("load", () => setTimeout(done, 30), { once: true });
+  });
+
+  try {
+    win.focus();
+    win.print();
+  } finally {
+    setTimeout(() => {
+      try {
+        document.body.removeChild(frame);
+      } catch {
+        /* ignore */
+      }
+    }, 1500);
+  }
+}
+
+/**
+ * Standalone A4 report document for Print / Save / Share.
+ * Never includes app chrome, tabs, or debug text — only the report.
+ */
 function pdfShell(title: string, subtitle: string, body: string, foot: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>${escHtml(title)}</title>
   <style>
-    @page { size: A4; margin: 14mm 12mm; }
-    html, body { margin: 0; padding: 0; }
-    body { font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color:#111827; font-size: 11px; }
+    @page { size: A4 portrait; margin: 14mm 12mm; }
+    html, body {
+      margin: 0; padding: 0; width: 100%;
+      background: #ffffff !important; color: #111827;
+      -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    }
+    body {
+      font-family: Arial, Helvetica, "Segoe UI", Roboto, sans-serif;
+      font-size: 11px; line-height: 1.35;
+    }
     h1 { margin: 0 0 4px; font-size: 18px; letter-spacing:-0.3px; font-weight: 900; }
     .sub { color:#374151; font-size:11px; margin-bottom: 10px; line-height: 1.4; }
     .card { border:2px solid #111827; padding: 10px 12px; }
@@ -175,13 +286,13 @@ function pdfShell(title: string, subtitle: string, body: string, foot: string): 
       border-bottom:2px solid #111827; text-transform:uppercase; font-weight:800;
     }
     tbody td { padding: 5px 3px; border-bottom:1px dashed #D1D5DB; font-size: 10.5px; vertical-align: top; word-break: break-word; }
-    .right { text-align: right; } .strong { font-weight: 800; } .mono { font-family: Menlo, Consolas, monospace; }
+    .right { text-align: right; } .strong { font-weight: 800; } .mono { font-family: "Courier New", Consolas, monospace; }
     .strike { text-decoration: line-through; color: #6B7280; }
     .trow { display:flex; justify-content:space-between; padding: 3px 0; font-size:11px; }
     .net { background:#111827; color:#fff; padding: 9px 10px; display:flex; justify-content:space-between;
       align-items:center; margin-top:8px; }
     .netl { font-size:10px; font-weight:900; letter-spacing:1.2px; }
-    .netv { font-family: Menlo, Consolas, monospace; font-weight:900; font-size:16px; }
+    .netv { font-family: "Courier New", Consolas, monospace; font-weight:900; font-size:16px; }
     .foot { margin-top: 12px; font-size:9px; color:#6B7280; text-align:center; }
   </style></head><body>
   <h1>${escHtml(title)}</h1>
@@ -416,39 +527,43 @@ export function renderFarmerReportHtml(
   dateISO: string,
   shopName: string,
   userName: string,
+  drivers?: DriverRangeRef[],
 ): string {
-  const totals = farmerTotals(pattis);
+  const totals = farmerTotals(pattis, drivers);
   const rows = pattis
     .map((p) => {
-      const recv = isPattiReceived(p);
+      const recv = isPattiReceived(p, drivers);
       return `<tr>
       <td class="mono">#${p.patti_no}</td>
       <td class="mono">${escHtml(lotLabel(p))}</td>
       <td>${escHtml(p.farmer_name || "—")}</td>
       <td class="mono right">${p.total_bags}</td>
       <td class="mono right">${fmtMoney(p.bhada_total)}</td>
+      <td class="mono right">${fmtMoney(p.farmer_gross)}</td>
       <td class="mono right ${recv ? "strike" : "strong"}">${fmtMoney(p.net_payable)}</td>
-      <td>${escHtml(receiverDisplay(p))}</td>
+      <td>${escHtml(receiverDisplay(p, drivers))}</td>
     </tr>`;
     })
     .join("");
   const body = `
     <table>
       <thead><tr>
-        <th style="width:10%">PATTI</th>
-        <th style="width:12%">LOT</th>
-        <th style="width:18%">FARMER</th>
-        <th class="right" style="width:10%">BAGS</th>
-        <th class="right" style="width:14%">BHADA</th>
-        <th class="right" style="width:16%">PAYABLE</th>
-        <th style="width:20%">RECEIVER</th>
+        <th style="width:9%">PATTI</th>
+        <th style="width:10%">LOT</th>
+        <th style="width:14%">FARMER</th>
+        <th class="right" style="width:8%">BAGS</th>
+        <th class="right" style="width:12%">BHADA</th>
+        <th class="right" style="width:14%">GROSS TOTAL</th>
+        <th class="right" style="width:14%">PAYABLE</th>
+        <th style="width:19%">RECEIVER</th>
       </tr></thead>
-      <tbody>${rows || `<tr><td colspan="7" style="text-align:center;color:#6B7280;padding:14px">No pattis</td></tr>`}</tbody>
+      <tbody>${rows || `<tr><td colspan="8" style="text-align:center;color:#6B7280;padding:14px">No pattis</td></tr>`}</tbody>
     </table>
     <div style="margin-top:10px">
       <div class="trow"><span>Total bags</span><span class="mono strong">${totals.total_bags}</span></div>
       <div class="trow"><span>Total bhada</span><span class="mono strong">${fmtMoney(totals.total_bhada)}</span></div>
-      <div class="trow"><span>Total payable</span><span class="mono strong">${fmtMoney(totals.gross_payable)}</span></div>
+      <div class="trow"><span>Total gross total</span><span class="mono strong">${fmtMoney(totals.total_gross)}</span></div>
+      <div class="trow"><span>Total payable amount</span><span class="mono strong">${fmtMoney(totals.gross_payable)}</span></div>
     </div>`;
   return pdfShell(
     `${shopName.toUpperCase()} — FARMER DETAILS`,
@@ -497,12 +612,17 @@ export function renderVendorReportHtml(
   );
 }
 
-export function farmerReportAoa(pattis: Patti[], dateISO: string, shopName: string): (string | number)[][] {
+export function farmerReportAoa(
+  pattis: Patti[],
+  dateISO: string,
+  shopName: string,
+  drivers?: DriverRangeRef[],
+): (string | number)[][] {
   const rows: (string | number)[][] = [
     [shopName.toUpperCase(), "FARMER DETAILS"],
     ["Date", dateISO],
     [],
-    ["Patti/Bill No.", "Lot No.", "Farmer Name", "Bags", "Bhada", "Payable Amount", "Receiver Name", "Received Status"],
+    ["Patti/Bill No.", "Lot No.", "Farmer Name", "Bags", "Bhada", "Gross Total", "Payable Amount", "Receiver Name"],
   ];
   for (const p of pattis) {
     rows.push([
@@ -511,16 +631,17 @@ export function farmerReportAoa(pattis: Patti[], dateISO: string, shopName: stri
       p.farmer_name || "",
       p.total_bags,
       p.bhada_total,
+      p.farmer_gross,
       p.net_payable,
-      receiverDisplay(p),
-      isPattiReceived(p) ? "received" : "pending",
+      receiverDisplay(p, drivers),
     ]);
   }
-  const t = farmerTotals(pattis);
+  const t = farmerTotals(pattis, drivers);
   rows.push([]);
   rows.push(["TOTAL BAGS", "", "", t.total_bags, "", "", "", ""]);
   rows.push(["TOTAL BHADA", "", "", "", t.total_bhada, "", "", ""]);
-  rows.push(["TOTAL PAYABLE", "", "", "", "", t.gross_payable, "", ""]);
+  rows.push(["TOTAL GROSS TOTAL", "", "", "", "", t.total_gross, "", ""]);
+  rows.push(["TOTAL PAYABLE AMOUNT", "", "", "", "", "", t.gross_payable, ""]);
   return rows;
 }
 
@@ -538,6 +659,44 @@ export function vendorReportAoa(bills: VendorBill[], dateISO: string, shopName: 
   rows.push([]);
   rows.push(["TOTAL BAGS", "", t.total_bags, ""]);
   rows.push(["TOTAL BILL AMOUNT", "", "", t.bill_amount]);
+  return rows;
+}
+
+function auditWhenLabel(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso || "-";
+  return d.toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+export function auditReportAoa(
+  entries: PattiAuditLogEntry[],
+  dateISO: string,
+  shopName: string,
+): (string | number)[][] {
+  const rows: (string | number)[][] = [
+    [shopName.toUpperCase(), "AUDIT LOG"],
+    ["Date", dateISO],
+    [],
+    ["Patti No.", "Lot No.", "Bags", "Farmer Name", "Driver Name", "Action", "Date/Time", "By"],
+  ];
+  for (const r of entries) {
+    rows.push([
+      `#${r.patti_no}`,
+      r.lot_no || "-",
+      r.bags,
+      r.farmer_name || "",
+      r.driver_name || "-",
+      r.action || "",
+      auditWhenLabel(r.at),
+      r.by || "",
+    ]);
+  }
   return rows;
 }
 
@@ -631,10 +790,14 @@ async function shareOrDownloadFile(opts: {
 }
 
 export async function printHtml(html: string): Promise<void> {
-  await Print.printAsync({ html });
+  if (Platform.OS === "web") {
+    await printDedicatedHtmlDocument(html);
+    return;
+  }
+  await Print.printAsync({ html, width: A4_WIDTH_PT, height: A4_HEIGHT_PT });
 }
 
-/** Save/share a real PDF from raw bytes (preferred for Farmer/Vendor reports). */
+/** Save/share a real PDF from raw bytes (optional fallbacks). */
 export async function exportPdfBytes(
   bytes: Uint8Array,
   filename: string,
@@ -653,7 +816,11 @@ export async function exportPdfBytes(
   });
 }
 
-/** Save or share an A4 PDF built from HTML (native printToFile; web falls back to print dialog). */
+/**
+ * Save / share / print an A4 PDF from dedicated report HTML only.
+ * - Android/iOS: printToFileAsync(html) → real .pdf file (not jsPDF, not UI screenshot)
+ * - Web Preview: iframe print of the same HTML only (expo-print web would print the whole app)
+ */
 export async function exportPdf(
   html: string,
   filename: string,
@@ -664,11 +831,15 @@ export async function exportPdf(
   const name = safe.endsWith(".pdf") ? safe : `${safe}.pdf`;
 
   if (Platform.OS === "web") {
-    await Print.printAsync({ html });
+    await printDedicatedHtmlDocument(html);
     return "printed";
   }
 
-  const { uri } = await Print.printToFileAsync({ html });
+  const { uri } = await Print.printToFileAsync({
+    html,
+    width: A4_WIDTH_PT,
+    height: A4_HEIGHT_PT,
+  });
   if (!uri) throw new Error("PDF generation failed");
   return shareOrDownloadFile({
     uri,

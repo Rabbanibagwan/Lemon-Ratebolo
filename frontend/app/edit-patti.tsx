@@ -13,8 +13,9 @@ import { useAuth } from "@/src/context/AuthContext";
 import { Button, Input } from "@/src/components/ui";
 import { PartyPicker } from "@/src/components/PartyPicker";
 import { colors, font, money, spacing } from "@/src/theme";
-import { thermalPrintAndMark } from "@/src/utils/patti-print";
+import { thermalPrintAndMark, canUserPrintPatti, staffPrintBlockedMessage } from "@/src/utils/patti-print";
 import { clampPaperMm, thermalPrintUserMessage } from "@/src/utils/thermal-print";
+import { handleBagBillingError } from "@/src/utils/bag-billing";
 
 type LocalSale = { key: string; vendor_id: string | null; vendor_name: string; bags: string; rate: string };
 type LocalLot = {
@@ -86,7 +87,7 @@ export default function EditPatti() {
           key: newKey(),
           lot_serial_no: String(lot.lot_serial_no ?? ""),
           total_bags: String(lot.total_bags ?? ""),
-          bhada_total: String(lot.bhada_total ?? (lot.bhada_per_bag * (lot.total_bags || 0))),
+          bhada_total: String(lot.bhada_total ?? lot.bhada_per_bag ?? 0),
           sales: (lot.sales || []).map((s) => ({
             key: newKey(),
             vendor_id: s.vendor_id,
@@ -140,7 +141,7 @@ export default function EditPatti() {
     );
 
   const save = async () => {
-    if (!isOwner || !patti || !farmerId) return;
+    if (!patti || !farmerId || !session) return;
     setError(null);
 
     if (!lots.length) { setError("At least one lot is required"); return; }
@@ -197,16 +198,27 @@ export default function EditPatti() {
         receiver_name: receiver.trim() || undefined,
       });
       setPatti(updated);
+      // Return to Action Diary so the list reloads the synced Lot + Patti.
+      router.back();
       Alert.alert("Saved", `Patti #${updated.patti_no} updated. Net ${money(updated.net_payable)}`);
     } catch (e: any) {
-      setError(errText(e));
+      if (handleBagBillingError(e, router)) {
+        setError("Insufficient bag balance. Please purchase additional bags to continue.");
+      } else {
+        setError(errText(e));
+      }
     } finally {
       setSaving(false);
     }
   };
 
   const reprint = async () => {
-    if (!patti || !session) return;
+    // Action Diary manage screen: Staff may only Save — no print/reprint/share.
+    if (!isOwner || !patti || !session) return;
+    if (!canUserPrintPatti(patti, session)) {
+      Alert.alert("Already printed", staffPrintBlockedMessage());
+      return;
+    }
     try {
       setPrinting(true);
       const [profile, settings] = await Promise.all([
@@ -214,10 +226,11 @@ export default function EditPatti() {
         api.get<any>("/settings").catch(() => null),
       ]);
       const paperMm = clampPaperMm(settings?.thermal_paper_width_mm || 80);
-      const updated = await thermalPrintAndMark(patti, profile || { shop_name: session.shop_name } as any, paperMm);
+      const updated = await thermalPrintAndMark(patti, profile || { shop_name: session.shop_name } as any, paperMm, session);
       setPatti(updated);
     } catch (e: any) {
-      Alert.alert("Print failed", `${thermalPrintUserMessage(e)} Patti stays Saved (not Printed).`);
+      const detail = typeof e?.detail === "string" ? e.detail : null;
+      Alert.alert("Print failed", detail || `${thermalPrintUserMessage(e)} Patti stays Saved (not Printed).`);
     } finally {
       setPrinting(false);
     }
@@ -263,7 +276,8 @@ export default function EditPatti() {
     );
   }
 
-  const readOnly = !isOwner;
+  const readOnly = false;
+  const canPrint = isOwner && canUserPrintPatti(patti, session);
 
   return (
     <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
@@ -437,31 +451,38 @@ export default function EditPatti() {
         />
 
         {error ? <Text style={styles.err}>{error}</Text> : null}
-        {readOnly ? (
-          <Text style={styles.hint}>Only the shop owner can edit or delete. You can still reprint.</Text>
+        {!isOwner ? (
+          <Text style={styles.hint}>Save updates only. Print is available once from Save &amp; Print when creating a Patti.</Text>
         ) : null}
       </KeyboardFormScroll>
 
       <View style={styles.footer}>
-        <Pressable
-          style={[styles.reprintBtn, printing && styles.disabled]}
-          onPress={reprint}
-          disabled={printing}
-          testID="edit-patti-reprint"
-        >
-          <Ionicons name="print-outline" size={18} color={colors.onSurface} />
-          <Text style={styles.reprintText}>{printing ? "PRINTING…" : "REPRINT"}</Text>
-        </Pressable>
         {isOwner ? (
-          <View style={{ flex: 1 }}>
-            <Button
-              label={saving ? "SAVING…" : "SAVE CHANGES"}
-              onPress={save}
-              loading={saving}
-              testID="edit-patti-save"
-            />
-          </View>
+          canPrint ? (
+            <Pressable
+              style={[styles.reprintBtn, printing && styles.disabled]}
+              onPress={reprint}
+              disabled={printing}
+              testID="edit-patti-reprint"
+            >
+              <Ionicons name="print-outline" size={18} color={colors.onSurface} />
+              <Text style={styles.reprintText}>{printing ? "PRINTING…" : "PRINT"}</Text>
+            </Pressable>
+          ) : (
+            <View style={[styles.reprintBtn, styles.disabled]} testID="edit-patti-reprint-disabled">
+              <Ionicons name="print-outline" size={18} color={colors.muted} />
+              <Text style={[styles.reprintText, { color: colors.muted }]}>PRINTED</Text>
+            </View>
+          )
         ) : null}
+        <View style={{ flex: 1 }}>
+          <Button
+            label={saving ? "SAVING…" : "SAVE CHANGES"}
+            onPress={save}
+            loading={saving}
+            testID="edit-patti-save"
+          />
+        </View>
       </View>
 
       <PartyPicker

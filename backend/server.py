@@ -121,6 +121,10 @@ async def lifespan(app: FastAPI):
     await db.vendor_payments.create_index([("shop_id", 1), ("vendor_id", 1), ("date", -1)])
     await db.account_ledger.create_index([("shop_id", 1), ("account_type", 1), ("farmer_id", 1), ("date", 1)])
     await db.account_ledger.create_index([("shop_id", 1), ("account_type", 1), ("vendor_id", 1), ("date", 1)])
+    # Permanent Farmer Patti audit (DELETED / REPRINTED) — survives patti soft/hard delete.
+    await db.patti_audit_log.create_index([("shop_id", 1), ("at", -1)])
+    await db.patti_audit_log.create_index([("shop_id", 1), ("action_date", -1), ("at", -1)])
+    await db.patti_audit_log.create_index("id", unique=True)
     try:
         await db.account_ledger.create_index(
             [("shop_id", 1), ("source_type", 1), ("source_id", 1)],
@@ -129,6 +133,12 @@ async def lifespan(app: FastAPI):
         )
     except Exception as _e:  # noqa: BLE001
         logger.warning("Startup: account_ledger unique index skipped: %s", _e)
+    try:
+        import billing as _billing
+        if getattr(_billing, "ensure_indexes", None):
+            await _billing.ensure_indexes()
+    except Exception as _e:  # noqa: BLE001
+        logger.warning("Startup: billing indexes skipped: %s", _e)
     logger.info("Startup: indexes ensured.")
     yield
     # Shutdown
@@ -225,6 +235,7 @@ class LoginBody(BaseModel):
 class TokenOut(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    id: str  # shop id for owner; staff id for counter
     shop_id: str
     shop_name: str
     username: str
@@ -447,6 +458,10 @@ class PattiOut(BaseModel):
     printed: bool = False
     printed_at: Optional[datetime] = None
     print_count: int = 0
+    # Staff (counter) user ids who have successfully printed this Patti (one print each).
+    staff_print_user_ids: List[str] = []
+    created_by_user_id: Optional[str] = None
+    created_by_role: Optional[str] = None
 
 
 class ReceiverBody(BaseModel):
@@ -488,6 +503,25 @@ class AuditEntry(BaseModel):
     role: str
     action: str  # 'edit' | 'delete' | 'restore' | 'receiver' | 'create'
     changes: Optional[dict] = None
+
+
+class PattiAuditLogOut(BaseModel):
+    """Permanent shop-level audit row for Farmer Patti DELETED / REPRINTED."""
+    id: str
+    at: datetime
+    action_date: str
+    by: str
+    by_user_id: Optional[str] = None
+    role: str
+    action: str  # 'DELETED' | 'REPRINTED'
+    patti_id: str
+    patti_no: int
+    lot_no: str
+    bags: int
+    farmer_name: str
+    driver_name: Optional[str] = None
+    # Full original Patti document at time of action (never pruned when patti is deleted).
+    patti: dict
 
 
 # ---------- Auth helpers ----------
@@ -546,6 +580,11 @@ async def owner_only(user=Depends(current_user)) -> dict:
     return user
 
 
+# Merchant prepaid bag billing (Admin-controlled pricing; owner-only consumption).
+import billing as billing_mod
+billing_mod.attach_billing(api, db=db, current_user=current_user, owner_only=owner_only)
+
+
 # ---------- Auth routes ----------
 @api.get("/")
 async def root():
@@ -571,9 +610,11 @@ async def signup(body: SignupBody):
         "vendor_factor": 1.06, "vendor_margin_per_bag": 30.0, "commission_per_bag": 10.0,
         "vendor_hamali_default": 0.0, "updated_at": now,
     })
+    # One-time free bag wallet from Admin settings (never re-granted on reinstall/login).
+    await billing_mod.ensure_wallet(shop_id)
     return TokenOut(
         access_token=make_token(shop_id, shop_id, username, "owner"),
-        shop_id=shop_id, shop_name=body.shop_name.strip(), username=username,
+        id=shop_id, shop_id=shop_id, shop_name=body.shop_name.strip(), username=username,
         role="owner", display_name=body.shop_name.strip(),
     )
 
@@ -585,7 +626,7 @@ async def login(body: LoginBody):
     if shop and pwd.verify(body.password, shop["password_hash"]) and shop.get("active", False):
         return TokenOut(
             access_token=make_token(shop["id"], shop["id"], shop["username"], "owner"),
-            shop_id=shop["id"], shop_name=shop["shop_name"], username=shop["username"],
+            id=shop["id"], shop_id=shop["id"], shop_name=shop["shop_name"], username=shop["username"],
             role="owner", display_name=shop["shop_name"],
         )
     staff = await db.staff.find_one({"username": username})
@@ -596,7 +637,7 @@ async def login(body: LoginBody):
         if shop:
             return TokenOut(
                 access_token=make_token(staff["id"], staff["shop_id"], staff["username"], "counter"),
-                shop_id=staff["shop_id"], shop_name=shop["shop_name"], username=staff["username"],
+                id=staff["id"], shop_id=staff["shop_id"], shop_name=shop["shop_name"], username=staff["username"],
                 role="counter", display_name=staff["name"],
             )
     raise HTTPException(401, "Incorrect username or password")
@@ -1023,7 +1064,7 @@ async def today_day(user=Depends(current_user), date: Optional[str] = None):
 
 
 @api.put("/auction-days/{day_id}", response_model=AuctionDayOut)
-async def update_day(day_id: str, body: AuctionDayIn, user=Depends(owner_only)):
+async def update_day(day_id: str, body: AuctionDayIn, user=Depends(current_user)):
     # validate ranges + non-overlap
     for d in body.drivers:
         if d.range_from > d.range_to:
@@ -1061,7 +1102,7 @@ async def update_day(day_id: str, body: AuctionDayIn, user=Depends(owner_only)):
         # Keep Farmer Patti in sync with per-lot bhada / driver (preserve patti_no + qr_token).
         lot2 = {**lot, **upd}
         try:
-            await _generate_patti_for_lot(user["shop_id"], day, lot2)
+            await _generate_patti_for_lot(user["shop_id"], day, lot2, user=user)
         except Exception:
             pass
 
@@ -1093,15 +1134,229 @@ def _sale_out(sale: dict) -> SaleOut:
 
 
 def _carry_purchase_meta(old_sales: List[dict], vendor_id: str, bags: int, rate: float) -> tuple[str, Optional[str]]:
-    for s in old_sales or []:
-        if s.get("vendor_id") != vendor_id:
-            continue
-        if int(s.get("bags") or 0) != bags:
-            continue
-        if abs(float(s.get("rate_per_bag") or 0) - rate) > 1e-6:
-            continue
-        return _sale_status(s), s.get("vendor_bill_id")
+    """Preserve POSTED / vendor_bill_id when remapping lot sales after an edit."""
+    candidates = [s for s in (old_sales or []) if s.get("vendor_id") == vendor_id]
+    for s in candidates:
+        if int(s.get("bags") or 0) == bags and abs(float(s.get("rate_per_bag") or 0) - rate) <= 1e-6:
+            return _sale_status(s), s.get("vendor_bill_id")
+    for s in candidates:
+        if int(s.get("bags") or 0) == bags:
+            return _sale_status(s), s.get("vendor_bill_id")
+    if len(candidates) == 1:
+        return _sale_status(candidates[0]), candidates[0].get("vendor_bill_id")
+    posted = [s for s in candidates if s.get("vendor_bill_id")]
+    if len(posted) == 1:
+        return _sale_status(posted[0]), posted[0].get("vendor_bill_id")
     return "PENDING", None
+
+
+def _remap_lot_sales_preserving_bills(old_sales: List[dict], new_sales: List[dict]) -> List[dict]:
+    """Map edited patti/lot sales onto existing lot sales without duplicating bill links."""
+    used: set[int] = set()
+    out: List[dict] = []
+    for ns in new_sales:
+        vendor_id = ns["vendor_id"]
+        bags = int(ns["bags"])
+        rate = float(ns["rate_per_bag"])
+        match_idx: Optional[int] = None
+        for i, os in enumerate(old_sales or []):
+            if i in used or os.get("vendor_id") != vendor_id:
+                continue
+            if int(os.get("bags") or 0) == bags and abs(float(os.get("rate_per_bag") or 0) - rate) <= 1e-6:
+                match_idx = i
+                break
+        if match_idx is None:
+            for i, os in enumerate(old_sales or []):
+                if i in used or os.get("vendor_id") != vendor_id:
+                    continue
+                if int(os.get("bags") or 0) == bags:
+                    match_idx = i
+                    break
+        if match_idx is None:
+            for i, os in enumerate(old_sales or []):
+                if i in used or os.get("vendor_id") != vendor_id:
+                    continue
+                match_idx = i
+                break
+        if match_idx is not None:
+            used.add(match_idx)
+            os = old_sales[match_idx]
+            st, bill_id = _sale_status(os), os.get("vendor_bill_id")
+        else:
+            st, bill_id = "PENDING", None
+        out.append({
+            "vendor_id": vendor_id,
+            "vendor_name": ns.get("vendor_name") or "",
+            "bags": bags,
+            "rate_per_bag": rate,
+            "vendor_purchase_status": st,
+            "vendor_bill_id": bill_id,
+        })
+    return out
+
+
+async def _sync_vendor_bills_for_lot(
+    shop_id: str,
+    lot_id: str,
+    sales_docs: List[dict],
+    farmer_name: str,
+    lot_no: str,
+) -> None:
+    """Update existing Vendor Bill lines for this lot in place (no new bills)."""
+    bill_ids: set[str] = set()
+    for s in sales_docs:
+        bid = s.get("vendor_bill_id")
+        if bid:
+            bill_ids.add(bid)
+    async for bill in db.vendor_bills.find(
+        {"shop_id": shop_id, "deleted": {"$ne": True}, "lines.lot_id": lot_id},
+        {"_id": 0, "id": 1},
+    ):
+        bill_ids.add(bill["id"])
+
+    for bill_id in bill_ids:
+        bill = await db.vendor_bills.find_one(
+            {"id": bill_id, "shop_id": shop_id, "deleted": {"$ne": True}},
+            {"_id": 0},
+        )
+        if not bill:
+            continue
+        vendor_id = bill["vendor_id"]
+        sale = next(
+            (s for s in sales_docs if s.get("vendor_id") == vendor_id and s.get("vendor_bill_id") == bill_id),
+            None,
+        )
+        if sale is None:
+            sale = next((s for s in sales_docs if s.get("vendor_id") == vendor_id), None)
+
+        factor = float(bill.get("vendor_factor") or 1.06)
+        margin = float(bill.get("margin_per_bag") or 0)
+        commission_per_bag = float(bill.get("commission_per_bag") or 0)
+        lines_out: List[dict] = []
+        changed = False
+        for line in bill.get("lines") or []:
+            if line.get("lot_id") != lot_id:
+                lines_out.append(line)
+                continue
+            if sale is None:
+                # Sale removed from lot — drop this bill line only (do not create replacements).
+                changed = True
+                continue
+            auction_rate = float(sale["rate_per_bag"])
+            bags = int(sale["bags"])
+            vendor_rate = _round2(auction_rate * factor + margin)
+            amount = _round2(bags * vendor_rate)
+            lines_out.append({
+                "lot_id": lot_id,
+                "lot_no": lot_no,
+                "farmer_name": farmer_name,
+                "bags": bags,
+                "auction_rate": auction_rate,
+                "vendor_rate": vendor_rate,
+                "amount": amount,
+            })
+            sale["vendor_purchase_status"] = "POSTED"
+            sale["vendor_bill_id"] = bill_id
+            changed = True
+
+        if not changed:
+            continue
+
+        total_bags = sum(int(l.get("bags") or 0) for l in lines_out)
+        goods = _round2(sum(float(l.get("amount") or 0) for l in lines_out))
+        commission = _round2(total_bags * commission_per_bag)
+        hamali = float(bill.get("hamali") or 0)
+        cess = float(bill.get("cess") or 0)
+        grand = _round2(goods + commission + hamali + cess)
+        paid = float(bill.get("paid") or 0)
+        upd = {
+            "lines": lines_out,
+            "total_bags": total_bags,
+            "goods_total": goods,
+            "commission_total": commission,
+            "grand_total": grand,
+            "status": _bill_status(grand, paid),
+            "updated_at": utc_now(),
+        }
+        d = await db.vendor_bills.find_one_and_update(
+            {"id": bill_id, "shop_id": shop_id},
+            {"$set": upd},
+            return_document=True,
+            projection={"_id": 0},
+        )
+        if d:
+            await _sync_vendor_bill_ledger(shop_id, d)
+
+    # Persist any re-attached bill ids on lot sales.
+    await db.lots.update_one(
+        {"id": lot_id, "shop_id": shop_id},
+        {"$set": {"sales": sales_docs}},
+    )
+
+
+async def _sync_action_diary_from_patti_edit(
+    user: dict,
+    existing_patti: dict,
+    farmer: dict,
+    lots_out: List[dict],
+) -> None:
+    """Keep Lot (Action Diary) + linked Vendor Bills in sync with an edited Patti.
+
+    Updates existing records by lot_id / vendor_bill_id — never creates duplicates.
+    """
+    lot_id = existing_patti.get("lot_id")
+    if not lot_id or not lots_out:
+        return
+    lot = await db.lots.find_one({"id": lot_id, "shop_id": user["shop_id"]}, {"_id": 0})
+    if not lot:
+        return
+
+    L = lots_out[0]
+    serial = int(L.get("lot_serial_no") or 0)
+    total_bags = int(L.get("total_bags") or 0)
+    lot_no = L.get("lot_no") or f"{serial}/{total_bags}"
+    bhada_total = float(L.get("bhada_total") or 0)
+    bhada_per_bag = float(L.get("bhada_per_bag") or 0)
+    sales_docs = _remap_lot_sales_preserving_bills(lot.get("sales") or [], L.get("sales") or [])
+
+    day = await db.auction_days.find_one(
+        {"id": lot.get("auction_day_id") or existing_patti.get("auction_day_id"), "shop_id": user["shop_id"]},
+        {"_id": 0},
+    )
+    drv_name = lot.get("driver_name")
+    drv_place = lot.get("driver_place")
+    if day is not None:
+        picked_name, picked_place, _ = _pick_driver(day.get("drivers", []), lot_no)
+        if picked_name:
+            drv_name, drv_place = picked_name, picked_place
+
+    await db.lots.update_one(
+        {"id": lot_id, "shop_id": user["shop_id"]},
+        {"$set": {
+            "farmer_id": farmer["id"],
+            "farmer_name": farmer["name"],
+            "lot_serial_no": serial,
+            "total_bags": total_bags,
+            "lot_no": lot_no,
+            "first_num": serial,
+            "driver_name": drv_name,
+            "driver_place": drv_place,
+            "bhada_per_bag": bhada_per_bag,
+            "bhada_total": bhada_total,
+            "bhada_manual": True,
+            "sales": sales_docs,
+        }},
+    )
+
+    # Also keep patti driver fields aligned with the lot (same IDs, no new patti).
+    await db.pattis.update_one(
+        {"id": existing_patti["id"], "shop_id": user["shop_id"]},
+        {"$set": {"driver_name": drv_name, "driver_place": drv_place}},
+    )
+
+    await _sync_vendor_bills_for_lot(
+        user["shop_id"], lot_id, sales_docs, farmer["name"], lot_no,
+    )
 
 
 async def _hydrate_lot(shop_id: str, lot: dict, patti_id: Optional[str] = None, patti_no: Optional[int] = None) -> LotOut:
@@ -1121,7 +1376,8 @@ async def _hydrate_lot(shop_id: str, lot: dict, patti_id: Optional[str] = None, 
     bhada_per_bag = float(lot.get("bhada_per_bag", 0))
     bhada_total = lot.get("bhada_total")
     if bhada_total is None:
-        bhada_total = round(bhada_per_bag * int(total or 0), 2)
+        # Legacy: bhada_per_bag held the lot circled amount (not × bags).
+        bhada_total = round(float(bhada_per_bag or 0), 2)
     # Fill in patti_id/no if not passed
     if patti_id is None:
         existing_patti = await db.pattis.find_one(
@@ -1197,6 +1453,10 @@ async def create_lot(body: LotIn, user=Depends(current_user)):
             },
         )
 
+    # Merchant bag balance (owner only) — block entire save if insufficient.
+    if sales_sum > 0:
+        await billing_mod.assert_can_consume(user, user["shop_id"], total_bags)
+
     drv_name, drv_place, drv_bhada = _pick_driver(day.get("drivers", []), lot_no_display)
     # Bhada resolution: prefer explicit bhada_total (circled / lot amount) → derive per-bag for storage.
     # Legacy: if only bhada_per_bag is sent, treat it as LOT bhada (not × bags) — same circled semantics.
@@ -1246,11 +1506,21 @@ async def create_lot(body: LotIn, user=Depends(current_user)):
     patti_no: Optional[int] = None
     if sales_docs:
         try:
-            patti_doc = await _generate_patti_for_lot(user["shop_id"], day, doc)
+            patti_doc = await _generate_patti_for_lot(user["shop_id"], day, doc, user=user)
             patti_id = patti_doc.get("id")
             patti_no = patti_doc.get("patti_no")
+            if patti_id:
+                await billing_mod.consume_bags_for_patti(
+                    user=user,
+                    shop_id=user["shop_id"],
+                    patti_id=patti_id,
+                    lot_id=doc["id"],
+                    bags=int(total_bags),
+                )
         except Exception:
             await db.lots.delete_one({"id": doc["id"], "shop_id": user["shop_id"]})
+            if patti_id:
+                await db.pattis.delete_one({"id": patti_id, "shop_id": user["shop_id"]})
             raise
     return await _hydrate_lot(user["shop_id"], doc, patti_id=patti_id, patti_no=patti_no)
 
@@ -1263,8 +1533,14 @@ async def update_lot(lot_id: str, body: LotIn, user=Depends(owner_only)):
     farmer = await db.farmers.find_one({"id": body.farmer_id, "shop_id": user["shop_id"]}, {"_id": 0})
     if not farmer:
         raise HTTPException(400, "Farmer not found")
-    existing_lot = await db.lots.find_one({"id": lot_id, "shop_id": user["shop_id"]}, {"_id": 0, "sales": 1})
+    existing_lot = await db.lots.find_one({"id": lot_id, "shop_id": user["shop_id"]}, {"_id": 0, "sales": 1, "total_bags": 1})
     old_sales = (existing_lot or {}).get("sales") or []
+    old_lot_bags = int((existing_lot or {}).get("total_bags") or 0)
+    existing_patti = await db.pattis.find_one(
+        {"shop_id": user["shop_id"], "lot_id": lot_id, "deleted": {"$ne": True}},
+        {"_id": 0, "id": 1, "total_bags": 1},
+    )
+    old_patti_bags = int((existing_patti or {}).get("total_bags") or old_lot_bags or 0)
 
     sales_sum = sum(int(s.bags) for s in body.sales)
     serial, total_bags, lot_no_display = _resolve_lot_fields(
@@ -1347,12 +1623,39 @@ async def update_lot(lot_id: str, body: LotIn, user=Depends(owner_only)):
     patti_id: Optional[str] = None
     patti_no: Optional[int] = None
     if d.get("sales"):
-        patti_doc = await _generate_patti_for_lot(user["shop_id"], day, d)
+        await billing_mod.assert_can_consume(
+            user, user["shop_id"],
+            max(0, int(total_bags) - (old_patti_bags if existing_patti else 0)),
+        )
+        patti_doc = await _generate_patti_for_lot(user["shop_id"], day, d, user=user)
         patti_id = patti_doc.get("id")
         patti_no = patti_doc.get("patti_no")
+        if patti_id:
+            if existing_patti:
+                await billing_mod.adjust_bags_for_patti_edit(
+                    user=user,
+                    shop_id=user["shop_id"],
+                    patti_id=patti_id,
+                    lot_id=lot_id,
+                    old_bags=old_patti_bags,
+                    new_bags=int(total_bags),
+                )
+            else:
+                await billing_mod.consume_bags_for_patti(
+                    user=user,
+                    shop_id=user["shop_id"],
+                    patti_id=patti_id,
+                    lot_id=lot_id,
+                    bags=int(total_bags),
+                )
     else:
         # If sales removed on edit, delete any orphan patti.
-        await db.pattis.delete_many({"shop_id": user["shop_id"], "lot_id": lot_id})
+        if existing_patti:
+            await billing_mod.reverse_bags_for_patti(
+                user=user, shop_id=user["shop_id"],
+                patti_id=existing_patti["id"], lot_id=lot_id,
+            )
+        await _audit_hard_delete_pattis(user, {"lot_id": lot_id})
     return await _hydrate_lot(user["shop_id"], d, patti_id=patti_id, patti_no=patti_no)
 
 
@@ -1361,8 +1664,8 @@ async def delete_lot(lot_id: str, user=Depends(current_user)):
     r = await db.lots.delete_one({"id": lot_id, "shop_id": user["shop_id"]})
     if r.deleted_count == 0:
         raise HTTPException(404, "Lot not found")
-    # Cascade: remove the 1-per-lot Patti as well.
-    await db.pattis.delete_many({"shop_id": user["shop_id"], "lot_id": lot_id})
+    # Cascade: remove the 1-per-lot Patti as well (audit first).
+    await _audit_hard_delete_pattis(user, {"lot_id": lot_id})
 
 
 # ---------- Pattis ----------
@@ -1374,7 +1677,9 @@ async def _next_patti_no(shop_id: str) -> int:
     return int(c["seq"])
 
 
-async def _generate_patti_for_lot(user_shop: str, day: dict, lot: dict) -> dict:
+async def _generate_patti_for_lot(
+    user_shop: str, day: dict, lot: dict, user: Optional[dict] = None,
+) -> dict:
     """Compute and upsert one Patti for a single lot. Business rule: 1 Patti = 1 Lot."""
     settings_doc = await db.settings.find_one({"shop_id": user_shop}, {"_id": 0}) or {}
     factor = float(settings_doc.get("payment_factor", 0.90))
@@ -1390,7 +1695,12 @@ async def _generate_patti_for_lot(user_shop: str, day: dict, lot: dict) -> dict:
     lot_gross = sum(s["bags"] * s["rate_per_bag"] for s in lot.get("sales", []))
     farmer_amt = lot_gross * factor
     stored_total = lot.get("bhada_total")
-    lot_bhada = float(stored_total) if stored_total is not None else lot_bags * float(lot.get("bhada_per_bag", 0))
+    # Circled / lot bhada once. Legacy: if only bhada_per_bag exists, treat it as LOT total
+    # (same as create_lot) — never multiply by bags.
+    if stored_total is not None:
+        lot_bhada = float(stored_total)
+    else:
+        lot_bhada = float(lot.get("bhada_per_bag", 0) or 0)
 
     lot_serial = lot.get("lot_serial_no")
     lot_total = lot.get("total_bags")
@@ -1433,6 +1743,9 @@ async def _generate_patti_for_lot(user_shop: str, day: dict, lot: dict) -> dict:
         receiver_updated_at = existing.get("receiver_updated_at")
         receiver_updated_by = existing.get("receiver_updated_by")
         created_at = existing.get("created_at", utc_now())
+        created_by_user_id = existing.get("created_by_user_id")
+        created_by_role = existing.get("created_by_role")
+        staff_print_user_ids = list(existing.get("staff_print_user_ids") or [])
     else:
         patti_no = await _next_patti_no(user_shop)
         qr_token = uid()
@@ -1441,6 +1754,9 @@ async def _generate_patti_for_lot(user_shop: str, day: dict, lot: dict) -> dict:
         receiver_updated_at = None
         receiver_updated_by = None
         created_at = utc_now()
+        created_by_user_id = user.get("id") if user else None
+        created_by_role = user.get("role") if user else None
+        staff_print_user_ids = []
 
     doc = {
         "id": existing["id"] if existing else uid(),
@@ -1468,10 +1784,13 @@ async def _generate_patti_for_lot(user_shop: str, day: dict, lot: dict) -> dict:
         "status": status_,
         "created_at": created_at,
         "updated_at": utc_now(),
+        "created_by_user_id": created_by_user_id,
+        "created_by_role": created_by_role,
         # Preserve print history across re-generate (idempotent refresh).
         "printed": bool(existing.get("printed")) if existing else False,
         "printed_at": existing.get("printed_at") if existing else None,
         "print_count": int(existing.get("print_count") or 0) if existing else 0,
+        "staff_print_user_ids": staff_print_user_ids,
     }
     await db.pattis.update_one(
         {"shop_id": user_shop, "auction_day_id": day["id"], "lot_id": lot["id"]},
@@ -1495,16 +1814,17 @@ async def generate_pattis(day_id: str, user=Depends(current_user)):
         if not lot.get("sales"):
             continue  # skip lots that have no vendor sales yet
         active_lot_ids.add(lot["id"])
-        d = await _generate_patti_for_lot(user["shop_id"], day, lot)
+        d = await _generate_patti_for_lot(user["shop_id"], day, lot, user=user)
         d.pop("shop_id", None)
         out.append(d)
 
     # Cleanup: remove pattis for lots that no longer exist (or lost their sales).
     async for p in db.pattis.find(
         {"shop_id": user["shop_id"], "auction_day_id": day_id},
-        {"_id": 0, "id": 1, "lot_id": 1, "farmer_id": 1},
+        {"_id": 0},
     ):
         if p.get("lot_id") and p["lot_id"] not in active_lot_ids:
+            await _record_patti_audit(user, "DELETED", p)
             await db.pattis.delete_one({"id": p["id"], "shop_id": user["shop_id"]})
     return [PattiOut(**_patti_read_compat(d)) for d in sorted(out, key=lambda x: x["patti_no"])]
 
@@ -1537,7 +1857,8 @@ def _patti_read_compat(d: dict) -> dict:
             if "lot_no" not in lot or not lot["lot_no"]:
                 lot["lot_no"] = f"{lot['lot_serial_no']}/{lot['total_bags']}"
         if "bhada_total" not in lot or lot["bhada_total"] is None:
-            lot["bhada_total"] = round(float(lot.get("bhada_per_bag", 0)) * int(lot.get("total_bags", 0)), 2)
+            # Legacy field held lot-level amount (not × bags).
+            lot["bhada_total"] = round(float(lot.get("bhada_per_bag", 0) or 0), 2)
     # Print status defaults for legacy documents
     if "printed" not in d:
         d["printed"] = False
@@ -1545,12 +1866,18 @@ def _patti_read_compat(d: dict) -> dict:
         d["print_count"] = 0
     if "printed_at" not in d:
         d["printed_at"] = None
+    if "staff_print_user_ids" not in d or d["staff_print_user_ids"] is None:
+        d["staff_print_user_ids"] = []
+    if "created_by_user_id" not in d:
+        d["created_by_user_id"] = None
+    if "created_by_role" not in d:
+        d["created_by_role"] = None
     return d
 
 
 @api.get("/pattis", response_model=List[PattiOut])
-async def list_pattis(user=Depends(current_user), date: Optional[str] = None, limit: int = 500,
-                      include_deleted: bool = False):
+async def list_pattis(user=Depends(current_user), date: Optional[str] = None, q: Optional[str] = None,
+                      limit: int = 500, include_deleted: bool = False):
     query: dict = {"shop_id": user["shop_id"]}
     if not include_deleted:
         query["deleted"] = {"$ne": True}
@@ -1570,7 +1897,28 @@ async def list_pattis(user=Depends(current_user), date: Optional[str] = None, li
                     {"_id": 1},
                 )
                 if not has:
-                    await _generate_patti_for_lot(user["shop_id"], day, lot)
+                    await _generate_patti_for_lot(user["shop_id"], day, lot, user=user)
+    if q and q.strip():
+        s = q.strip()
+        or_clauses: List[dict] = [
+            {"farmer_name": {"$regex": re.escape(s), "$options": "i"}},
+        ]
+        digits = "".join(ch for ch in s if ch.isdigit())
+        if digits:
+            try:
+                or_clauses.append({"patti_no": int(digits)})
+            except ValueError:
+                pass
+            # Partial Patti/Bill No. match (e.g. "14" → 14, 140, 141…)
+            or_clauses.append({
+                "$expr": {
+                    "$regexMatch": {
+                        "input": {"$toString": "$patti_no"},
+                        "regex": re.escape(digits),
+                    }
+                }
+            })
+        query["$or"] = or_clauses
     cur = db.pattis.find(query, {"_id": 0, "shop_id": 0}).sort([("date", -1), ("patti_no", -1)]).limit(limit)
     return [PattiOut(**_patti_read_compat(d)) async for d in cur]
 
@@ -1682,6 +2030,16 @@ async def edit_patti(patti_id: str, body: PattiEditIn, user=Depends(current_user
     lots_out, total_bags, gross_total, farmer_gross, bhada_total = _hydrate_edit_lots(
         sales_lookup, body.lots, body.payment_factor
     )
+    old_bags = int(existing.get("total_bags") or 0)
+    # Merchant bag delta check before applying edit (owner only).
+    await billing_mod.adjust_bags_for_patti_edit(
+        user=user,
+        shop_id=user["shop_id"],
+        patti_id=patti_id,
+        lot_id=existing.get("lot_id"),
+        old_bags=old_bags,
+        new_bags=int(total_bags),
+    )
     hamali_total = total_bags * body.hamali_per_bag
     stationery_total = body.stationery_flat  # flat charge per Patti
     deductions_total = hamali_total + stationery_total + bhada_total
@@ -1742,12 +2100,96 @@ async def edit_patti(patti_id: str, body: PattiEditIn, user=Depends(current_user
         },
         return_document=True, projection={"_id": 0, "shop_id": 0},
     )
-    return PattiOut(**_patti_read_compat(d))
+    # Keep Action Diary (lot) + linked Vendor Bill(s) synchronized with this Patti.
+    await _sync_action_diary_from_patti_edit(user, existing, farmer, lots_out)
+    # Re-read so response includes any driver fields updated during lot sync.
+    d2 = await db.pattis.find_one(
+        {"id": patti_id, "shop_id": user["shop_id"]},
+        {"_id": 0, "shop_id": 0},
+    )
+    return PattiOut(**_patti_read_compat(d2 or d))
+
+
+def _patti_lot_label(patti: dict) -> str:
+    lots = patti.get("lots") or []
+    if not lots:
+        return "-"
+    if len(lots) == 1:
+        return str(lots[0].get("lot_no") or "-")
+    labels = [str(l.get("lot_no") or "").strip() for l in lots if l.get("lot_no")]
+    return ", ".join(labels) if labels else "-"
+
+
+def _patti_snapshot_for_audit(patti: dict) -> dict:
+    """Full Patti payload for permanent audit (strip Mongo _id / shop_id)."""
+    snap = dict(patti)
+    snap.pop("_id", None)
+    snap.pop("shop_id", None)
+    return snap
+
+
+async def _record_patti_audit(user: dict, action: str, patti: dict) -> None:
+    """Insert a permanent DELETED/REPRINTED audit row. Never deleted with the Patti."""
+    now = utc_now()
+    snap = _patti_snapshot_for_audit(patti)
+    doc = {
+        "id": str(uuid.uuid4()),
+        "shop_id": user["shop_id"],
+        "at": now,
+        "action_date": now.astimezone(timezone.utc).strftime("%Y-%m-%d"),
+        "by": user.get("display_name") or user.get("username") or "",
+        "by_user_id": user.get("id"),
+        "role": user.get("role") or "",
+        "action": action,  # DELETED | REPRINTED
+        "patti_id": snap.get("id") or "",
+        "patti_no": int(snap.get("patti_no") or 0),
+        "lot_no": _patti_lot_label(snap),
+        "bags": int(snap.get("total_bags") or 0),
+        "farmer_name": snap.get("farmer_name") or "",
+        "driver_name": snap.get("driver_name"),
+        "patti": snap,
+    }
+    await db.patti_audit_log.insert_one(doc)
+
+
+async def _audit_hard_delete_pattis(user: dict, query: dict) -> None:
+    """Write DELETED audit for each matching patti, then hard-delete them."""
+    q = {**query, "shop_id": user["shop_id"]}
+    async for p in db.pattis.find(q, {"_id": 0}):
+        await _record_patti_audit(user, "DELETED", p)
+        try:
+            await billing_mod.reverse_bags_for_patti(
+                user=user,
+                shop_id=user["shop_id"],
+                patti_id=p.get("id"),
+                lot_id=p.get("lot_id"),
+            )
+        except Exception as _e:  # noqa: BLE001
+            logger.warning("Billing reverse on hard-delete failed: %s", _e)
+    await db.pattis.delete_many(q)
 
 
 @api.delete("/pattis/{patti_id}", response_model=PattiOut)
 async def delete_patti(patti_id: str, body: DeletePattiBody, user=Depends(current_user)):
     now = utc_now()
+    existing = await db.pattis.find_one(
+        {"id": patti_id, "shop_id": user["shop_id"], "deleted": {"$ne": True}},
+        {"_id": 0},
+    )
+    if not existing:
+        raise HTTPException(404, "Patti not found or already deleted")
+    # Permanent shop audit BEFORE soft-delete (survives any later hard delete).
+    await _record_patti_audit(user, "DELETED", existing)
+    # Restore merchant bags (immutable usage history kept).
+    try:
+        await billing_mod.reverse_bags_for_patti(
+            user=user,
+            shop_id=user["shop_id"],
+            patti_id=patti_id,
+            lot_id=existing.get("lot_id"),
+        )
+    except Exception as _e:  # noqa: BLE001
+        logger.warning("Billing reverse on delete failed: %s", _e)
     d = await db.pattis.find_one_and_update(
         {"id": patti_id, "shop_id": user["shop_id"], "deleted": {"$ne": True}},
         {
@@ -1772,6 +2214,15 @@ async def delete_patti(patti_id: str, body: DeletePattiBody, user=Depends(curren
 
 @api.post("/pattis/{patti_id}/restore", response_model=PattiOut)
 async def restore_patti(patti_id: str, user=Depends(owner_only)):
+    existing = await db.pattis.find_one(
+        {"id": patti_id, "shop_id": user["shop_id"], "deleted": True},
+        {"_id": 0, "total_bags": 1, "lot_id": 1},
+    )
+    if not existing:
+        raise HTTPException(404, "Deleted patti not found")
+    bags = int(existing.get("total_bags") or 0)
+    if bags > 0:
+        await billing_mod.assert_can_consume(user, user["shop_id"], bags)
     d = await db.pattis.find_one_and_update(
         {"id": patti_id, "shop_id": user["shop_id"], "deleted": True},
         {
@@ -1786,6 +2237,14 @@ async def restore_patti(patti_id: str, user=Depends(owner_only)):
     )
     if not d:
         raise HTTPException(404, "Deleted patti not found")
+    if bags > 0:
+        await billing_mod.consume_bags_for_patti(
+            user=user,
+            shop_id=user["shop_id"],
+            patti_id=patti_id,
+            lot_id=existing.get("lot_id"),
+            bags=bags,
+        )
     return PattiOut(**_patti_read_compat(d))
 
 
@@ -1825,7 +2284,11 @@ async def update_receiver(patti_id: str, body: ReceiverBody, user=Depends(curren
 
 @api.post("/pattis/{patti_id}/mark-printed", response_model=PattiOut)
 async def mark_patti_printed(patti_id: str, user=Depends(current_user)):
-    """Mark a Patti as successfully printed. Safe to call again on reprint."""
+    """Mark a Patti as successfully printed.
+
+    Owner/merchant may reprint freely. Staff (counter) may print each Patti only once;
+    tracked via staff_print_user_ids on the Patti document.
+    """
     now = utc_now()
     existing = await db.pattis.find_one({"id": patti_id, "shop_id": user["shop_id"]}, {"_id": 0})
     if not existing:
@@ -1833,27 +2296,82 @@ async def mark_patti_printed(patti_id: str, user=Depends(current_user)):
     if existing.get("deleted"):
         raise HTTPException(400, "Cannot mark a deleted Patti as printed")
 
-    d = await db.pattis.find_one_and_update(
-        {"id": patti_id, "shop_id": user["shop_id"]},
-        {
-            "$set": {
-                "printed": True,
-                "printed_at": now,
-            },
-            "$inc": {"print_count": 1},
-            "$push": {"audit_log": {
-                "at": now, "by": user["display_name"], "role": user["role"],
-                "action": "print", "changes": {
-                    "reprint": bool(existing.get("printed")),
-                    "print_count_before": int(existing.get("print_count") or 0),
-                },
-            }},
+    staff_ids = list(existing.get("staff_print_user_ids") or [])
+    if user["role"] == "counter" and user["id"] in staff_ids:
+        raise HTTPException(403, "Staff may print each Patti only once")
+
+    match: dict = {"id": patti_id, "shop_id": user["shop_id"]}
+    if user["role"] == "counter":
+        # Atomic: only succeed if this staff id is not already recorded.
+        match["staff_print_user_ids"] = {"$nin": [user["id"]]}
+
+    update: dict = {
+        "$set": {
+            "printed": True,
+            "printed_at": now,
         },
+        "$inc": {"print_count": 1},
+        "$push": {"audit_log": {
+            "at": now, "by": user["display_name"], "role": user["role"],
+            "action": "print", "changes": {
+                "reprint": bool(existing.get("printed")),
+                "print_count_before": int(existing.get("print_count") or 0),
+                "staff_one_print": user["role"] == "counter",
+            },
+        }},
+    }
+    if user["role"] == "counter":
+        update["$addToSet"] = {"staff_print_user_ids": user["id"]}
+
+    d = await db.pattis.find_one_and_update(
+        match,
+        update,
         return_document=True, projection={"_id": 0, "shop_id": 0},
     )
     if not d:
+        # Race: another request recorded this staff print first.
+        if user["role"] == "counter":
+            raise HTTPException(403, "Staff may print each Patti only once")
         raise HTTPException(404, "Patti not found")
+    # Permanent audit only on reprint (already printed at least once before this call).
+    if existing.get("printed"):
+        await _record_patti_audit(user, "REPRINTED", existing)
     return PattiOut(**_patti_read_compat(d))
+
+
+@api.get("/reports/audit-log", response_model=List[PattiAuditLogOut])
+async def list_patti_audit_log(
+    user=Depends(owner_only),
+    date: Optional[str] = Query(default=None, description="Filter by action calendar date YYYY-MM-DD"),
+    q: Optional[str] = Query(default=None, max_length=120),
+    limit: int = Query(default=500, ge=1, le=2000),
+):
+    """Merchant/Admin only. Permanent Farmer Patti DELETED / REPRINTED audit."""
+    query: dict = {"shop_id": user["shop_id"]}
+    if date:
+        query["action_date"] = date
+    if q and q.strip():
+        s = q.strip()
+        or_clauses: List[dict] = [
+            {"farmer_name": {"$regex": s, "$options": "i"}},
+            {"driver_name": {"$regex": s, "$options": "i"}},
+            {"lot_no": {"$regex": s, "$options": "i"}},
+            {"action": {"$regex": s, "$options": "i"}},
+            {"by": {"$regex": s, "$options": "i"}},
+        ]
+        if s.isdigit():
+            or_clauses.append({"patti_no": int(s)})
+        else:
+            m = re.match(r"^#?(\d+)$", s)
+            if m:
+                or_clauses.append({"patti_no": int(m.group(1))})
+        query["$or"] = or_clauses
+    cur = (
+        db.patti_audit_log.find(query, {"_id": 0, "shop_id": 0})
+        .sort([("at", -1)])
+        .limit(limit)
+    )
+    return [PattiAuditLogOut(**d) async for d in cur]
 
 
 # ---------- Dashboard & Reports ----------
@@ -2098,7 +2616,11 @@ def _compute_bill(body: VendorBillIn) -> tuple[List[dict], int, float, float, fl
 
 
 async def _set_sales_posted(shop_id: str, vendor_id: str, lines: List[dict], bill_id: str) -> None:
-    """Mark matching lot sales POSTED only after a vendor bill exists."""
+    """Mark matching lot sales POSTED only after a vendor bill exists.
+
+    Match order: same vendor + bags + auction rate → same vendor + bags → first
+    PENDING sale for this vendor on the lot. Never reuse an already-POSTED sale.
+    """
     for L in lines:
         lot_id = L.get("lot_id")
         if not lot_id:
@@ -2110,17 +2632,29 @@ async def _set_sales_posted(shop_id: str, vendor_id: str, lines: List[dict], bil
         target_bags = int(L.get("bags") or 0)
         target_rate = float(L.get("auction_rate") or 0)
         match = None
+        # 1) Exact bags + auction rate
         for s in sales:
             if s.get("vendor_id") != vendor_id or _sale_status(s) == "POSTED":
                 continue
             if int(s.get("bags") or 0) == target_bags and abs(float(s.get("rate_per_bag") or 0) - target_rate) < 1e-6:
                 match = s
                 break
+        # 2) Same bags (rate may have been edited on the bill)
         if match is None:
             for s in sales:
-                if s.get("vendor_id") == vendor_id and _sale_status(s) != "POSTED":
+                if s.get("vendor_id") != vendor_id or _sale_status(s) == "POSTED":
+                    continue
+                if int(s.get("bags") or 0) == target_bags:
                     match = s
                     break
+        # 3) Sole remaining PENDING sale for this vendor on the lot
+        if match is None:
+            pending = [
+                s for s in sales
+                if s.get("vendor_id") == vendor_id and _sale_status(s) != "POSTED"
+            ]
+            if len(pending) == 1:
+                match = pending[0]
         if match is not None:
             match["vendor_purchase_status"] = "POSTED"
             match["vendor_bill_id"] = bill_id
@@ -2363,11 +2897,12 @@ async def list_vendor_bills(user=Depends(current_user), vendor_id: Optional[str]
         s = q.strip()
         # Match bill code digits, vendor name/details, farmer, lot, or date substring
         or_clauses: List[dict] = [
-            {"vendor_name": {"$regex": s, "$options": "i"}},
-            {"vendor_details": {"$regex": s, "$options": "i"}},
-            {"date": {"$regex": s, "$options": "i"}},
-            {"lines.farmer_name": {"$regex": s, "$options": "i"}},
-            {"lines.lot_no": {"$regex": s, "$options": "i"}},
+            {"bill_code": {"$regex": re.escape(s), "$options": "i"}},
+            {"vendor_name": {"$regex": re.escape(s), "$options": "i"}},
+            {"vendor_details": {"$regex": re.escape(s), "$options": "i"}},
+            {"date": {"$regex": re.escape(s), "$options": "i"}},
+            {"lines.farmer_name": {"$regex": re.escape(s), "$options": "i"}},
+            {"lines.lot_no": {"$regex": re.escape(s), "$options": "i"}},
         ]
         digits = "".join(ch for ch in s if ch.isdigit())
         if digits:
@@ -2520,7 +3055,7 @@ async def delete_vendor_bill(bill_id: str, body: DeleteBody, user=Depends(owner_
 
 # ---------- Vendor Payments ----------
 @api.post("/vendor-payments", response_model=VendorPaymentOut, status_code=201)
-async def receive_payment(body: VendorPaymentIn, user=Depends(owner_only)):
+async def receive_payment(body: VendorPaymentIn, user=Depends(current_user)):
     vendor = await db.vendors.find_one({"id": body.vendor_id, "shop_id": user["shop_id"]}, {"_id": 0})
     if not vendor:
         raise HTTPException(400, "Vendor not found")
@@ -2667,66 +3202,30 @@ class OcrResponse(BaseModel):
     warning: Optional[str] = None
 
 
-_OCR_SYSTEM = """You are an expert OCR system for Indian mandi Action Diaries (handwritten lemon auction records).
-Read BOTH columns if present (left column first, top to bottom).
+_OCR_SYSTEM = """Extract Indian mandi Action Diary handwriting into JSON only.
 
-PRIMARY DIARY PATTERN (merchant standard):
-  LOT NO. / TOTAL BAGS    FARMER    (BHADA PER LOT)
-  VENDOR    BAGS    AUCTION RATE
-  VENDOR    BAGS    AUCTION RATE
+Diary layout (left column first if two columns):
+  LotNo/Bags  Farmer  (BhadaLotTotal)
+  Vendor  VendorBags  VendorRate
+  Vendor  VendorBags  VendorRate
 
-Example block:
+Example:
   1/5   ABDG   (50)
   MM    02    1000
   AB    02    1000
-  MC    01    1000
+→ One lot: lot_serial_no=1, total_bags=5, farmer_name=ABDG, bhada_total=50
+  Two vendor rows under that lot (repeat lot fields on each row):
+  MM bags=2 rate_per_bag=1000; AB bags=2 rate_per_bag=1000
 
-Means ONE lot:
-  lot_serial_no = 1          ← the number BEFORE the slash (NEVER store "1/5" as one field)
-  total_bags    = 5          ← the number AFTER the slash
-  farmer_name   = "ABDG"
-  bhada_total   = 50         ← circled/parens after farmer = ₹ bhada for the LOT (once, NOT × bags)
-  bhada_per_bag = null       ← optional; do NOT multiply circled amount by bags
-  Three vendor sale rows under the SAME lot (not three lots):
-    MM bags=2 rate=1000; AB bags=2 rate=1000; MC bags=1 rate=1000
+Rules:
+- "1/5" → lot_serial_no=1 AND total_bags=5 (never one combined field).
+- Parentheses after farmer = bhada_total for the LOT once (NOT × bags, NOT per-bag).
+- One header + many vendors = ONE lot; emit one row per vendor with the same lot fields.
+- Do not invent lots, farmers, vendors, bags, or rates.
+- Skip titles/totals/doodles. Unreadable → null. Empty page → {"rows":[]}.
 
-Another example:
-  3/12 MMA (50)
-  ZX 07 850
-  MC 05 800
-→ lot 3, bags 12, farmer MMA, bhada_total=50 (lot once); vendors ZX 7@850 and MC 5@800.
-
-FIELD RULES:
-1. "1/5" is TWO fields: lot_serial_no=1, total_bags=5. NEVER lot_no="1/5" as the only identity.
-2. Same farmer on different headers (1/5 ABDG then 2/6 ABDG) = TWO separate lots → two Farmer Pattis.
-3. Multiple vendor lines under ONE header = ONE lot. Emit one JSON row PER vendor, repeating
-   lot_serial_no, total_bags, farmer_name, bhada_total on each row.
-4. Do NOT invent extra lots for each vendor. Do NOT invent farmers from vendor names.
-5. Do NOT invent vendor slots that are not on the page.
-6. Parentheses after slash-header = bhada_total for the lot (₹), NOT per-bag and NOT total bags.
-7. NEVER compute bhada_total = circled × total_bags. Circled amount IS the lot bhada.
-
-ALTERNATE FORMAT (only when there is NO slash like 1/5):
-  Header: "<code> <farmer_name> (<total_bags>)" e.g. 135 HRB (12)
-  Then rate lines may be "12 @ 1800" without vendor name → vendor_name null, bags+rate filled.
-  In that alternate format, parentheses = total_bags (not bhada).
-
-Return ONLY valid JSON (no markdown):
-{
-  "rows": [
-    {
-      "lot_serial_no": <int or null>,
-      "total_bags": <int or null>,
-      "farmer_name": "<string or null>",
-      "vendor_name": "<string or null>",
-      "bags": <int or null>,
-      "rate_per_bag": <number or null>,
-      "bhada_total": <number or null>,
-      "bhada_per_bag": <number or null>
-    }
-  ]
-}
-Use null when unreadable. Skip titles/totals/doodles. If unreadable: {"rows": []}."""
+Return ONLY this JSON (no markdown, no extra text):
+{"rows":[{"lot_serial_no":1,"total_bags":5,"farmer_name":"ABDG","vendor_name":"MM","bags":2,"rate_per_bag":1000,"bhada_total":50}]}"""
 
 
 def _ocr_int(v) -> Optional[int]:
@@ -2759,8 +3258,12 @@ def _normalize_ocr_rows(raw_rows: list) -> List[OcrRow]:
                 total = pt
         bhada_total_val = _ocr_flt(r.get("bhada_total"))
         bhada_pb = _ocr_flt(r.get("bhada_per_bag"))
-        # Circled diary amount is LOT bhada. Prefer bhada_total; if only bhada_per_bag was
-        # returned, treat that number as the lot total (do NOT multiply by bags).
+        # Circled amount aliases — when present these win (bhadaType=LOT).
+        bhada_amount = _ocr_flt(r.get("bhadaAmount") or r.get("bhada_amount"))
+        if bhada_amount is not None:
+            bhada_total_val = bhada_amount
+        # Circled diary amount is ALWAYS lot-level. Prefer bhada_total;
+        # if only bhada_per_bag was returned, that number IS the lot total — do NOT × bags.
         if bhada_total_val is None and bhada_pb is not None:
             bhada_total_val = bhada_pb
         if bhada_pb is None and bhada_total_val is not None and total and total > 0:
@@ -2891,29 +3394,33 @@ def _gemini_key_auth_failed(status_code: int, body: str) -> bool:
 
 
 def _call_gemini_vision(image_b64: str, mime_type: str, hint: Optional[str], api_key: str) -> tuple[str, str]:
-    """Call Google Gemini generateContent. Returns (raw_text, model_name). Raises RuntimeError on failure."""
+    """Call Google Gemini generateContent. Returns (raw_text, model_name). Raises RuntimeError on failure.
+
+    Uses Gemini 2.5 Flash by default. Retries transient 429/5xx with backoff; never drops the image.
+    """
+    import time
     import requests as _requests
 
-    # Prefer Gemini 3 Flash (quota-friendly); Pro if available. Env overrides first.
-    # Cap fallbacks so total wall time stays under the app OCR timeout (~300s).
-    preferred = os.environ.get("GEMINI_OCR_MODEL") or "gemini-3-flash-preview"
+    preferred = os.environ.get("GEMINI_OCR_MODEL") or "gemini-2.5-flash"
     models = [
         preferred,
+        "gemini-2.5-flash",
+        "gemini-3.6-flash",
+        "gemini-flash-latest",
         "gemini-3-flash-preview",
-        "gemini-2.0-flash",
     ]
     seen = set()
-    models = [m for m in models if m and not (m in seen or seen.add(m))][:2]
-    hint_line = f"\nHint from user: {hint}" if hint else ""
-    prompt = (
-        _OCR_SYSTEM
-        + hint_line
-        + "\n\nExtract every auction lot from this diary page. Return only JSON."
-    )
+    models = [m for m in models if m and not (m in seen or seen.add(m))][:4]
+    hint_line = f"\nHint: {hint}" if hint else ""
+    prompt = _OCR_SYSTEM + hint_line + "\nExtract all lots. JSON only."
     last_err = None
     key = api_key.strip()
-    # Newer AI Studio auth keys (AQ.*) need x-goog-api-key; classic AIza* often use ?key=.
     auth_modes = ("header", "query") if key.startswith("AQ.") else ("query", "header")
+
+    # Long per-request wait so we do not fail while Gemini is still processing.
+    # Client OCR timeout is 360s; keep retries within that budget.
+    req_timeout = 200
+    max_attempts_per_model = 2
 
     for model in models:
         base_url = (
@@ -2927,27 +3434,50 @@ def _call_gemini_vision(image_b64: str, mime_type: str, hint: Optional[str], api
                     {"inline_data": {"mime_type": mime_type or "image/jpeg", "data": image_b64}},
                 ]
             }],
-            "generationConfig": {"temperature": 0.1, "responseMimeType": "application/json"},
+            "generationConfig": {
+                "temperature": 0.0,
+                "responseMimeType": "application/json",
+                "maxOutputTokens": 8192,
+            },
         }
-        for auth_mode in auth_modes:
+        for attempt in range(max_attempts_per_model):
+            auth_mode = auth_modes[0]
             url = f"{base_url}?key={key}" if auth_mode == "query" else base_url
             headers = {"Content-Type": "application/json"}
             if auth_mode == "header":
                 headers["x-goog-api-key"] = key
             try:
-                # Allow long Gemini runs; client OCR_API_TIMEOUT_MS is 300s.
-                resp = _requests.post(url, json=payload, headers=headers, timeout=180)
+                resp = _requests.post(url, json=payload, headers=headers, timeout=req_timeout)
                 if resp.status_code == 404:
                     last_err = f"{model} not found"
                     break  # next model
-                if resp.status_code == 429:
-                    last_err = f"{model}: quota exceeded"
-                    break  # next model — do not treat as invalid key
+                if resp.status_code in (429, 500, 502, 503, 504):
+                    last_err = f"{model}: {resp.status_code} transient"
+                    # Backoff then retry same model — do not discard image / create duplicates.
+                    if attempt < max_attempts_per_model - 1:
+                        time.sleep(2 ** attempt * 2)  # 2s, 4s, 8s
+                        continue
+                    break  # exhausted retries → next model
                 if resp.status_code >= 400:
+                    # Try alternate auth once on key-style errors
+                    if _gemini_key_auth_failed(resp.status_code, resp.text or "") and len(auth_modes) > 1:
+                        alt = auth_modes[1]
+                        alt_url = f"{base_url}?key={key}" if alt == "query" else base_url
+                        alt_headers = {"Content-Type": "application/json"}
+                        if alt == "header":
+                            alt_headers["x-goog-api-key"] = key
+                        resp = _requests.post(alt_url, json=payload, headers=alt_headers, timeout=req_timeout)
+                        if resp.status_code < 400:
+                            data = resp.json()
+                            parts = (
+                                data.get("candidates", [{}])[0]
+                                .get("content", {})
+                                .get("parts", [])
+                            )
+                            text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+                            return text, model
                     last_err = f"{model}: {resp.status_code} {resp.text[:300]}"
                     if _gemini_key_auth_failed(resp.status_code, resp.text or ""):
-                        if auth_mode == auth_modes[0]:
-                            continue  # retry same model with other auth
                         low = (resp.text or "").lower()
                         if "api key not valid" in low or ("invalid" in low and "key" in low):
                             raise RuntimeError(
@@ -2955,7 +3485,7 @@ def _call_gemini_vision(image_b64: str, mime_type: str, hint: Optional[str], api
                                 "Settings → Gemini API key (or Scan paste box) and Save."
                             )
                         raise RuntimeError(f"OCR model call failed: {last_err}")
-                    break  # non-key 4xx → next model
+                    break  # non-retryable 4xx → next model
                 data = resp.json()
                 parts = (
                     data.get("candidates", [{}])[0]
@@ -2963,13 +3493,54 @@ def _call_gemini_vision(image_b64: str, mime_type: str, hint: Optional[str], api
                     .get("parts", [])
                 )
                 text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+                if not (text or "").strip():
+                    last_err = f"{model}: empty response"
+                    if attempt < max_attempts_per_model - 1:
+                        time.sleep(2 ** attempt * 2)
+                        continue
+                    break
                 return text, model
             except RuntimeError:
                 raise
             except Exception as e:
                 last_err = str(e)
-                continue
+                # Network / read timeouts — retry with backoff
+                if attempt < max_attempts_per_model - 1:
+                    time.sleep(2 ** attempt * 2)
+                    continue
+                break
     raise RuntimeError(f"OCR model call failed: {last_err}")
+
+
+def _optimize_ocr_image_b64(image_b64: str, mime_type: str) -> tuple[str, str]:
+    """Optional server-side resize/compress before Gemini (keeps handwriting readable)."""
+    try:
+        import base64
+        import io
+        from PIL import Image as _PILImage  # type: ignore
+    except Exception:
+        return image_b64, mime_type or "image/jpeg"
+    try:
+        raw = base64.b64decode(image_b64)
+        img = _PILImage.open(io.BytesIO(raw))
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        elif img.mode == "L":
+            img = img.convert("RGB")
+        w, h = img.size
+        max_side = 1024
+        if max(w, h) > max_side:
+            if w >= h:
+                nh = max(1, int(h * (max_side / float(w))))
+                img = img.resize((max_side, nh), _PILImage.Resampling.LANCZOS)
+            else:
+                nw = max(1, int(w * (max_side / float(h))))
+                img = img.resize((nw, max_side), _PILImage.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=72, optimize=True)
+        return base64.b64encode(buf.getvalue()).decode("ascii"), "image/jpeg"
+    except Exception:
+        return image_b64, mime_type or "image/jpeg"
 
 
 def _parse_model_json(full_text: str) -> tuple[List[OcrRow], Optional[str]]:
@@ -3026,13 +3597,14 @@ async def ocr_action_diary(body: OcrRequest, user=Depends(current_user)):
         try:
             import asyncio
             import logging
+            img_b64, mime = _optimize_ocr_image_b64(img_b64, body.mime_type or "image/jpeg")
             logging.getLogger("uvicorn.error").info(
                 "OCR action-diary: Gemini extract starting (shop=%s, bytes≈%s)",
                 user.get("shop_id"),
                 int(len(img_b64) * 0.75) if img_b64 else 0,
             )
             full_text, model_name = await asyncio.to_thread(
-                _call_gemini_vision, img_b64, body.mime_type or "image/jpeg", body.hint, api_key
+                _call_gemini_vision, img_b64, mime, body.hint, api_key
             )
             logging.getLogger("uvicorn.error").info(
                 "OCR action-diary: Gemini extract done (model=%s, chars=%s)",

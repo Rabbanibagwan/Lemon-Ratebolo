@@ -3,7 +3,7 @@ import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import { Alert, Platform, Share } from "react-native";
 
-import { api, Patti, ShopProfile } from "@/src/api";
+import { api, Patti, Session, ShopProfile } from "@/src/api";
 import { qrDataUri, qrDataUriThermal } from "@/src/utils/qr";
 import { printThermalDocument } from "@/src/utils/thermal-connection";
 import { encodeFarmerPattiEscPos } from "@/src/utils/thermal-escpos-docs";
@@ -12,6 +12,32 @@ import {
   thermalBaseCss,
   thermalMetrics,
 } from "@/src/utils/thermal-print";
+
+/** True when this staff user has already printed this Patti (server-tracked). */
+export function staffHasPrintedPatti(p: Patti | null | undefined, session: Session | null | undefined): boolean {
+  if (!p || !session || session.role !== "counter") return false;
+  return (p.staff_print_user_ids || []).includes(session.id);
+}
+
+/** Merchant: always. Staff: only if they have not printed this Patti yet. */
+export function canUserPrintPatti(p: Patti | null | undefined, session: Session | null | undefined): boolean {
+  if (!p || !session) return false;
+  if (session.role === "owner") return true;
+  return !staffHasPrintedPatti(p, session);
+}
+
+/** Merchant may share. Staff must never share a Farmer Patti. */
+export function canUserSharePatti(session: Session | null | undefined): boolean {
+  return session?.role === "owner";
+}
+
+export function staffPrintBlockedMessage(): string {
+  return "This Patti was already printed. Staff may print each Patti only once.";
+}
+
+export function staffShareBlockedMessage(): string {
+  return "Staff cannot share Farmer Pattis.";
+}
 
 export function fmt(n: number): string {
   return "₹" + (Number.isFinite(n) ? n : 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -170,8 +196,6 @@ export async function thermalPrintPatti(p: Patti, profile: ShopProfile, paperMm?
   // Always generate QR — previous working format required it on the slip.
   const qrUri = await qrDataUriThermal(p.qr_token, Math.max(220, m.qrPx * 2));
   const html = renderThermalPattiHtml(p, profile, qrUri, mm);
-  // Prefer the previous HTML thermal layout (merchant / farmer / lot rows / QR).
-  // ESC/POS is used only when Bluetooth is the active connection.
   await printThermalDocument({
     html,
     escposBase64: encodeFarmerPattiEscPos(p, profile, mm, p.qr_token),
@@ -187,7 +211,11 @@ export async function thermalPrintAndMark(
   p: Patti,
   profile: ShopProfile,
   paperMm: number = 80,
+  session?: Session | null,
 ): Promise<Patti> {
+  if (session && !canUserPrintPatti(p, session)) {
+    throw new Error(staffPrintBlockedMessage());
+  }
   await thermalPrintPatti(p, profile, paperMm);
   return markPattiPrinted(p.id);
 }
@@ -201,6 +229,15 @@ export async function sharePattiPdf(p: Patti, profile: ShopProfile, userName: st
   } else if (Platform.OS !== "web") {
     await Share.share({ url: uri, title: `Patti #${p.patti_no}` });
   } else {
-    Alert.alert("PDF ready", uri);
+    const res = await fetch(uri);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Patti_${p.patti_no}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
   }
 }

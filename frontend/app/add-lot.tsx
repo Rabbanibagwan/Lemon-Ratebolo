@@ -12,7 +12,9 @@ import { api, apiErrorMessage, AuctionDay, Farmer, Lot, Vendor } from "@/src/api
 import { Input } from "@/src/components/ui";
 import { PartyPicker } from "@/src/components/PartyPicker";
 import { colors, font, money, spacing } from "@/src/theme";
+import { useAuth } from "@/src/context/AuthContext";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
+import { handleBagBillingError } from "@/src/utils/bag-billing";
 
 type LocalSale = { key: string; vendor_id: string | null; vendor_name: string; bags: string; rate: string };
 const newKey = () => `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -23,6 +25,8 @@ export default function AddLot() {
   const { id, day: dayId } = useLocalSearchParams<{ id?: string; day?: string }>();
   const router = useRouter();
   const isEdit = !!id;
+  const { session } = useAuth();
+  const isOwner = session?.role === "owner";
   const { workingDateISO, displayDate } = useWorkingDate();
 
   const [day, setDay] = useState<AuctionDay | null>(null);
@@ -63,7 +67,7 @@ export default function AddLot() {
             setLotSerial(String(l.lot_serial_no ?? ""));
             setTotalBags(String(l.total_bags ?? ""));
             setFarmerId(l.farmer_id);
-            setBhada(String(l.bhada_total ?? (l.bhada_per_bag * l.total_bags)));
+            setBhada(String(l.bhada_total ?? l.bhada_per_bag ?? ""));
             setBhadaManual(true);
             setSales(
               l.sales.length
@@ -113,6 +117,8 @@ export default function AddLot() {
     setSales((xs) => (xs.length === 1 ? xs : xs.filter((s) => s.key !== k)));
 
   const save = async (mode: "save" | "print" | "share" = "save") => {
+    // Staff: Save + Save & Print allowed (one print enforced server-side). Share is merchant-only.
+    const effectiveMode = !isOwner && mode === "share" ? "save" : mode;
     setError(null);
     const serial = parseInt(lotSerial.trim(), 10);
     const total = parseInt(totalBags.trim(), 10);
@@ -148,9 +154,9 @@ export default function AddLot() {
         ? await api.put<Lot>(`/lots/${id}`, payload)
         : await api.post<Lot>("/lots", payload);
       const pattiId = savedLot?.patti_id || null;
-      if (mode !== "save" && pattiId) {
+      if (effectiveMode !== "save" && pattiId) {
         // Navigate to patti detail with auto-print or auto-share query flag.
-        const param = mode === "print" ? "autoPrint" : "autoShare";
+        const param = effectiveMode === "print" ? "autoPrint" : "autoShare";
         router.replace({ pathname: "/patti/[id]", params: { id: pattiId, [param]: "1" } });
       } else {
         router.back();
@@ -171,6 +177,8 @@ export default function AddLot() {
         );
       } else if (e?.status === 422 && typeof e?.detail === "object" && e.detail?.code === "bags_mismatch") {
         setError(e.detail.message || "Bags mismatch");
+      } else if (handleBagBillingError(e, router)) {
+        setError("Insufficient bag balance. Please purchase additional bags to continue.");
       } else {
         setError(apiErrorMessage(e, "Farmer Patti generation failed"));
       }
@@ -397,15 +405,17 @@ export default function AddLot() {
               <Ionicons name="print-outline" size={16} color={colors.onSurfaceInverse} />
               <Text style={[styles.actionBtnText, { color: colors.onSurfaceInverse }]}>SAVE & PRINT</Text>
             </Pressable>
-            <Pressable
-              style={({ pressed }) => [styles.actionBtn, styles.actionShare, pressed && { opacity: 0.85 }, saving && { opacity: 0.5 }]}
-              onPress={() => save("share")}
-              disabled={saving}
-              testID="save-and-share-lot"
-            >
-              <Ionicons name="share-social-outline" size={16} color={colors.onBrandPrimary} />
-              <Text style={[styles.actionBtnText, { color: colors.onBrandPrimary }]}>SHARE</Text>
-            </Pressable>
+            {isOwner ? (
+              <Pressable
+                style={({ pressed }) => [styles.actionBtn, styles.actionShare, pressed && { opacity: 0.85 }, saving && { opacity: 0.5 }]}
+                onPress={() => save("share")}
+                disabled={saving}
+                testID="save-and-share-lot"
+              >
+                <Ionicons name="share-social-outline" size={16} color={colors.onBrandPrimary} />
+                <Text style={[styles.actionBtnText, { color: colors.onBrandPrimary }]}>SHARE</Text>
+              </Pressable>
+            ) : null}
           </View>
         </View>
       </KeyboardStickyView>

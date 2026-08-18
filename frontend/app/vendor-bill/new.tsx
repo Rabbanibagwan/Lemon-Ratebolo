@@ -187,14 +187,19 @@ export default function NewVendorBill() {
       const b = isEdit
         ? await api.put<VendorBill>(`/vendor-bills/${editId}`, payload)
         : await api.post<VendorBill>("/vendor-bills", payload);
-      router.replace({
-        pathname: "/vendor-bill/[id]",
-        params: {
-          id: b.id,
-          ...(mode === "print" ? { autoPrint: "1" } : {}),
-          ...(mode === "share" ? { autoShare: "1" } : {}),
-        },
-      });
+      if (mode === "print" || mode === "share") {
+        router.replace({
+          pathname: "/vendor-bill/[id]",
+          params: {
+            id: b.id,
+            ...(mode === "print" ? { autoPrint: "1" } : {}),
+            ...(mode === "share" ? { autoShare: "1" } : {}),
+          },
+        });
+      } else {
+        // Land on Vendors → Posted so pending/posted lists refresh immediately.
+        router.replace({ pathname: "/vendors", params: { tab: "posted", highlight: b.id } });
+      }
     } catch (e: any) {
       setError(e?.detail || "Failed to save");
     } finally {
