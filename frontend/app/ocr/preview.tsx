@@ -13,9 +13,11 @@ import { getOcrSession, clearOcrSession } from "@/src/ocr-session";
 import { Input } from "@/src/components/ui";
 import { PartyPicker, findExactParty } from "@/src/components/PartyPicker";
 import { colors, font, spacing } from "@/src/theme";
-import { thermalPrintAndMark } from "@/src/utils/patti-print";
+import { thermalPrintAndMark, canUserPrintPatti } from "@/src/utils/patti-print";
 import { clampPaperMm } from "@/src/utils/thermal-print";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
+import { useAuth } from "@/src/context/AuthContext";
+import { handleBagBillingError, isInsufficientBagBalance } from "@/src/utils/bag-billing";
 
 type VendorDraft = {
   key: string;
@@ -172,6 +174,7 @@ function auctionStatus(lot: LotDraft): { ok: boolean; kind: "ok" | "pending" | "
 export default function OcrPreview() {
   const router = useRouter();
   const { workingDateISO } = useWorkingDate();
+  const { session } = useAuth();
 
   const [lots, setLots] = useState<LotDraft[]>([]);
   const [warning, setWarning] = useState<string | null>(null);
@@ -317,6 +320,8 @@ export default function OcrPreview() {
   }, [vendors]);
 
   const saveAll = async (mode: "save" | "print" = "save") => {
+    // Staff may Save & Print once per Patti (server-tracked); Share is not offered here.
+    const effectiveMode = mode;
     if (!day) { setError("Working-date auction day not loaded"); return; }
     setError(null); setSummary(null);
     setSaving(true);
@@ -402,9 +407,13 @@ export default function OcrPreview() {
         ok += 1;
       } catch (e: any) {
         const isDup = typeof e?.detail === "object" && e.detail?.code === "duplicate_lot";
+        const insufficient = isInsufficientBagBalance(e);
+        if (insufficient) handleBagBillingError(e, router);
         const msg = isDup
           ? "Lot already exists"
-          : apiErrorMessage(e, "Farmer Patti generation failed");
+          : insufficient
+            ? "Insufficient bag balance"
+            : apiErrorMessage(e, "Farmer Patti generation failed");
         updateLot(lot.key, {
           saving: false,
           saved: false,
@@ -417,7 +426,7 @@ export default function OcrPreview() {
     }
 
     // SAVE & PRINT: print every successfully saved patti (including already-saved unprinted).
-    if (mode === "print") {
+    if (effectiveMode === "print") {
       const extraIds = lots
         .filter((l) => (l.saved || l.status === "saved") && !l.printed && l.patti_id)
         .map((l) => l.patti_id as string)
@@ -438,7 +447,17 @@ export default function OcrPreview() {
             );
             try {
               const patti = await api.get<Patti>(`/pattis/${pid}`);
-              await thermalPrintAndMark(patti, profile || ({ shop_name: "" } as any), paperMm);
+              if (!canUserPrintPatti(patti, session)) {
+                setLots((xs) =>
+                  xs.map((l) =>
+                    l.patti_id === pid
+                      ? { ...l, status: "printed" as LotWorkflowStatus, printed: true }
+                      : l,
+                  ),
+                );
+                continue;
+              }
+              await thermalPrintAndMark(patti, profile || ({ shop_name: "" } as any), paperMm, session);
               setLots((xs) =>
                 xs.map((l) =>
                   l.patti_id === pid
@@ -475,7 +494,7 @@ export default function OcrPreview() {
 
     const parts = [
       ok ? `${ok} saved` : null,
-      mode === "print" && createdPattiIds.length ? `${createdPattiIds.length} sent to printer` : null,
+      effectiveMode === "print" && createdPattiIds.length ? `${createdPattiIds.length} sent to printer` : null,
       dup ? `${dup} duplicate kept on screen` : null,
       fail - dup > 0 ? `${fail - dup} failed` : null,
     ].filter(Boolean);
@@ -490,10 +509,16 @@ export default function OcrPreview() {
       );
     }
 
-    // Leave review open while duplicates/errors remain.
+    // Leave review open while duplicates/errors remain (do not lose unsaved lots).
+    // On full success → Create Lot menu (OCR + MANUAL), never Dashboard / stay on Review.
     if (stillOpen === 0 && ok > 0) {
       clearOcrSession();
-      router.replace("/action-diary");
+      const r = router as typeof router & { dismissTo?: (href: string) => void };
+      if (typeof r.dismissTo === "function") {
+        r.dismissTo("/action-diary");
+      } else {
+        router.replace("/action-diary");
+      }
     }
   };
 

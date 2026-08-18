@@ -113,7 +113,7 @@ export default function StaffScreen() {
           loading ? null : (
             <Empty
               title="No staff yet"
-              subtitle="Add a counter staff member. They can scan QR & update receiver names."
+              subtitle="Add a counter staff member. They can create Farmer Pattis and print each once."
               testID="staff-empty"
             />
           )

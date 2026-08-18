@@ -137,16 +137,14 @@ export default function VendorBillDetail() {
             >
               <Ionicons name="book-outline" size={20} color={colors.onSurface} />
             </Pressable>
-            {isOwner ? (
-              <Pressable
-                onPress={() => router.push({ pathname: "/vendor-payment/new", params: { vendor_id: b.vendor_id } })}
-                hitSlop={12}
-                testID="bill-pay"
-                style={{ marginRight: 10 }}
-              >
-                <Ionicons name="cash-outline" size={20} color={colors.onSurface} />
-              </Pressable>
-            ) : null}
+            <Pressable
+              onPress={() => router.push({ pathname: "/vendor-payment/new", params: { vendor_id: b.vendor_id } })}
+              hitSlop={12}
+              testID="bill-pay"
+              style={{ marginRight: 10 }}
+            >
+              <Ionicons name="cash-outline" size={20} color={colors.onSurface} />
+            </Pressable>
             <Pressable
               onPress={() => router.push({ pathname: "/vendor-bill/new", params: { id: b.id } })}
               hitSlop={12}

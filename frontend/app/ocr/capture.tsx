@@ -17,16 +17,6 @@ import { colors, font, spacing } from "@/src/theme";
 
 type Stage = "pick" | "crop" | "ready";
 
-const OCR_STATUS_STEPS = [
-  "Uploading image…",
-  "Reading Action Diary…",
-  "Extracting lot numbers & bags…",
-  "Identifying farmer & bhada…",
-  "Identifying vendors & rates…",
-  "Preparing extracted data…",
-  "Almost complete…",
-] as const;
-
 export default function OcrCapture() {
   const router = useRouter();
   const [stage, setStage] = useState<Stage>("pick");
@@ -41,7 +31,6 @@ export default function OcrCapture() {
   const [keyConfigured, setKeyConfigured] = useState(false);
   const [cropInsets, setCropInsets] = useState({ top: 0, bottom: 0, left: 0, right: 0 });
   const [processing, setProcessing] = useState(false);
-  const [statusIdx, setStatusIdx] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const inFlightRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -62,18 +51,6 @@ export default function OcrCapture() {
     })();
     return () => { cancelled = true; };
   }, []);
-
-  // Keep loading overlay alive while OCR runs (no fake %).
-  useEffect(() => {
-    if (!processing) {
-      setStatusIdx(0);
-      return;
-    }
-    const stepId = setInterval(() => {
-      setStatusIdx((i) => (i + 1) % OCR_STATUS_STEPS.length);
-    }, 5000);
-    return () => clearInterval(stepId);
-  }, [processing]);
 
   // Do NOT abort OCR on unmount — Strict Mode remounts / brief focus loss must not cancel a valid extract.
   // User can leave the screen; the in-flight guard still prevents duplicate submits while mounted.
@@ -139,32 +116,57 @@ export default function OcrCapture() {
   const finalizeCrop = async (uri: string, insets = cropInsets) => {
     try {
       setError(null);
-      // Measure via manipulate: first get size by loading without ops if needed
       let actions: ImageManipulator.Action[] = [];
       const hasInsets = insets.top > 0 || insets.bottom > 0 || insets.left > 0 || insets.right > 0;
+
+      const size = await new Promise<{ w: number; h: number }>((resolve, reject) => {
+        Image.getSize(
+          uri,
+          (w, h) => resolve({ w, h }),
+          (err) => reject(err),
+        );
+      });
+
       if (hasInsets) {
-        // Probe dimensions with a no-op resize pass
-        const probe = await ImageManipulator.manipulateAsync(uri, [], { format: ImageManipulator.SaveFormat.JPEG });
-        // We don't get width/height from all platforms reliably; use Image.getSize
-        const size = await new Promise<{ w: number; h: number }>((resolve, reject) => {
-          Image.getSize(
-            probe.uri,
-            (w, h) => resolve({ w, h }),
-            (err) => reject(err),
-          );
-        });
         const left = Math.round((insets.left / 100) * size.w);
         const top = Math.round((insets.top / 100) * size.h);
         const width = Math.max(40, size.w - left - Math.round((insets.right / 100) * size.w));
         const height = Math.max(40, size.h - top - Math.round((insets.bottom / 100) * size.h));
         actions = [{ crop: { originX: left, originY: top, width, height } }];
+      } else if (Platform.OS === "web" && (size.w > 1600 || size.h > 1600)) {
+        // No manual trim: light center crop of margins to drop empty page edges before OCR.
+        const mx = Math.round(size.w * 0.03);
+        const my = Math.round(size.h * 0.03);
+        actions = [{
+          crop: {
+            originX: mx,
+            originY: my,
+            width: Math.max(40, size.w - mx * 2),
+            height: Math.max(40, size.h - my * 2),
+          },
+        }];
       }
-      // Cap width for upload speed while keeping handwriting readable.
-      actions.push({ resize: { width: 1400 } });
+
+      // Cap longest side for faster upload while keeping handwriting/numbers readable.
+      const cropW = hasInsets
+        ? Math.max(40, size.w - Math.round((insets.left / 100) * size.w) - Math.round((insets.right / 100) * size.w))
+        : size.w;
+      const cropH = hasInsets
+        ? Math.max(40, size.h - Math.round((insets.top / 100) * size.h) - Math.round((insets.bottom / 100) * size.h))
+        : size.h;
+      const maxSide = 1200;
+      if (cropW >= cropH && cropW > maxSide) {
+        actions.push({ resize: { width: maxSide } });
+      } else if (cropH > cropW && cropH > maxSide) {
+        actions.push({ resize: { height: maxSide } });
+      } else if (cropW > maxSide) {
+        actions.push({ resize: { width: maxSide } });
+      }
+
       const manipulated = await ImageManipulator.manipulateAsync(
         uri,
         actions,
-        { compress: 0.82, format: ImageManipulator.SaveFormat.JPEG, base64: true },
+        { compress: 0.72, format: ImageManipulator.SaveFormat.JPEG, base64: true },
       );
       if (__DEV__) {
         const kb = Math.round(((manipulated.base64 || "").length * 0.75) / 1024);
@@ -219,7 +221,6 @@ export default function OcrCapture() {
     inFlightRef.current = true;
     setError(null);
     setProcessing(true);
-    setStatusIdx(0);
     const ac = new AbortController();
     abortRef.current = ac;
     if (__DEV__) console.log("[ocr] started", { bytesApprox: Math.round(imageBase64.length * 0.75), timeoutMs: OCR_API_TIMEOUT_MS });
@@ -227,7 +228,7 @@ export default function OcrCapture() {
       const payload: Record<string, unknown> = {
         image_base64: imageBase64,
         mime_type: "image/jpeg",
-        hint: hint.trim() || "Standard diary: 1/5 ABDG (50) then MM 02 1000. 1=Lot, 5=Bags, (50)=Lot Bhada once. Multi vendors = one lot.",
+        hint: hint.trim() || "1/5 ABDG (50) then MM 02 1000. Bhada in () is LOT TOTAL.",
       };
       if (geminiKey.trim()) {
         payload.gemini_api_key = geminiKey.trim();
@@ -491,12 +492,11 @@ export default function OcrCapture() {
       <Modal visible={processing} transparent animationType="fade" statusBarTranslucent>
         <View style={styles.overlay} testID="ocr-extracting-overlay">
           <View style={styles.overlayCard}>
-            <Text style={styles.overlayTitle}>EXTRACTING DATA</Text>
-            <ActivityIndicator size="large" color={colors.brandPrimary} style={{ marginVertical: spacing.lg }} />
+            <ActivityIndicator size="large" color={colors.brandPrimary} style={{ marginVertical: spacing.md }} />
             <Text style={styles.overlayWait} testID="ocr-extract-wait">
-              Extracting data... Please wait.
+              Extracting data...
             </Text>
-            <Text style={styles.overlayStatus}>{OCR_STATUS_STEPS[statusIdx]}</Text>
+            <Text style={styles.overlayHint}>Please keep this screen open until extraction finishes.</Text>
           </View>
         </View>
       </Modal>
@@ -592,14 +592,11 @@ const styles = StyleSheet.create({
     width: "100%", maxWidth: 360, backgroundColor: colors.surface,
     borderWidth: 2, borderColor: colors.borderStrong, padding: spacing.xl, alignItems: "center",
   },
-  overlayTitle: {
-    fontSize: 18, fontWeight: "900", letterSpacing: 1.5, fontFamily: font.display, color: colors.onSurface,
-  },
-  overlayStatus: {
-    marginTop: spacing.sm, fontSize: 13, fontWeight: "800", fontFamily: font.display, color: colors.brandPrimary, textAlign: "center",
-  },
   overlayWait: {
-    fontSize: 15, letterSpacing: 0.3, fontWeight: "800",
+    fontSize: 16, letterSpacing: 0.3, fontWeight: "800",
     color: colors.onSurface, fontFamily: font.display, textAlign: "center",
+  },
+  overlayHint: {
+    marginTop: spacing.sm, fontSize: 12, color: colors.muted, fontFamily: font.display, textAlign: "center", lineHeight: 18,
   },
 });

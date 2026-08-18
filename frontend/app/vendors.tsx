@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useFocusEffect, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import { api, PendingVendorBill, VendorBill } from "@/src/api";
@@ -18,8 +18,9 @@ function bagsLabel(n: number): string {
 
 export default function VendorsList() {
   const router = useRouter();
+  const { tab: tabParam } = useLocalSearchParams<{ tab?: string; highlight?: string }>();
   const { workingDate, workingDateISO, displayDate, setWorkingDate } = useWorkingDate();
-  const [tab, setTab] = useState<Tab>("pending");
+  const [tab, setTab] = useState<Tab>(tabParam === "posted" ? "posted" : "pending");
   const [pending, setPending] = useState<PendingVendorBill[]>([]);
   const [posted, setPosted] = useState<VendorBill[]>([]);
   const [q, setQ] = useState("");
@@ -42,7 +43,12 @@ export default function VendorsList() {
     }
   }, [workingDateISO]);
 
-  useFocusEffect(useCallback(() => { load(); }, [load]));
+  useFocusEffect(useCallback(() => {
+    if (tabParam === "posted" || tabParam === "pending") {
+      setTab(tabParam);
+    }
+    load();
+  }, [load, tabParam]));
 
   const filteredPending = useMemo(() => {
     const s = q.trim().toLowerCase();

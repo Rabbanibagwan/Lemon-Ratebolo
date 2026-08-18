@@ -86,9 +86,9 @@ export function takeOcrSession(): { rows: OcrExtractedRow[]; model?: string; war
 
 /** Demo rows so preview can be opened/tested without a vision API key. */
 export const DEMO_OCR_ROWS: OcrExtractedRow[] = [
-  { lot_serial_no: 1, total_bags: 5, farmer_name: "ABDG", vendor_name: "MM", bags: 2, rate_per_bag: 1000, bhada_per_bag: 50, bhada_total: 250 },
-  { lot_serial_no: 1, total_bags: 5, farmer_name: "ABDG", vendor_name: "AB", bags: 2, rate_per_bag: 1000, bhada_per_bag: 50, bhada_total: 250 },
-  { lot_serial_no: 1, total_bags: 5, farmer_name: "ABDG", vendor_name: "MC", bags: 1, rate_per_bag: 1000, bhada_per_bag: 50, bhada_total: 250 },
+  { lot_serial_no: 1, total_bags: 5, farmer_name: "ABDG", vendor_name: "MM", bags: 2, rate_per_bag: 1000, bhada_per_bag: 10, bhada_total: 50 },
+  { lot_serial_no: 1, total_bags: 5, farmer_name: "ABDG", vendor_name: "AB", bags: 2, rate_per_bag: 1000, bhada_per_bag: 10, bhada_total: 50 },
+  { lot_serial_no: 1, total_bags: 5, farmer_name: "ABDG", vendor_name: "MC", bags: 1, rate_per_bag: 1000, bhada_per_bag: 10, bhada_total: 50 },
 ];
 
 export const BLANK_LOT_ROWS: OcrExtractedRow[] = [

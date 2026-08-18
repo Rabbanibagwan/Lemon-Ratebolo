@@ -110,7 +110,7 @@ export default function History() {
       let ok = 0, fail = 0;
       for (const p of ordered) {
         try {
-          const updated = await thermalPrintAndMark(p, profile || { shop_name: session?.shop_name || "" } as any, paperMm);
+          const updated = await thermalPrintAndMark(p, profile || { shop_name: session?.shop_name || "" } as any, paperMm, session);
           setItems((xs) => (xs || []).map((row) => (row.id === updated.id ? updated : row)));
           ok += 1;
         } catch (e) {

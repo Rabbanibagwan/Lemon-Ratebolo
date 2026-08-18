@@ -9,7 +9,6 @@ import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import { api, AuctionDay, DriverRange, Patti } from "@/src/api";
-import { useAuth } from "@/src/context/AuthContext";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
 import { Button, Empty, Input } from "@/src/components/ui";
 import { colors, font, money, spacing } from "@/src/theme";
@@ -17,8 +16,6 @@ import { DatePickerModal } from "@/src/components/DatePickerModal";
 
 export default function Auction() {
   const router = useRouter();
-  const { session } = useAuth();
-  const isOwner = session?.role === "owner";
   const { workingDate, workingDateISO, displayDate, isWorkingToday, setWorkingDate } = useWorkingDate();
 
   const [day, setDay] = useState<AuctionDay | null>(null);
@@ -137,12 +134,10 @@ export default function Auction() {
             <Ionicons name="calendar-outline" size={14} color={colors.onSurface} />
           </Pressable>
         </View>
-        {isOwner ? (
-          <Pressable style={styles.headerBtn} onPress={openDriverModal} testID="edit-drivers">
-            <Ionicons name="car-outline" size={16} color={colors.onSurface} />
-            <Text style={styles.headerBtnText}>DRIVERS</Text>
-          </Pressable>
-        ) : null}
+        <Pressable style={styles.headerBtn} onPress={openDriverModal} testID="edit-drivers">
+          <Ionicons name="car-outline" size={16} color={colors.onSurface} />
+          <Text style={styles.headerBtnText}>DRIVERS</Text>
+        </Pressable>
       </View>
 
       {showDatePicker ? (
@@ -163,7 +158,7 @@ export default function Auction() {
         <Stat label="DRIVERS" value={String(stats.drivers)} />
       </View>
 
-      {isOwner && stats.drivers === 0 ? (
+      {stats.drivers === 0 ? (
         <View style={styles.warnBox}>
           <Ionicons name="warning-outline" size={16} color={colors.warning} />
           <Text style={styles.warnText}>Set up drivers first (top-right) — driver + bhada auto-fills per lot.</Text>
@@ -193,7 +188,7 @@ export default function Auction() {
           loading ? null : (
             <Empty
               title={isWorkingToday ? "No Pattis today yet" : `No Pattis on ${displayDate}`}
-              subtitle={isOwner ? "Create Pattis via Create Action Diary (Scan or Manual Entry)." : "Ask the owner to create Pattis."}
+              subtitle="Create Pattis via Create Action Diary (Scan or Manual Entry)."
               testID="auction-empty"
             />
           )
@@ -287,9 +282,10 @@ export default function Auction() {
                   </View>
                   <Input label="Driver name" value={d.name} onChangeText={(t) => setDriverField(idx, { name: t })} testID={`driver-name-${idx}`} />
                   <Input label="Place (optional)" value={d.place || ""} onChangeText={(t) => setDriverField(idx, { place: t })} testID={`driver-place-${idx}`} />
-                  <Input label="Bhada per bag (₹)" keyboardType="decimal-pad"
+                  <Input label="Lot Bhada ₹" keyboardType="decimal-pad"
                     value={String(d.bhada_per_bag || "")}
                     onChangeText={(t) => setDriverField(idx, { bhada_per_bag: Number(t || "0") })}
+                    hint="Circled diary amount for the whole lot (not × bags)"
                     testID={`driver-bhada-${idx}`} />
                 </View>
               ))}

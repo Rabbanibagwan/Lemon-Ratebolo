@@ -7,15 +7,12 @@ import { Ionicons } from "@expo/vector-icons";
 import { api, VendorBill, VendorDashboard, VendorPayment } from "@/src/api";
 import { colors, font, money, spacing } from "@/src/theme";
 import { Empty } from "@/src/components/ui";
-import { useAuth } from "@/src/context/AuthContext";
 
 type Tab = "bills" | "payments";
 
 export default function VendorDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { session } = useAuth();
-  const isOwner = session?.role === "owner";
   const [tab, setTab] = useState<Tab>("bills");
   const [dash, setDash] = useState<VendorDashboard | null>(null);
   const [bills, setBills] = useState<VendorBill[]>([]);
@@ -30,13 +27,13 @@ export default function VendorDetail() {
       const [d, bs, ps] = await Promise.all([
         api.get<VendorDashboard>(`/vendors/${id}/dashboard`),
         api.get<VendorBill[]>(`/vendor-bills?vendor_id=${id}`),
-        isOwner ? api.get<VendorPayment[]>(`/vendor-payments?vendor_id=${id}`) : Promise.resolve([]),
+        api.get<VendorPayment[]>(`/vendor-payments?vendor_id=${id}`),
       ]);
       setDash(d); setBills(bs); setPayments(ps);
     } catch {
       /* silent */
     } finally { setLoading(false); }
-  }, [id, isOwner]);
+  }, [id]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
@@ -79,16 +76,14 @@ export default function VendorDetail() {
           <Ionicons name="document-text-outline" size={16} color={colors.onSurface} />
           <Text style={styles.actionText}>NEW BILL</Text>
         </Pressable>
-        {isOwner ? (
-          <Pressable
-            style={[styles.actionBtn, styles.actionBtnPrimary]}
-            onPress={() => router.push({ pathname: "/vendor-payment/new", params: { vendor_id: id } })}
-            testID="vendor-receive-payment"
-          >
-            <Ionicons name="cash-outline" size={16} color={colors.onBrandPrimary} />
-            <Text style={[styles.actionText, { color: colors.onBrandPrimary }]}>RECEIVE PAYMENT</Text>
-          </Pressable>
-        ) : null}
+        <Pressable
+          style={[styles.actionBtn, styles.actionBtnPrimary]}
+          onPress={() => router.push({ pathname: "/vendor-payment/new", params: { vendor_id: id } })}
+          testID="vendor-receive-payment"
+        >
+          <Ionicons name="cash-outline" size={16} color={colors.onBrandPrimary} />
+          <Text style={[styles.actionText, { color: colors.onBrandPrimary }]}>RECEIVE PAYMENT</Text>
+        </Pressable>
       </View>
 
       <View style={styles.searchRow}>
@@ -107,14 +102,12 @@ export default function VendorDetail() {
         <Pressable style={[styles.tabBtn, tab === "bills" && styles.tabBtnOn]} onPress={() => setTab("bills")} testID="tab-bills">
           <Text style={[styles.tabText, tab === "bills" && styles.tabTextOn]}>BILLS · {filteredBills.length}</Text>
         </Pressable>
-        {isOwner ? (
-          <Pressable style={[styles.tabBtn, tab === "payments" && styles.tabBtnOn]} onPress={() => setTab("payments")} testID="tab-payments">
-            <Text style={[styles.tabText, tab === "payments" && styles.tabTextOn]}>PAYMENTS · {payments.length}</Text>
-          </Pressable>
-        ) : null}
+        <Pressable style={[styles.tabBtn, tab === "payments" && styles.tabBtnOn]} onPress={() => setTab("payments")} testID="tab-payments">
+          <Text style={[styles.tabText, tab === "payments" && styles.tabTextOn]}>PAYMENTS · {payments.length}</Text>
+        </Pressable>
       </View>
 
-      {tab === "bills" || !isOwner ? (
+      {tab === "bills" ? (
         <FlatList
           data={filteredBills}
           keyExtractor={(x) => x.id}

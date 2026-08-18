@@ -16,7 +16,9 @@ import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import {
+  DriverRangeRef,
   DriverSummary,
+  auditReportAoa,
   driverDetailTotals,
   exportPdfBytes,
   farmerReportAoa,
@@ -31,15 +33,15 @@ import {
   vendorReportAoa,
   vendorTotals,
 } from "@/src/utils/reports-export";
-import { buildFarmerDetailsPdfBytes, buildVendorDetailsPdfBytes } from "@/src/utils/report-pdf";
-import { api, Patti, Settings, ShopProfile, VendorBill } from "@/src/api";
+import { buildAuditLogPdfBytes, buildFarmerDetailsPdfBytes, buildVendorDetailsPdfBytes } from "@/src/utils/report-pdf";
+import { api, AuctionDay, Patti, PattiAuditLogEntry, Settings, ShopProfile, VendorBill } from "@/src/api";
 import { useAuth } from "@/src/context/AuthContext";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
 import { Empty, Input } from "@/src/components/ui";
 import { colors, font, money, spacing } from "@/src/theme";
 
-type Mode = "entry" | "driver" | "farmer" | "vendor";
-type ExportKind = "farmer" | "vendor";
+type Mode = "entry" | "driver" | "farmer" | "vendor" | "audit";
+type ExportKind = "farmer" | "vendor" | "audit";
 type ExportAction = "save" | "share";
 type ExportFormat = "pdf" | "xlsx";
 
@@ -69,17 +71,32 @@ function exportResultMessage(
           : `${file} downloaded (browser share unavailable). Check your Downloads folder.`,
     };
   }
+  if (result === "printed" && format === "pdf") {
+    return {
+      title: "Ready",
+      body: "PDF is ready.",
+    };
+  }
   return { title: "Ready", body: `${file} is ready.` };
+}
+
+/** e.g. 2026-08-14 → 14-08-2026 for clear download filenames. */
+function pdfDateStamp(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim());
+  if (!m) return iso.replace(/[^\w.\-]+/g, "_");
+  return `${m[3]}-${m[2]}-${m[1]}`;
 }
 
 export default function Reports() {
   const router = useRouter();
   const { session } = useAuth();
+  const isOwner = session?.role === "owner";
   const { workingDateISO, displayDate } = useWorkingDate();
 
   const [mode, setMode] = useState<Mode>("entry");
   const [pattis, setPattis] = useState<Patti[] | null>(null);
   const [bills, setBills] = useState<VendorBill[] | null>(null);
+  const [auditRows, setAuditRows] = useState<PattiAuditLogEntry[] | null>(null);
   const [shopName, setShopName] = useState(session?.shop_name || "");
   const [settings, setSettings] = useState<Settings | null>(null);
   const [loading, setLoading] = useState(false);
@@ -87,28 +104,49 @@ export default function Reports() {
   const [formatPicker, setFormatPicker] = useState<FormatPicker>(null);
   const [search, setSearch] = useState("");
   const [selectedDriver, setSelectedDriver] = useState<string | null>(null);
+  const [auctionDrivers, setAuctionDrivers] = useState<DriverRangeRef[]>([]);
 
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      const [ps, vs, profile, st] = await Promise.all([
+      const [ps, vs, profile, st, day] = await Promise.all([
         api.get<Patti[]>(`/pattis?date=${workingDateISO}`),
         api.get<VendorBill[]>(`/vendor-bills?date=${workingDateISO}`),
         api.get<ShopProfile>("/shop/profile").catch(() => null),
         api.get<Settings>("/settings").catch(() => null),
+        api.get<AuctionDay>(`/auction-days/today?date=${workingDateISO}`).catch(() => null),
       ]);
       setPattis(ps || []);
       setBills(vs || []);
       setSettings(st);
+      setAuctionDrivers(
+        (day?.drivers || []).map((d) => ({
+          range_from: d.range_from,
+          range_to: d.range_to,
+          name: d.name,
+        })),
+      );
       if (profile?.shop_name) setShopName(profile.shop_name);
       else if (session?.shop_name) setShopName(session.shop_name);
+
+      if (session?.role === "owner") {
+        const audit = await api
+          .get<PattiAuditLogEntry[]>(`/reports/audit-log?date=${workingDateISO}`)
+          .catch(() => []);
+        setAuditRows(audit || []);
+      } else {
+        setAuditRows(null);
+        setMode((m) => (m === "audit" ? "entry" : m));
+      }
     } catch {
       setPattis([]);
       setBills([]);
+      setAuctionDrivers([]);
+      setAuditRows(session?.role === "owner" ? [] : null);
     } finally {
       setLoading(false);
     }
-  }, [workingDateISO, session?.shop_name]);
+  }, [workingDateISO, session?.shop_name, session?.role]);
 
   useFocusEffect(
     useCallback(() => {
@@ -143,7 +181,23 @@ export default function Reports() {
     });
   }, [pattis, search]);
 
-  const fTotals = useMemo(() => farmerTotals(pattis || []), [pattis]);
+  const auditFiltered = useMemo(() => {
+    const items = auditRows || [];
+    const s = search.trim().toLowerCase();
+    if (!s) return items;
+    return items.filter((r) => {
+      return (
+        String(r.patti_no).includes(s) ||
+        (r.lot_no || "").toLowerCase().includes(s) ||
+        (r.farmer_name || "").toLowerCase().includes(s) ||
+        (r.driver_name || "").toLowerCase().includes(s) ||
+        (r.action || "").toLowerCase().includes(s) ||
+        (r.by || "").toLowerCase().includes(s)
+      );
+    });
+  }, [auditRows, search]);
+
+  const fTotals = useMemo(() => farmerTotals(pattis || [], auctionDrivers), [pattis, auctionDrivers]);
   const vTotals = useMemo(() => vendorTotals(bills || []), [bills]);
 
   const runExport = async (fn: () => Promise<void>) => {
@@ -158,6 +212,7 @@ export default function Reports() {
   };
 
   const exportDriver = (d: DriverSummary, action: "print" | "share") => {
+    if (!isOwner) return;
     void runExport(async () => {
       if (action === "print") {
         await thermalPrintDriverReport(d, workingDateISO, merchant, settings);
@@ -173,22 +228,36 @@ export default function Reports() {
   };
 
   const runDetailExport = (kind: ExportKind, action: ExportAction, format: ExportFormat) => {
+    if (!isOwner) return;
     setFormatPicker(null);
     void runExport(async () => {
-      const title = kind === "farmer" ? "Farmer Details" : "Vendor Details";
-      const stem = kind === "farmer" ? "farmer-details" : "vendor-details";
+      const title =
+        kind === "farmer" ? "Farmer Details" : kind === "vendor" ? "Vendor Details" : "Audit Log";
+      const stem =
+        kind === "farmer" ? "farmer-details" : kind === "vendor" ? "vendor-details" : "audit-log";
 
       if (format === "pdf") {
+        // Real jsPDF A4 bytes (selectable text, multi-page) — never screenshot / HTML print capture.
+        const stamp = pdfDateStamp(workingDateISO);
+        const filename =
+          kind === "farmer"
+            ? `Farmer_Details_${stamp}.pdf`
+            : kind === "vendor"
+              ? `Vendor_Details_${stamp}.pdf`
+              : `Audit_Log_${stamp}.pdf`;
         const bytes =
           kind === "farmer"
-            ? buildFarmerDetailsPdfBytes(pattis || [], workingDateISO, merchant, userName)
-            : buildVendorDetailsPdfBytes(bills || [], workingDateISO, merchant, userName);
-        const result = await exportPdfBytes(
-          bytes,
-          `${stem}-${workingDateISO}.pdf`,
-          title,
-          action,
-        );
+            ? buildFarmerDetailsPdfBytes(
+                pattis || [],
+                workingDateISO,
+                merchant,
+                userName,
+                auctionDrivers,
+              )
+            : kind === "vendor"
+              ? buildVendorDetailsPdfBytes(bills || [], workingDateISO, merchant, userName)
+              : buildAuditLogPdfBytes(auditFiltered, workingDateISO, merchant, userName);
+        const result = await exportPdfBytes(bytes, filename, title, action);
         const msg = exportResultMessage(result, "pdf", action);
         notify(msg.title, msg.body);
         return;
@@ -196,18 +265,23 @@ export default function Reports() {
 
       const rows =
         kind === "farmer"
-          ? farmerReportAoa(pattis || [], workingDateISO, merchant)
-          : vendorReportAoa(bills || [], workingDateISO, merchant);
+          ? farmerReportAoa(pattis || [], workingDateISO, merchant, auctionDrivers)
+          : kind === "vendor"
+            ? vendorReportAoa(bills || [], workingDateISO, merchant)
+            : auditReportAoa(auditFiltered, workingDateISO, merchant);
       const result = await shareXlsx(rows, `${stem}-${workingDateISO}.xlsx`, `${title} Excel`, action);
       const msg = exportResultMessage(result, "xlsx", action);
       notify(msg.title, msg.body);
     });
   };
 
+  // Merchant only: Print / Save (PDF·Excel) / Share. Staff may view + search only.
   const showActions =
-    (mode === "farmer" && !selectedDriver) ||
-    (mode === "vendor" && !selectedDriver) ||
-    (mode === "driver" && !!driverDetail);
+    !!isOwner &&
+    ((mode === "farmer" && !selectedDriver) ||
+      (mode === "vendor" && !selectedDriver) ||
+      (mode === "audit" && !selectedDriver) ||
+      (mode === "driver" && !!driverDetail));
 
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
@@ -237,6 +311,7 @@ export default function Reports() {
                 if (mode === "driver" && driverDetail) exportDriver(driverDetail, "print");
                 else if (mode === "farmer") setFormatPicker({ kind: "farmer", action: "save" });
                 else if (mode === "vendor") setFormatPicker({ kind: "vendor", action: "save" });
+                else if (mode === "audit") setFormatPicker({ kind: "audit", action: "save" });
               }}
               testID="reports-save"
             >
@@ -256,6 +331,7 @@ export default function Reports() {
                 if (mode === "driver" && driverDetail) exportDriver(driverDetail, "share");
                 else if (mode === "farmer") setFormatPicker({ kind: "farmer", action: "share" });
                 else if (mode === "vendor") setFormatPicker({ kind: "vendor", action: "share" });
+                else if (mode === "audit") setFormatPicker({ kind: "audit", action: "share" });
               }}
               testID="reports-share"
             >
@@ -279,7 +355,12 @@ export default function Reports() {
               {formatPicker?.action === "share" ? "SHARE AS" : "SAVE / EXPORT AS"}
             </Text>
             <Text style={styles.modalSub}>
-              {formatPicker?.kind === "vendor" ? "Vendor Details" : "Farmer Details"} · {displayDate}
+              {formatPicker?.kind === "vendor"
+                ? "Vendor Details"
+                : formatPicker?.kind === "audit"
+                  ? "Audit Log"
+                  : "Farmer Details"}{" "}
+              · {displayDate}
             </Text>
             <Pressable
               style={styles.modalOption}
@@ -313,10 +394,13 @@ export default function Reports() {
           style={styles.segRow}
           contentContainerStyle={{ paddingHorizontal: spacing.lg, gap: 0 }}
         >
-          <Seg label="ENTRY BOOK" active={mode === "entry"} onPress={() => { setMode("entry"); setSelectedDriver(null); }} testID="report-seg-entry" />
-          <Seg label="DRIVER DETAILS" active={mode === "driver"} onPress={() => { setMode("driver"); setSelectedDriver(null); }} testID="report-seg-driver" />
-          <Seg label="FARMER DETAILS" active={mode === "farmer"} onPress={() => { setMode("farmer"); setSelectedDriver(null); }} testID="report-seg-farmer" />
-          <Seg label="VENDOR DETAILS" active={mode === "vendor"} onPress={() => { setMode("vendor"); setSelectedDriver(null); }} testID="report-seg-vendor" />
+          <Seg label="ENTRY BOOK" active={mode === "entry"} onPress={() => { setMode("entry"); setSelectedDriver(null); setSearch(""); }} testID="report-seg-entry" />
+          <Seg label="DRIVER DETAILS" active={mode === "driver"} onPress={() => { setMode("driver"); setSelectedDriver(null); setSearch(""); }} testID="report-seg-driver" />
+          <Seg label="FARMER DETAILS" active={mode === "farmer"} onPress={() => { setMode("farmer"); setSelectedDriver(null); setSearch(""); }} testID="report-seg-farmer" />
+          <Seg label="VENDOR DETAILS" active={mode === "vendor"} onPress={() => { setMode("vendor"); setSelectedDriver(null); setSearch(""); }} testID="report-seg-vendor" />
+          {isOwner ? (
+            <Seg label="AUDIT LOG" active={mode === "audit"} onPress={() => { setMode("audit"); setSelectedDriver(null); setSearch(""); }} testID="report-seg-audit" />
+          ) : null}
         </ScrollView>
       ) : null}
 
@@ -330,10 +414,11 @@ export default function Reports() {
           search={search}
           onSearch={setSearch}
           loading={loading}
+          drivers={auctionDrivers}
           onOpen={(id) => router.push(`/patti/${id}`)}
         />
       ) : mode === "driver" && driverDetail ? (
-        <DriverDetailView d={driverDetail} />
+        <DriverDetailView d={driverDetail} drivers={auctionDrivers} />
       ) : mode === "driver" ? (
         <FlatList
           data={drivers}
@@ -385,13 +470,14 @@ export default function Reports() {
           ListHeaderComponent={
             (pattis || []).length ? (
               <View style={styles.thRow}>
-                <Text style={[styles.th, { flex: 0.55 }]}>PATTI</Text>
-                <Text style={[styles.th, { flex: 0.75 }]}>LOT</Text>
-                <Text style={[styles.th, { flex: 1.1 }]}>FARMER</Text>
-                <Text style={[styles.th, { flex: 0.5, textAlign: "right" }]}>BAGS</Text>
-                <Text style={[styles.th, { flex: 0.8, textAlign: "right" }]}>BHADA</Text>
-                <Text style={[styles.th, { flex: 0.9, textAlign: "right" }]}>PAYABLE</Text>
-                <Text style={[styles.th, { flex: 0.8 }]}>RECV</Text>
+                <Text style={[styles.th, { flex: 0.5 }]}>PATTI</Text>
+                <Text style={[styles.th, { flex: 0.65 }]}>LOT</Text>
+                <Text style={[styles.th, { flex: 1 }]}>FARMER</Text>
+                <Text style={[styles.th, { flex: 0.45, textAlign: "right" }]}>BAGS</Text>
+                <Text style={[styles.th, { flex: 0.7, textAlign: "right" }]}>BHADA</Text>
+                <Text style={[styles.th, { flex: 0.85, textAlign: "right" }]}>GROSS</Text>
+                <Text style={[styles.th, { flex: 0.85, textAlign: "right" }]}>PAYABLE</Text>
+                <Text style={[styles.th, { flex: 0.75 }]}>RECV</Text>
               </View>
             ) : null
           }
@@ -401,15 +487,16 @@ export default function Reports() {
                 rows={[
                   { label: "TOTAL BAGS", value: String(fTotals.total_bags) },
                   { label: "TOTAL BHADA", value: money(fTotals.total_bhada) },
-                  { label: "GROSS PAYABLE", value: money(fTotals.gross_payable) },
-                  { label: "RECEIVED", value: money(fTotals.received_amount) },
-                  { label: "OUTSTANDING", value: money(fTotals.outstanding), emphasize: true },
+                  { label: "TOTAL GROSS TOTAL", value: money(fTotals.total_gross) },
+                  { label: "TOTAL PAYABLE AMOUNT", value: money(fTotals.gross_payable), emphasize: true },
                 ]}
               />
             ) : null
           }
-          renderItem={({ item }) => <PattiMoneyRow p={item} />}
+          renderItem={({ item }) => <FarmerDetailsRow p={item} drivers={auctionDrivers} />}
         />
+      ) : mode === "audit" ? (
+        <AuditLogView rows={auditFiltered} search={search} onSearch={setSearch} loading={loading} />
       ) : (
         <FlatList
           data={bills || []}
@@ -456,17 +543,116 @@ export default function Reports() {
   );
 }
 
+function formatAuditWhen(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso || "—";
+  return d.toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function AuditLogView({
+  rows,
+  search,
+  onSearch,
+  loading,
+}: {
+  rows: PattiAuditLogEntry[];
+  search: string;
+  onSearch: (s: string) => void;
+  loading: boolean;
+}) {
+  return (
+    <View style={{ flex: 1 }}>
+      <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.sm }}>
+        <Input
+          placeholder="Search patti, lot, farmer, driver, action…"
+          value={search}
+          onChangeText={onSearch}
+          autoCapitalize="none"
+          autoCorrect={false}
+          testID="audit-search"
+        />
+      </View>
+      <FlatList
+        data={rows}
+        keyExtractor={(x) => x.id}
+        contentContainerStyle={{ padding: spacing.lg, gap: spacing.sm, paddingBottom: 120, paddingTop: 0 }}
+        ListEmptyComponent={
+          loading ? null : (
+            <Empty
+              title="No audit records"
+              subtitle="Deleted and reprinted Farmer Pattis for this date appear here."
+              testID="audit-empty"
+            />
+          )
+        }
+        ListHeaderComponent={
+          rows.length ? (
+            <View style={styles.thRow}>
+              <Text style={[styles.th, { flex: 0.55 }]}>PATTI</Text>
+              <Text style={[styles.th, { flex: 0.7 }]}>LOT</Text>
+              <Text style={[styles.th, { flex: 0.45, textAlign: "right" }]}>BAGS</Text>
+              <Text style={[styles.th, { flex: 1.1 }]}>FARMER</Text>
+              <Text style={[styles.th, { flex: 0.9 }]}>DRIVER</Text>
+              <Text style={[styles.th, { flex: 0.85 }]}>ACTION</Text>
+              <Text style={[styles.th, { flex: 1.1 }]}>DATE/TIME</Text>
+            </View>
+          ) : null
+        }
+        renderItem={({ item }) => (
+          <View style={styles.row} testID={`audit-row-${item.id}`}>
+            <Text style={[styles.mono, styles.strong, { flex: 0.55 }]} numberOfLines={1}>
+              #{item.patti_no}
+            </Text>
+            <Text style={[styles.mono, { flex: 0.7 }]} numberOfLines={1}>
+              {item.lot_no || "—"}
+            </Text>
+            <Text style={[styles.mono, { flex: 0.45, textAlign: "right" }]}>{item.bags}</Text>
+            <Text style={[styles.cellDim, { flex: 1.1 }]} numberOfLines={1}>
+              {item.farmer_name || "—"}
+            </Text>
+            <Text style={[styles.cellDim, { flex: 0.9 }]} numberOfLines={1}>
+              {item.driver_name || "—"}
+            </Text>
+            <Text
+              style={[
+                styles.mono,
+                styles.strong,
+                { flex: 0.85 },
+                item.action === "DELETED" ? { color: colors.error } : null,
+              ]}
+              numberOfLines={1}
+            >
+              {item.action}
+            </Text>
+            <Text style={[styles.cellDim, { flex: 1.1 }]} numberOfLines={2}>
+              {formatAuditWhen(item.at)}
+            </Text>
+          </View>
+        )}
+      />
+    </View>
+  );
+}
+
 function EntryBook({
   rows,
   search,
   onSearch,
   loading,
+  drivers,
   onOpen,
 }: {
   rows: Patti[];
   search: string;
   onSearch: (s: string) => void;
   loading: boolean;
+  drivers: DriverRangeRef[];
   onOpen: (id: string) => void;
 }) {
   return (
@@ -502,7 +688,7 @@ function EntryBook({
           ) : null
         }
         renderItem={({ item }) => {
-          const received = isPattiReceived(item);
+          const received = isPattiReceived(item, drivers);
           return (
             <Pressable
               style={[styles.row, received && styles.rowReceived]}
@@ -516,7 +702,7 @@ function EntryBook({
               <Text style={[styles.mono, { flex: 0.55, textAlign: "right" }]}>{item.total_bags}</Text>
               <Text style={[styles.cellDim, { flex: 1.2 }]} numberOfLines={1}>{item.farmer_name}</Text>
               <Text style={[styles.cellDim, { flex: 1 }]} numberOfLines={1}>{item.driver_name || "—"}</Text>
-              <Text style={[styles.cellDim, { flex: 1 }]} numberOfLines={1}>{receiverDisplay(item)}</Text>
+              <Text style={[styles.cellDim, { flex: 1 }]} numberOfLines={1}>{receiverDisplay(item, drivers)}</Text>
             </Pressable>
           );
         }}
@@ -525,8 +711,8 @@ function EntryBook({
   );
 }
 
-function DriverDetailView({ d }: { d: DriverSummary }) {
-  const totals = driverDetailTotals(d.pattis);
+function DriverDetailView({ d, drivers }: { d: DriverSummary; drivers: DriverRangeRef[] }) {
+  const totals = driverDetailTotals(d.pattis, drivers);
   return (
     <FlatList
       data={d.pattis}
@@ -560,13 +746,41 @@ function DriverDetailView({ d }: { d: DriverSummary }) {
           ]}
         />
       }
-      renderItem={({ item }) => <PattiMoneyRow p={item} />}
+      renderItem={({ item }) => <PattiMoneyRow p={item} drivers={drivers} />}
     />
   );
 }
 
-function PattiMoneyRow({ p }: { p: Patti }) {
-  const received = isPattiReceived(p);
+function FarmerDetailsRow({ p, drivers }: { p: Patti; drivers: DriverRangeRef[] }) {
+  const received = isPattiReceived(p, drivers);
+  return (
+    <View style={[styles.row, received && styles.rowReceived]}>
+      <View style={{ flex: 0.5, flexDirection: "row", alignItems: "center", gap: 2 }}>
+        {received ? <Text style={styles.check}>✓</Text> : null}
+        <Text style={styles.mono}>#{p.patti_no}</Text>
+      </View>
+      <Text style={[styles.mono, { flex: 0.65 }]} numberOfLines={1}>{lotLabel(p)}</Text>
+      <Text style={[styles.cellDim, { flex: 1 }]} numberOfLines={1}>{p.farmer_name}</Text>
+      <Text style={[styles.mono, { flex: 0.45, textAlign: "right" }]}>{p.total_bags}</Text>
+      <Text style={[styles.mono, { flex: 0.7, textAlign: "right" }]}>{money(p.bhada_total)}</Text>
+      <Text style={[styles.mono, { flex: 0.85, textAlign: "right" }]}>{money(p.farmer_gross)}</Text>
+      <Text
+        style={[
+          styles.mono,
+          styles.strong,
+          { flex: 0.85, textAlign: "right" },
+          received && styles.strike,
+        ]}
+      >
+        {money(p.net_payable)}
+      </Text>
+      <Text style={[styles.cellDim, { flex: 0.75 }]} numberOfLines={1}>{receiverDisplay(p, drivers)}</Text>
+    </View>
+  );
+}
+
+function PattiMoneyRow({ p, drivers }: { p: Patti; drivers?: DriverRangeRef[] }) {
+  const received = isPattiReceived(p, drivers);
   return (
     <View style={[styles.row, received && styles.rowReceived]}>
       <View style={{ flex: 0.55, flexDirection: "row", alignItems: "center", gap: 2 }}>
@@ -587,7 +801,7 @@ function PattiMoneyRow({ p }: { p: Patti }) {
       >
         {money(p.net_payable)}
       </Text>
-      <Text style={[styles.cellDim, { flex: 0.8 }]} numberOfLines={1}>{receiverDisplay(p)}</Text>
+      <Text style={[styles.cellDim, { flex: 0.8 }]} numberOfLines={1}>{receiverDisplay(p, drivers)}</Text>
     </View>
   );
 }

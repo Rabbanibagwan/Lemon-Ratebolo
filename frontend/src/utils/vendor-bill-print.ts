@@ -190,6 +190,15 @@ export async function shareVendorBillPdf(
   } else if (Platform.OS !== "web") {
     await Share.share({ url: uri, title: `Bill ${b.bill_code}` });
   } else {
-    Alert.alert("PDF ready", uri);
+    const res = await fetch(uri);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${b.bill_code}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
   }
 }

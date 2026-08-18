@@ -13,7 +13,7 @@ import { useAuth } from "@/src/context/AuthContext";
 import { colors, font, money, spacing } from "@/src/theme";
 import { Button, Input } from "@/src/components/ui";
 import { qrDataUri } from "@/src/utils/qr";
-import { thermalPrintAndMark, sharePattiPdf } from "@/src/utils/patti-print";
+import { thermalPrintAndMark, sharePattiPdf, canUserPrintPatti, canUserSharePatti, staffPrintBlockedMessage, staffShareBlockedMessage } from "@/src/utils/patti-print";
 import { clampPaperMm, thermalPrintUserMessage } from "@/src/utils/thermal-print";
 
 export default function PattiDetail() {
@@ -34,6 +34,9 @@ export default function PattiDetail() {
   const [receiver, setReceiver] = useState("");
   const [receiverErr, setReceiverErr] = useState<string | null>(null);
   const [savingReceiver, setSavingReceiver] = useState(false);
+
+  const canPrint = canUserPrintPatti(p, session);
+  const canShare = canUserSharePatti(session);
 
   const load = useCallback(async () => {
     try {
@@ -68,10 +71,18 @@ export default function PattiDetail() {
     if (loading || autoActionRan || !p) return;
     if (autoPrint === "1") {
       setAutoActionRan(true);
+      if (!canUserPrintPatti(p, session)) {
+        Alert.alert("Already printed", staffPrintBlockedMessage());
+        return;
+      }
       // Small delay so the UI can render first.
       setTimeout(() => { printThermal(); }, 250);
     } else if (autoShare === "1") {
       setAutoActionRan(true);
+      if (!canUserSharePatti(session)) {
+        Alert.alert("Share unavailable", staffShareBlockedMessage());
+        return;
+      }
       setTimeout(() => { share(); }, 250);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -79,6 +90,10 @@ export default function PattiDetail() {
 
   const share = async () => {
     if (!p || !session) return;
+    if (!canUserSharePatti(session)) {
+      Alert.alert("Share unavailable", staffShareBlockedMessage());
+      return;
+    }
     try {
       setSharing(true);
       await sharePattiPdf(
@@ -97,6 +112,10 @@ export default function PattiDetail() {
 
   const printThermal = async () => {
     if (!p || !session) return;
+    if (!canUserPrintPatti(p, session)) {
+      Alert.alert("Already printed", staffPrintBlockedMessage());
+      return;
+    }
     try {
       setSharing(true);
       const paperMm = clampPaperMm(settings?.thermal_paper_width_mm || 80);
@@ -104,11 +123,16 @@ export default function PattiDetail() {
         p,
         profile || { shop_name: session.shop_name } as any,
         paperMm,
+        session,
       );
       setP(updated);
-    } catch (e) {
+    } catch (e: any) {
       console.warn("thermal print error", e);
-      Alert.alert("Print failed", `${thermalPrintUserMessage(e)} Patti stays Saved (not Printed).`);
+      const detail = typeof e?.detail === "string" ? e.detail : null;
+      Alert.alert(
+        "Print failed",
+        detail || `${thermalPrintUserMessage(e)} Patti stays Saved (not Printed).`,
+      );
     } finally {
       setSharing(false);
     }
@@ -292,19 +316,36 @@ export default function PattiDetail() {
 
       <View style={styles.footerBar}>
         <View style={styles.footerRow}>
-          <Pressable
-            style={styles.thermalBtn}
-            onPress={printThermal}
-            disabled={sharing}
-            testID="patti-print-thermal"
-          >
-            <Ionicons name="print-outline" size={18} color={colors.onSurface} />
-            <Text style={styles.thermalBtnText}>PRINT</Text>
-          </Pressable>
-          <View style={{ flex: 1 }}>
-            <Button label={sharing ? "PREPARING…" : "SHARE PDF"} onPress={share} loading={sharing} testID="patti-share" />
-          </View>
+          {canPrint ? (
+            <Pressable
+              style={[styles.thermalBtn, !canShare && { flex: 1 }]}
+              onPress={printThermal}
+              disabled={sharing}
+              testID="patti-print-thermal"
+            >
+              <Ionicons name="print-outline" size={18} color={colors.onSurface} />
+              <Text style={styles.thermalBtnText}>PRINT</Text>
+            </Pressable>
+          ) : isOwner ? (
+            <View style={[styles.thermalBtn, styles.thermalBtnDisabled]} testID="patti-print-disabled">
+              <Ionicons name="print-outline" size={18} color={colors.muted} />
+              <Text style={[styles.thermalBtnText, { color: colors.muted }]}>PRINTED</Text>
+            </View>
+          ) : (
+            <View style={[styles.thermalBtn, styles.thermalBtnDisabled, { flex: 1 }]} testID="patti-print-disabled">
+              <Ionicons name="print-outline" size={18} color={colors.muted} />
+              <Text style={[styles.thermalBtnText, { color: colors.muted }]}>PRINTED</Text>
+            </View>
+          )}
+          {canShare ? (
+            <View style={{ flex: 1 }}>
+              <Button label={sharing ? "PREPARING…" : "SHARE PDF"} onPress={share} loading={sharing} testID="patti-share" />
+            </View>
+          ) : null}
         </View>
+        {!canPrint && !isOwner ? (
+          <Text style={styles.staffPrintHint}>Staff print used — reprint and share unavailable.</Text>
+        ) : null}
       </View>
 
       {/* Edit receiver modal */}
@@ -450,7 +491,11 @@ const styles = StyleSheet.create({
     borderWidth: 2, borderColor: colors.borderStrong, paddingHorizontal: 14,
     backgroundColor: colors.surface,
   },
+  thermalBtnDisabled: { opacity: 0.7, backgroundColor: colors.surfaceSecondary },
   thermalBtnText: { fontSize: 12, letterSpacing: 1, fontWeight: "900", color: colors.onSurface, fontFamily: font.display },
+  staffPrintHint: {
+    marginTop: 8, fontSize: 11, color: colors.muted, fontFamily: font.display, fontWeight: "700",
+  },
 
   modalRoot: { flex: 1, justifyContent: "flex-end" },
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.45)" },

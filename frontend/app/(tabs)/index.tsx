@@ -4,7 +4,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
-import { api, Dashboard } from "@/src/api";
+import { api, BagWallet, Dashboard } from "@/src/api";
 import { useAuth } from "@/src/context/AuthContext";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
 import { colors, font, money, spacing } from "@/src/theme";
@@ -15,6 +15,7 @@ export default function Home() {
   const router = useRouter();
   const { workingDate, workingDateISO, displayDate, isWorkingToday, setWorkingDate } = useWorkingDate();
   const [data, setData] = useState<Dashboard | null>(null);
+  const [wallet, setWallet] = useState<BagWallet | null>(null);
   const [loading, setLoading] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const isOwner = session?.role === "owner";
@@ -25,12 +26,21 @@ export default function Home() {
       setLoading(true);
       const d = await api.get<Dashboard>(`/dashboard?date=${day}`);
       setData(d);
+      if (session?.role === "owner") {
+        try {
+          setWallet(await api.get<BagWallet>("/billing/wallet"));
+        } catch {
+          setWallet(null);
+        }
+      } else {
+        setWallet(null);
+      }
     } catch {
       // silent
     } finally {
       setLoading(false);
     }
-  }, [workingDateISO]);
+  }, [workingDateISO, session?.role]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
@@ -82,15 +92,43 @@ export default function Home() {
         <Text style={styles.sectionLabel}>{isWorkingToday ? "Today · Snapshot" : `${displayDate} · Snapshot`}</Text>
 
         <View style={styles.kpiGrid}>
-          <KPI big label="Farmer Payout" value={money(data?.today_farmer_payout || 0)} accent testID="kpi-payout" />
-          <KPI label="Gross" value={money(data?.today_gross || 0)} testID="kpi-gross" />
+          {isOwner ? (
+            <>
+              <KPI big label="Farmer Payout" value={money(data?.today_farmer_payout || 0)} accent testID="kpi-payout" />
+              <KPI label="Gross" value={money(data?.today_gross || 0)} testID="kpi-gross" />
+            </>
+          ) : null}
           <KPI label="Pattis" value={String(data?.today_pattis ?? 0)} testID="kpi-pattis" />
           <KPI label="Lots" value={String(data?.today_lots ?? 0)} testID="kpi-lots" />
           <KPI label="Bags" value={String(data?.today_bags ?? 0)} testID="kpi-bags" />
           <KPI label="Pending" value={String(data?.today_pending ?? 0)} accent={(data?.today_pending ?? 0) > 0} testID="kpi-pending" />
         </View>
 
-        {isOwner && (
+        {isOwner && wallet ? (
+          <>
+            <Text style={[styles.sectionLabel, { marginTop: spacing.xl }]}>Bag Balance</Text>
+            <Pressable
+              style={styles.bagCard}
+              onPress={() => router.push("/billing")}
+              testID="home-bag-wallet"
+            >
+              <Text style={styles.bagAvailLabel}>TOTAL AVAILABLE</Text>
+              <Text style={styles.bagAvailValue}>{wallet.total_available.toLocaleString()} BAGS</Text>
+              {wallet.low_balance ? (
+                <Text style={styles.bagWarn}>Only {wallet.total_available} bags remaining.</Text>
+              ) : null}
+              <Text style={styles.bagLine}>
+                FREE {wallet.free_used.toLocaleString()} / {wallet.free_allocated.toLocaleString()} USED · REMAINING {wallet.free_remaining.toLocaleString()}
+              </Text>
+              <Text style={styles.bagLine}>
+                PURCHASED {wallet.purchased_bags.toLocaleString()} · USED {wallet.purchased_used.toLocaleString()} · {money(wallet.price_per_bag)} / BAG
+              </Text>
+              <Text style={styles.bagCta}>PURCHASE BAGS →</Text>
+            </Pressable>
+          </>
+        ) : null}
+
+        {isOwner ? (
           <>
             <Text style={[styles.sectionLabel, { marginTop: spacing.xl }]}>Shop</Text>
             <View style={styles.kpiGrid}>
@@ -98,28 +136,35 @@ export default function Home() {
               <KPI label="Vendors" value={String(data?.total_vendors ?? 0)} onPress={() => router.push("/vendors")} testID="kpi-vendors" />
             </View>
           </>
+        ) : (
+          <>
+            <Text style={[styles.sectionLabel, { marginTop: spacing.xl }]}>Vendors</Text>
+            <View style={styles.kpiGrid}>
+              <KPI label="Vendors" value={String(data?.total_vendors ?? 0)} onPress={() => router.push("/vendors")} testID="kpi-vendors" />
+            </View>
+          </>
         )}
 
         <Text style={[styles.sectionLabel, { marginTop: spacing.xl }]}>Quick Actions</Text>
         <View style={styles.quickRow}>
+          <QuickTile icon="search-outline" label="Search" onPress={() => router.push("/search")} testID="quick-search" />
           <QuickTile icon="qr-code-outline" label="Scan Patti" onPress={() => router.push("/scan")} testID="quick-scan" />
-          {isOwner && <QuickTile icon="add-circle-outline" label="Create Action Diary" onPress={() => router.push("/action-diary")} testID="quick-action-diary" />}
+          <QuickTile icon="add-circle-outline" label="Create Action Diary" onPress={() => router.push("/action-diary")} testID="quick-action-diary" />
           <QuickTile icon="document-text-outline" label="Patti Details" onPress={() => router.push("/(tabs)/history")} testID="quick-pattis" />
-          {isOwner && <QuickTile icon="cash-outline" label="Vendors" onPress={() => router.push("/vendors")} testID="quick-vendors" />}
-          <QuickTile icon="book-outline" label="Account Ledger" onPress={() => router.push("/account-ledger")} testID="quick-ledger" />
+          <QuickTile icon="cash-outline" label="Vendors" onPress={() => router.push("/vendors")} testID="quick-vendors" />
+          {isOwner && <QuickTile icon="book-outline" label="Account Ledger" onPress={() => router.push("/account-ledger")} testID="quick-ledger" />}
+          {isOwner && <QuickTile icon="bag-handle-outline" label="Bag Balance" onPress={() => router.push("/billing")} testID="quick-billing" />}
         </View>
       </ScrollView>
 
-      {isOwner && (
-        <Pressable
-          style={({ pressed }) => [styles.fab, { opacity: pressed ? 0.85 : 1 }]}
-          onPress={() => router.push("/action-diary")}
-          testID="home-create-diary-fab"
-        >
-          <Ionicons name="add-circle" size={20} color={colors.onBrandPrimary} />
-          <Text style={styles.fabText}>CREATE ACTION DIARY</Text>
-        </Pressable>
-      )}
+      <Pressable
+        style={({ pressed }) => [styles.fab, { opacity: pressed ? 0.85 : 1 }]}
+        onPress={() => router.push("/action-diary")}
+        testID="home-create-diary-fab"
+      >
+        <Ionicons name="add-circle" size={20} color={colors.onBrandPrimary} />
+        <Text style={styles.fabText}>CREATE ACTION DIARY</Text>
+      </Pressable>
     </SafeAreaView>
   );
 }
@@ -183,4 +228,12 @@ const styles = StyleSheet.create({
     paddingVertical: 16, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
   },
   fabText: { color: colors.onBrandPrimary, fontFamily: font.display, fontWeight: "900", letterSpacing: 1, fontSize: 14 },
+  bagCard: {
+    borderWidth: 2, borderColor: colors.borderStrong, padding: spacing.md, gap: 4, backgroundColor: colors.surface,
+  },
+  bagAvailLabel: { fontSize: 11, letterSpacing: 1.5, color: colors.muted, fontFamily: font.display, fontWeight: "800" },
+  bagAvailValue: { fontSize: 26, fontWeight: "900", fontFamily: font.mono, color: colors.onSurface },
+  bagWarn: { fontSize: 13, color: "#B45309", fontFamily: font.display, fontWeight: "700", marginTop: 2 },
+  bagLine: { fontSize: 12, color: colors.onSurface, fontFamily: font.mono, marginTop: 2 },
+  bagCta: { marginTop: 8, fontSize: 12, letterSpacing: 1, fontWeight: "900", fontFamily: font.display, color: colors.brandPrimary },
 });
