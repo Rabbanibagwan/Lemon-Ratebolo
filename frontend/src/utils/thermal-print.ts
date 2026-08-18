@@ -199,6 +199,7 @@ export function estimateThermalHeightMm(html: string, paperMm: number): number {
   const hrs = (html.match(/class="hr"/g) || []).length;
   const nets = (html.match(/class="netbox"/g) || []).length;
   const centers = (html.match(/class="center\b/g) || []).length;
+  const tableRows = rows > 0 ? 0 : (html.match(/<tr[\s>]/gi) || []).length;
   const hasQr = /class="qr"/i.test(html);
   const lineMm = (m.rowFs + 3) * pxToMm;
   const bigMm = (m.bigFs + 3) * pxToMm;
@@ -207,6 +208,7 @@ export function estimateThermalHeightMm(html: string, paperMm: number): number {
     centers * bigMm +
     rows * lineMm +
     kvs * lineMm +
+    tableRows * lineMm +
     hrs * 1.1 +
     nets * (m.hugeFs + 12) * pxToMm +
     (hasQr ? (m.qrPx + 14) * pxToMm : 0) +

@@ -378,22 +378,22 @@ export function buildAuditLogPdfBytes(
     { key: "Patti No.", w: 18 },
     { key: "Lot No.", w: 22 },
     { key: "Bags", w: 14, align: "right" },
-    { key: "Farmer Name", w: 40 },
-    { key: "Driver Name", w: 32 },
+    { key: "Farmer", w: 36 },
     { key: "Action", w: 24 },
-    { key: "Date/Time", w: 38 },
-    { key: "By", w: 28 },
+    { key: "Remark", w: 42 },
+    { key: "User", w: 28 },
+    { key: "Date/Time", w: 36 },
   ];
 
   const tableRows = rows.map((r) => ({
     "Patti No.": `#${r.patti_no}`,
     "Lot No.": r.lot_no || "-",
     Bags: String(r.bags ?? 0),
-    "Farmer Name": r.farmer_name || "",
-    "Driver Name": r.driver_name || "-",
+    Farmer: r.farmer_name || "",
     Action: r.action || "",
+    Remark: r.remark || "-",
+    User: r.by || "",
     "Date/Time": auditWhenLabel(r.at),
-    By: r.by || "",
   }));
 
   y = drawTable(doc, y, cols, tableRows, marginX);

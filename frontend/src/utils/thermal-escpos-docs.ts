@@ -50,7 +50,10 @@ export function encodeFarmerPattiEscPos(
     .hr()
     .kv("FARMER", p.farmer_name)
     .kv("DATE", date);
-  if (p.driver_name) b.kv("Driver", p.driver_name);
+  if (p.driver_name) {
+    const drv = p.driver_place ? `${p.driver_name} · ${p.driver_place}` : p.driver_name;
+    b.kv("DRIVER", drv);
+  }
   b.hr().itemRow("LOT", "BAGS x RATE", "AMT");
   for (const lot of p.lots) {
     lot.sales.forEach((s, i) => {
@@ -60,18 +63,19 @@ export function encodeFarmerPattiEscPos(
     });
   }
   b.hr()
-    .kv("Gross", rupees(p.farmer_gross))
+    .kv("Gross total", rupees(p.farmer_gross))
     .kv("Hamali", `- ${rupees(p.hamali_total)}`)
     .kv("Bhada", `- ${rupees(p.bhada_total)}`)
     .kv("Stationery", `- ${rupees(p.stationery_total)}`)
-    .kv("Deduction", `- ${rupees(p.deductions_total)}`)
+    .kv("Total deduction", `- ${rupees(p.deductions_total)}`)
     .hr()
     .bold(true)
     .size("tall")
     .kv("NET PAYABLE", rupees(p.net_payable))
     .size("normal")
     .bold(false);
-  if (p.receiver_name) b.kv("Receiver", p.receiver_name);
+  b.kv("RECEIVER", p.receiver_name || "—")
+    .kv("STATUS", p.status === "received" ? "RECEIVED" : "PENDING");
   const token = (qrToken || p.qr_token || "").trim();
   if (token) {
     b.align("center").feed(1).qr(token, paperMm <= 58 ? 3 : 4).line("Scan at counter").align("left");

@@ -318,6 +318,7 @@ export type PattiAuditLogEntry = {
   bags: number;
   farmer_name: string;
   driver_name: string | null;
+  remark?: string | null;
   patti: Record<string, unknown>;
 };
 

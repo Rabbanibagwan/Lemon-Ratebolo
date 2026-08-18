@@ -8,7 +8,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
-import { api, Settings, Vendor, VendorBill, VendorDayLine } from "@/src/api";
+import { api, apiErrorMessage, Settings, Vendor, VendorBill, VendorDayLine } from "@/src/api";
+import { routeParam } from "@/src/utils/route-params";
 import { Input } from "@/src/components/ui";
 import { colors, font, money, spacing } from "@/src/theme";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
@@ -28,7 +29,9 @@ type LineDraft = {
 const newKey = () => `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
 export default function NewVendorBill() {
-  const { vendor_id, id: editId } = useLocalSearchParams<{ vendor_id?: string; id?: string }>();
+  const params = useLocalSearchParams<{ vendor_id?: string; id?: string }>();
+  const vendor_id = routeParam(params.vendor_id);
+  const editId = routeParam(params.id);
   const router = useRouter();
   const isEdit = !!editId;
   const { workingDateISO, setWorkingDate } = useWorkingDate();
@@ -157,10 +160,12 @@ export default function NewVendorBill() {
   }, [lines, margin, vendorFactor, commission, hamali, cess]);
 
   const save = async (mode: "save" | "print" | "share" = "save") => {
+    if (saving) return;
     setError(null);
     if (!vendor) { setError("Vendor missing"); return; }
     const cleaned = lines.filter((l) => l.lot_no.trim() && l.farmer_name.trim() && Number(l.bags) > 0);
     if (!cleaned.length) { setError("Add at least one line"); return; }
+    setSaving(true);
     const payload = {
       vendor_id: vendor.id,
       date,
@@ -183,7 +188,6 @@ export default function NewVendorBill() {
       }),
     };
     try {
-      setSaving(true);
       const b = isEdit
         ? await api.put<VendorBill>(`/vendor-bills/${editId}`, payload)
         : await api.post<VendorBill>("/vendor-bills", payload);
@@ -200,8 +204,8 @@ export default function NewVendorBill() {
         // Land on Vendors → Posted so pending/posted lists refresh immediately.
         router.replace({ pathname: "/vendors", params: { tab: "posted", highlight: b.id } });
       }
-    } catch (e: any) {
-      setError(e?.detail || "Failed to save");
+    } catch (e: unknown) {
+      setError(apiErrorMessage(e, "Failed to save"));
     } finally {
       setSaving(false);
     }

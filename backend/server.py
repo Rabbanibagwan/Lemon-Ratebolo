@@ -166,8 +166,18 @@ def _round2(v: float) -> float:
     return round(v + 1e-9, 2)
 
 
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+
 def _today_str() -> str:
     return utc_now().strftime("%Y-%m-%d")
+
+
+def _ist_date_str(when: Optional[datetime] = None) -> str:
+    d = when or utc_now()
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=timezone.utc)
+    return d.astimezone(_IST).strftime("%Y-%m-%d")
 
 
 def _lot_first_num(lot_no: str) -> Optional[int]:
@@ -494,7 +504,7 @@ class PattiEditIn(BaseModel):
 
 
 class DeletePattiBody(BaseModel):
-    reason: Optional[str] = Field(default=None, max_length=500)
+    reason: str = Field(min_length=1, max_length=500)
 
 
 class AuditEntry(BaseModel):
@@ -520,6 +530,7 @@ class PattiAuditLogOut(BaseModel):
     bags: int
     farmer_name: str
     driver_name: Optional[str] = None
+    remark: Optional[str] = None
     # Full original Patti document at time of action (never pruned when patti is deleted).
     patti: dict
 
@@ -1099,12 +1110,10 @@ async def update_day(day_id: str, body: AuctionDayIn, user=Depends(current_user)
                 round(bhada_total_val / total_bags, 6) if total_bags > 0 else 0.0
             )
         await db.lots.update_one({"id": lot["id"]}, {"$set": upd})
-        # Keep Farmer Patti in sync with per-lot bhada / driver (preserve patti_no + qr_token).
-        lot2 = {**lot, **upd}
-        try:
+        # Keep the SAME Farmer Patti in sync (preserve patti_no + qr_token). Do not create extras.
+        if lot.get("sales"):
+            lot2 = {**lot, **upd}
             await _generate_patti_for_lot(user["shop_id"], day, lot2, user=user)
-        except Exception:
-            pass
 
     stats = await _day_stats(day)
     return AuctionDayOut(id=day["id"], date=day["date"],
@@ -1739,7 +1748,19 @@ async def _generate_patti_for_lot(
         patti_no = existing["patti_no"]
         qr_token = existing["qr_token"]
         status_ = existing.get("status", "pending")
-        receiver_name = existing.get("receiver_name") or (driver_name or farmer_name)
+        prev_recv = (existing.get("receiver_name") or "").strip()
+        prev_driver = (existing.get("driver_name") or "").strip()
+        prev_farmer = (existing.get("farmer_name") or farmer_name or "").strip()
+        new_driver = (driver_name or "").strip()
+        default_recv = new_driver or farmer_name
+        if status_ == "received":
+            receiver_name = prev_recv or default_recv
+        else:
+            defaults = {x.lower() for x in (prev_driver, prev_farmer) if x}
+            if not prev_recv or prev_recv.lower() in defaults:
+                receiver_name = default_recv
+            else:
+                receiver_name = prev_recv
         receiver_updated_at = existing.get("receiver_updated_at")
         receiver_updated_by = existing.get("receiver_updated_by")
         created_at = existing.get("created_at", utc_now())
@@ -2128,15 +2149,16 @@ def _patti_snapshot_for_audit(patti: dict) -> dict:
     return snap
 
 
-async def _record_patti_audit(user: dict, action: str, patti: dict) -> None:
+async def _record_patti_audit(user: dict, action: str, patti: dict, remark: Optional[str] = None) -> None:
     """Insert a permanent DELETED/REPRINTED audit row. Never deleted with the Patti."""
     now = utc_now()
     snap = _patti_snapshot_for_audit(patti)
+    remark_s = (remark or "").strip() or None
     doc = {
         "id": str(uuid.uuid4()),
         "shop_id": user["shop_id"],
         "at": now,
-        "action_date": now.astimezone(timezone.utc).strftime("%Y-%m-%d"),
+        "action_date": (snap.get("date") or "").strip() or _ist_date_str(now),
         "by": user.get("display_name") or user.get("username") or "",
         "by_user_id": user.get("id"),
         "role": user.get("role") or "",
@@ -2147,6 +2169,7 @@ async def _record_patti_audit(user: dict, action: str, patti: dict) -> None:
         "bags": int(snap.get("total_bags") or 0),
         "farmer_name": snap.get("farmer_name") or "",
         "driver_name": snap.get("driver_name"),
+        "remark": remark_s,
         "patti": snap,
     }
     await db.patti_audit_log.insert_one(doc)
@@ -2156,7 +2179,7 @@ async def _audit_hard_delete_pattis(user: dict, query: dict) -> None:
     """Write DELETED audit for each matching patti, then hard-delete them."""
     q = {**query, "shop_id": user["shop_id"]}
     async for p in db.pattis.find(q, {"_id": 0}):
-        await _record_patti_audit(user, "DELETED", p)
+        await _record_patti_audit(user, "DELETED", p, remark="Removed with lot")
         try:
             await billing_mod.reverse_bags_for_patti(
                 user=user,
@@ -2178,8 +2201,11 @@ async def delete_patti(patti_id: str, body: DeletePattiBody, user=Depends(curren
     )
     if not existing:
         raise HTTPException(404, "Patti not found or already deleted")
+    reason = (body.reason or "").strip()
+    if not reason:
+        raise HTTPException(400, "Delete remark is required")
     # Permanent shop audit BEFORE soft-delete (survives any later hard delete).
-    await _record_patti_audit(user, "DELETED", existing)
+    await _record_patti_audit(user, "DELETED", existing, remark=reason)
     # Restore merchant bags (immutable usage history kept).
     try:
         await billing_mod.reverse_bags_for_patti(
@@ -2195,12 +2221,12 @@ async def delete_patti(patti_id: str, body: DeletePattiBody, user=Depends(curren
         {
             "$set": {
                 "deleted": True, "deleted_at": now, "deleted_by": user["display_name"],
-                "deleted_reason": (body.reason or "").strip() or None,
+                "deleted_reason": reason,
                 "status": "deleted",
             },
             "$push": {"audit_log": {
                 "at": now, "by": user["display_name"], "role": user["role"],
-                "action": "delete", "changes": {"reason": body.reason},
+                "action": "delete", "changes": {"reason": reason},
             }},
         },
         return_document=True, projection={"_id": 0, "shop_id": 0},
@@ -2358,6 +2384,7 @@ async def list_patti_audit_log(
             {"lot_no": {"$regex": s, "$options": "i"}},
             {"action": {"$regex": s, "$options": "i"}},
             {"by": {"$regex": s, "$options": "i"}},
+            {"remark": {"$regex": s, "$options": "i"}},
         ]
         if s.isdigit():
             or_clauses.append({"patti_no": int(s)})
@@ -2615,20 +2642,75 @@ def _compute_bill(body: VendorBillIn) -> tuple[List[dict], int, float, float, fl
     return lines, bags, _round2(goods), _round2(commission), _round2(goods + commission)
 
 
+async def _attach_lot_ids_to_lines(
+    shop_id: str, vendor_id: str, date: str, lines: List[dict],
+) -> None:
+    """Fill missing lot_id from the working-date lot so Pending → Posted can link."""
+    for L in lines:
+        if L.get("lot_id"):
+            continue
+        lot_no = (L.get("lot_no") or "").strip()
+        if not lot_no:
+            continue
+        lot = await db.lots.find_one(
+            {"shop_id": shop_id, "date": date, "lot_no": lot_no},
+            {"_id": 0, "id": 1, "sales": 1},
+        )
+        if not lot:
+            continue
+        for s in lot.get("sales") or []:
+            if s.get("vendor_id") == vendor_id:
+                L["lot_id"] = lot["id"]
+                break
+
+
+async def _assert_lines_not_already_billed(
+    shop_id: str, vendor_id: str, lines: List[dict], except_bill_id: Optional[str] = None,
+) -> None:
+    """Block a second Vendor Bill for a sale that is already POSTED on another bill."""
+    for L in lines:
+        lot_id = L.get("lot_id")
+        if not lot_id:
+            continue
+        lot = await db.lots.find_one({"id": lot_id, "shop_id": shop_id}, {"_id": 0, "sales": 1, "lot_no": 1})
+        if not lot:
+            continue
+        target_bags = int(L.get("bags") or 0)
+        for s in lot.get("sales") or []:
+            if s.get("vendor_id") != vendor_id or _sale_status(s) != "POSTED":
+                continue
+            bid = s.get("vendor_bill_id")
+            if except_bill_id and bid == except_bill_id:
+                continue
+            if target_bags and int(s.get("bags") or 0) not in (0, target_bags):
+                continue
+            label = L.get("lot_no") or lot.get("lot_no") or lot_id
+            raise HTTPException(409, f"Lot {label} is already on a Vendor Bill")
+
+
 async def _set_sales_posted(shop_id: str, vendor_id: str, lines: List[dict], bill_id: str) -> None:
     """Mark matching lot sales POSTED only after a vendor bill exists.
 
     Match order: same vendor + bags + auction rate → same vendor + bags → first
     PENDING sale for this vendor on the lot. Never reuse an already-POSTED sale.
+    Lines with lot_id must match; unmatched linked lines fail the request.
     """
+    unmatched: List[str] = []
+    planned: dict[str, List[dict]] = {}
     for L in lines:
         lot_id = L.get("lot_id")
         if not lot_id:
             continue
-        lot = await db.lots.find_one({"id": lot_id, "shop_id": shop_id}, {"_id": 0})
-        if not lot:
-            continue
-        sales = list(lot.get("sales") or [])
+        if lot_id in planned:
+            sales = planned[lot_id]
+            lot_no_label = str(L.get("lot_no") or lot_id)
+        else:
+            lot = await db.lots.find_one({"id": lot_id, "shop_id": shop_id}, {"_id": 0})
+            if not lot:
+                unmatched.append(str(L.get("lot_no") or lot_id))
+                continue
+            sales = list(lot.get("sales") or [])
+            lot_no_label = str(L.get("lot_no") or lot.get("lot_no") or lot_id)
         target_bags = int(L.get("bags") or 0)
         target_rate = float(L.get("auction_rate") or 0)
         match = None
@@ -2655,10 +2737,19 @@ async def _set_sales_posted(shop_id: str, vendor_id: str, lines: List[dict], bil
             ]
             if len(pending) == 1:
                 match = pending[0]
-        if match is not None:
-            match["vendor_purchase_status"] = "POSTED"
-            match["vendor_bill_id"] = bill_id
-            await db.lots.update_one({"id": lot_id, "shop_id": shop_id}, {"$set": {"sales": sales}})
+        if match is None:
+            unmatched.append(lot_no_label)
+            continue
+        match["vendor_purchase_status"] = "POSTED"
+        match["vendor_bill_id"] = bill_id
+        planned[lot_id] = sales
+    if unmatched:
+        raise HTTPException(
+            409,
+            "Could not post purchase(s) for lot(s): " + ", ".join(unmatched),
+        )
+    for lot_id, sales in planned.items():
+        await db.lots.update_one({"id": lot_id, "shop_id": shop_id}, {"$set": {"sales": sales}})
 
 
 async def _clear_sales_posted(shop_id: str, bill_id: str) -> None:
@@ -2788,6 +2879,7 @@ def _ledger_match(shop_id: str, account_type: str, party_id: str) -> dict:
         "shop_id": shop_id,
         "account_type": account_type,
         "deleted": {"$ne": True},
+        "source_type": {"$ne": "FARMER_PATTI"},
     }
     if account_type == "FARMER":
         q["farmer_id"] = party_id
@@ -2847,6 +2939,9 @@ async def create_vendor_bill(body: VendorBillIn, user=Depends(current_user)):
     if not vendor:
         raise HTTPException(400, "Vendor not found")
     lines, bags, goods, commission, _partial = _compute_bill(body)
+    bill_date = body.date or _today_str()
+    await _attach_lot_ids_to_lines(user["shop_id"], vendor["id"], bill_date, lines)
+    await _assert_lines_not_already_billed(user["shop_id"], vendor["id"], lines)
     grand = _round2(goods + commission + body.hamali + body.cess)
     bill_no = await _next_bill_no(user["shop_id"])
     doc = {
@@ -2854,7 +2949,7 @@ async def create_vendor_bill(body: VendorBillIn, user=Depends(current_user)):
         "bill_no": bill_no,
         "vendor_id": vendor["id"], "vendor_name": vendor["name"],
         "vendor_details": vendor.get("details"),
-        "date": body.date or _today_str(),
+        "date": bill_date,
         "lines": lines,
         "total_bags": bags,
         "goods_total": goods,
@@ -2995,12 +3090,17 @@ async def update_vendor_bill(bill_id: str, body: VendorBillIn, user=Depends(curr
     if existing.get("deleted"): raise HTTPException(400, "Cannot edit a deleted bill")
 
     lines, bags, goods, commission, _ = _compute_bill(body)
+    bill_date = body.date or existing["date"]
+    await _attach_lot_ids_to_lines(user["shop_id"], existing["vendor_id"], bill_date, lines)
+    await _assert_lines_not_already_billed(
+        user["shop_id"], existing["vendor_id"], lines, except_bill_id=bill_id,
+    )
     grand = _round2(goods + commission + body.hamali + body.cess)
     paid = float(existing.get("paid", 0))
     # Refresh vendor_details snapshot from current vendor doc
     vendor = await db.vendors.find_one({"id": existing["vendor_id"], "shop_id": user["shop_id"]}, {"_id": 0, "details": 1})
     upd = {
-        "date": body.date or existing["date"],
+        "date": bill_date,
         "lines": lines, "total_bags": bags,
         "goods_total": goods,
         "vendor_factor": float(body.vendor_factor),
@@ -3667,7 +3767,7 @@ async def _ledger_row_out(d: dict, party_name: str, running: float) -> LedgerTxn
         remarks=d.get("remarks"),
         source_type=d.get("source_type") or "MANUAL",
         source_id=d.get("source_id") or d["id"],
-        created_at=d["created_at"],
+        created_at=d.get("created_at") or utc_now(),
         updated_at=d.get("updated_at"),
     )
 
@@ -3700,7 +3800,10 @@ async def list_ledger_parties(
         else:
             ids = await db.account_ledger.distinct(
                 "farmer_id",
-                {"shop_id": shop_id, "account_type": "FARMER", "date": day, "deleted": {"$ne": True}},
+                {
+                    "shop_id": shop_id, "account_type": "FARMER", "date": day,
+                    "deleted": {"$ne": True}, "source_type": {"$ne": "FARMER_PATTI"},
+                },
             )
             if ids:
                 parties = await db.farmers.find(
@@ -3717,10 +3820,19 @@ async def list_ledger_parties(
             ]
             parties = await db.vendors.find(vq, {"_id": 0}).sort("name", 1).to_list(1000)
         else:
-            ids = await db.account_ledger.distinct(
+            ids = set(await db.account_ledger.distinct(
                 "vendor_id",
-                {"shop_id": shop_id, "account_type": "VENDOR", "date": day, "deleted": {"$ne": True}},
-            )
+                {
+                    "shop_id": shop_id, "account_type": "VENDOR", "date": day,
+                    "deleted": {"$ne": True}, "source_type": {"$ne": "FARMER_PATTI"},
+                },
+            ))
+            async for b in db.vendor_bills.find(
+                {"shop_id": shop_id, "date": day, "deleted": {"$ne": True}},
+                {"_id": 0, "vendor_id": 1},
+            ):
+                if b.get("vendor_id"):
+                    ids.add(b["vendor_id"])
             if ids:
                 parties = await db.vendors.find(
                     {"shop_id": shop_id, "id": {"$in": [i for i in ids if i]}},

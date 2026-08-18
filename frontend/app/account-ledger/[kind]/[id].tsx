@@ -7,6 +7,7 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import { api, LedgerAccountType, LedgerDetail, Settings } from "@/src/api";
+import { routeParam } from "@/src/utils/route-params";
 import { colors, font, money, spacing } from "@/src/theme";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
 import { clampPaperMm, thermalPrintUserMessage } from "@/src/utils/thermal-print";
@@ -17,7 +18,9 @@ function cellAmt(n: number): string {
 }
 
 export default function LedgerDetailScreen() {
-  const { kind, id } = useLocalSearchParams<{ kind: string; id: string }>();
+  const params = useLocalSearchParams<{ kind: string; id: string }>();
+  const kind = routeParam(params.kind);
+  const id = routeParam(params.id);
   const router = useRouter();
   const { workingDateISO, displayDate } = useWorkingDate();
   const accountType: LedgerAccountType = (kind || "").toLowerCase() === "vendor" ? "VENDOR" : "FARMER";
@@ -34,8 +37,9 @@ export default function LedgerDetailScreen() {
         `/account-ledger/detail?account_type=${accountType}&party_id=${encodeURIComponent(id)}&date=${workingDateISO}`,
       );
       setData(d);
-    } catch {
+    } catch (e) {
       setData(null);
+      console.warn("Ledger detail failed", e);
     } finally {
       setLoading(false);
     }
