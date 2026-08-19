@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert, Image, Pressable,
   StyleSheet, Text, View,
@@ -175,6 +175,8 @@ export default function OcrPreview() {
   const router = useRouter();
   const { workingDateISO } = useWorkingDate();
   const { session } = useAuth();
+  const scrollRef = useRef<any>(null);
+  const scrollYRef = useRef(0);
 
   const [lots, setLots] = useState<LotDraft[]>([]);
   const [warning, setWarning] = useState<string | null>(null);
@@ -215,6 +217,19 @@ export default function OcrPreview() {
     null | { lotKey: string; kind: "farmer" } | { lotKey: string; vendorKey: string; kind: "vendor" }
   >(null);
   const [pickerQuery, setPickerQuery] = useState("");
+
+  const restoreScrollAfterLink = () => {
+    const y = scrollYRef.current;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        try {
+          scrollRef.current?.scrollTo?.({ y, animated: false });
+        } catch {
+          /* ignore */
+        }
+      });
+    });
+  };
 
   const updateLot = (lotKey: string, patch: Partial<LotDraft>) =>
     setLots((xs) =>
@@ -296,6 +311,7 @@ export default function OcrPreview() {
       updateVendor(pickerFor.lotKey, pickerFor.vendorKey, { vendor_id: id, vendor_name: name });
     }
     setPickerFor(null); setPickerQuery("");
+    restoreScrollAfterLink();
   };
 
   const findOrCreateFarmer = useCallback(async (name: string): Promise<string | null> => {
@@ -564,10 +580,15 @@ export default function OcrPreview() {
       ) : null}
 
       <KeyboardAwareScrollView
+        ref={scrollRef}
         style={{ flex: 1 }}
         contentContainerStyle={{ padding: spacing.lg, paddingBottom: 220 }}
         keyboardShouldPersistTaps="handled"
         bottomOffset={120}
+        scrollEventThrottle={16}
+        onScroll={(e: any) => {
+          scrollYRef.current = e?.nativeEvent?.contentOffset?.y || 0;
+        }}
       >
         {photoUri ? (
           <View style={styles.photoRef}>
