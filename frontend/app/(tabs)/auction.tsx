@@ -1,11 +1,11 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FlatList, Modal, Pressable,
   RefreshControl, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useFocusEffect, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import { api, AuctionDay, DriverRange, Patti } from "@/src/api";
@@ -13,9 +13,13 @@ import { useWorkingDate } from "@/src/context/WorkingDateContext";
 import { Button, Empty, Input } from "@/src/components/ui";
 import { colors, font, money, spacing } from "@/src/theme";
 import { DatePickerModal } from "@/src/components/DatePickerModal";
+import { routeParam } from "@/src/utils/route-params";
 
 export default function Auction() {
   const router = useRouter();
+  const routeParams = useLocalSearchParams<{ editDrivers?: string }>();
+  const editDrivers = routeParam(routeParams.editDrivers);
+  const editDriversOpened = useRef(false);
   const { workingDate, workingDateISO, displayDate, isWorkingToday, setWorkingDate } = useWorkingDate();
 
   const [day, setDay] = useState<AuctionDay | null>(null);
@@ -45,6 +49,14 @@ export default function Auction() {
   }, [workingDateISO]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  useEffect(() => {
+    if (editDrivers !== "1" || editDriversOpened.current || !day) return;
+    editDriversOpened.current = true;
+    setDrivers(day.drivers?.length ? [...day.drivers] : [{ range_from: 1, range_to: 100, name: "", place: "", bhada_per_bag: 0 }]);
+    setSaveDriverError(null);
+    setShowDriverModal(true);
+  }, [editDrivers, day]);
 
   const onApplyDate = (d: Date | null) => {
     setShowDatePicker(false);

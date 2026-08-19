@@ -33,28 +33,38 @@ export function encodeTestPrint(paperMm: number, printerName?: string): string {
   return b.toBase64();
 }
 
+/** ASCII-safe slip text — thermal printers often cannot render × / · / ₹. */
+function slipText(s: string): string {
+  return String(s || "")
+    .replace(/₹/g, "Rs ")
+    .replace(/×/g, "x")
+    .replace(/·/g, " - ")
+    .replace(/…/g, "...");
+}
+
 export function encodeFarmerPattiEscPos(
   p: Patti,
   profile: ShopProfile,
   paperMm: number,
   qrToken?: string,
+  detailed: boolean = false,
 ): string {
   const b = new EscPosBuilder(paperMm);
   const addr = [profile.address, profile.village, profile.taluk, profile.district, profile.state].filter(Boolean).join(", ");
   const date = new Date(p.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
   shopHead(b, profile);
-  if (addr) b.wrapped(addr);
+  if (addr) b.wrapped(slipText(addr));
   if (profile.mobile) b.line(`Mobile: ${profile.mobile}`);
   b.align("left").hr()
     .kv("PATTI / BILL", `NO. ${p.patti_no}`)
     .hr()
-    .kv("FARMER", p.farmer_name)
+    .kv("FARMER", slipText(p.farmer_name))
     .kv("DATE", date);
-  if (p.driver_name) {
-    const drv = p.driver_place ? `${p.driver_name} · ${p.driver_place}` : p.driver_name;
-    b.kv("DRIVER", drv);
-  }
-  b.hr().itemRow("LOT", "BAGS x RATE", "AMT");
+  const drv = p.driver_name
+    ? (p.driver_place ? `${p.driver_name} - ${p.driver_place}` : p.driver_name)
+    : "—";
+  b.kv("DRIVER", slipText(drv));
+  b.hr().itemRow("LOT", "BAGS x RATE", "AMOUNT");
   for (const lot of p.lots) {
     lot.sales.forEach((s, i) => {
       const lotNo = i === 0 ? String(lot.lot_no || `${lot.lot_serial_no}/${lot.total_bags}`) : "";
@@ -62,9 +72,12 @@ export function encodeFarmerPattiEscPos(
       b.itemRow(lotNo, mid, rupees(s.bags * s.rate_per_bag * p.payment_factor));
     });
   }
+  const hamaliLabel = detailed
+    ? `Hamali (${p.total_bags} x ${rupees(p.hamali_per_bag)})`
+    : "Hamali";
   b.hr()
     .kv("Gross total", rupees(p.farmer_gross))
-    .kv("Hamali", `- ${rupees(p.hamali_total)}`)
+    .kv(hamaliLabel, `- ${rupees(p.hamali_total)}`)
     .kv("Bhada", `- ${rupees(p.bhada_total)}`)
     .kv("Stationery", `- ${rupees(p.stationery_total)}`)
     .kv("Total deduction", `- ${rupees(p.deductions_total)}`)
@@ -74,7 +87,7 @@ export function encodeFarmerPattiEscPos(
     .kv("NET PAYABLE", rupees(p.net_payable))
     .size("normal")
     .bold(false);
-  b.kv("RECEIVER", p.receiver_name || "—")
+  b.kv("RECEIVER", slipText(p.receiver_name || "—"))
     .kv("STATUS", p.status === "received" ? "RECEIVED" : "PENDING");
   const token = (qrToken || p.qr_token || "").trim();
   if (token) {

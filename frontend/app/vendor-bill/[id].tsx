@@ -14,9 +14,13 @@ import { colors, font, money, spacing } from "@/src/theme";
 import { Button, Input } from "@/src/components/ui";
 import { clampPaperMm, thermalPrintUserMessage } from "@/src/utils/thermal-print";
 import { shareVendorBillPdf, thermalPrintVendorBill } from "@/src/utils/vendor-bill-print";
+import { routeParam } from "@/src/utils/route-params";
 
 export default function VendorBillDetail() {
-  const { id, autoPrint, autoShare } = useLocalSearchParams<{ id: string; autoPrint?: string; autoShare?: string }>();
+  const params = useLocalSearchParams<{ id: string; autoPrint?: string; autoShare?: string }>();
+  const id = routeParam(params.id);
+  const autoPrint = routeParam(params.autoPrint);
+  const autoShare = routeParam(params.autoShare);
   const router = useRouter();
   const { session } = useAuth();
   const isOwner = session?.role === "owner";

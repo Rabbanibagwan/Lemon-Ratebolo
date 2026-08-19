@@ -16,14 +16,31 @@ import {
 /** True when this staff user has already printed this Patti (server-tracked). */
 export function staffHasPrintedPatti(p: Patti | null | undefined, session: Session | null | undefined): boolean {
   if (!p || !session || session.role !== "counter") return false;
-  return (p.staff_print_user_ids || []).includes(session.id);
+  const uid = (session.id || "").trim();
+  if (!uid) return false;
+  return (p.staff_print_user_ids || []).includes(uid);
 }
 
 /** Merchant: always. Staff: only if they have not printed this Patti yet. */
 export function canUserPrintPatti(p: Patti | null | undefined, session: Session | null | undefined): boolean {
   if (!p || !session) return false;
   if (session.role === "owner") return true;
+  if (session.role !== "counter") return false;
   return !staffHasPrintedPatti(p, session);
+}
+
+/**
+ * Entry Book / reports view: staff may only view. Create flows (Save & Print) still
+ * use canUserPrintPatti for the single allowed print.
+ */
+export function canUserPrintPattiOnScreen(
+  p: Patti | null | undefined,
+  session: Session | null | undefined,
+  screen?: string | null,
+): boolean {
+  if (!canUserPrintPatti(p, session)) return false;
+  if (session?.role === "counter" && (screen || "").trim().toLowerCase() === "entry") return false;
+  return true;
 }
 
 /** Merchant may share. Staff must never share a Farmer Patti. */
@@ -144,7 +161,13 @@ export function renderPattiHtml(p: Patti, profile: ShopProfile, qrUri: string, u
 }
 
 /** 58 / 80 / 100 mm thermal receipt — bill data only (no Print/Share UI). */
-export function renderThermalPattiHtml(p: Patti, profile: ShopProfile, qrUri: string, paperMm: number = 80): string {
+export function renderThermalPattiHtml(
+  p: Patti,
+  profile: ShopProfile,
+  qrUri: string,
+  paperMm: number = 80,
+  detailed: boolean = false,
+): string {
   const m = thermalMetrics(paperMm);
   const date = new Date(p.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
   const lines = p.lots.map((lot) =>
@@ -172,13 +195,17 @@ export function renderThermalPattiHtml(p: Patti, profile: ShopProfile, qrUri: st
     <div class="hr"></div>
     <div class="kv farmer"><span class="k">FARMER</span><span class="bold v wrap">${escapeHtml(p.farmer_name)}</span></div>
     <div class="kv"><span class="k">DATE</span><span>${date}</span></div>
-    ${p.driver_name ? `<div class="kv"><span class="k">DRIVER</span><span class="wrap">${escapeHtml(p.driver_name)}${p.driver_place ? " · " + escapeHtml(p.driver_place) : ""}</span></div>` : ""}
+    <div class="kv"><span class="k">DRIVER</span><span class="wrap">${
+      p.driver_name
+        ? escapeHtml(p.driver_name) + (p.driver_place ? " · " + escapeHtml(p.driver_place) : "")
+        : "—"
+    }</span></div>
     <div class="hr"></div>
     <div class="row th"><span class="lot">LOT</span><span class="mid">BAGS × RATE</span><span class="right">AMOUNT</span></div>
     ${lines}
     <div class="hr"></div>
     <div class="kv"><span>Gross total</span><span>${fmt(p.farmer_gross)}</span></div>
-    <div class="kv"><span>Hamali</span><span>- ${fmt(p.hamali_total)}</span></div>
+    <div class="kv"><span>${detailed ? `Hamali (${p.total_bags} × ${fmt(p.hamali_per_bag)})` : "Hamali"}</span><span>- ${fmt(p.hamali_total)}</span></div>
     <div class="kv"><span>Bhada</span><span>- ${fmt(p.bhada_total)}</span></div>
     <div class="kv"><span>Stationery</span><span>- ${fmt(p.stationery_total)}</span></div>
     <div class="kv bold"><span>Total deduction</span><span>- ${fmt(p.deductions_total)}</span></div>
@@ -191,15 +218,20 @@ export function renderThermalPattiHtml(p: Patti, profile: ShopProfile, qrUri: st
   </body></html>`;
 }
 
-export async function thermalPrintPatti(p: Patti, profile: ShopProfile, paperMm?: number): Promise<void> {
+export async function thermalPrintPatti(
+  p: Patti,
+  profile: ShopProfile,
+  paperMm?: number,
+  detailed: boolean = false,
+): Promise<void> {
   const mm = await resolvePrintPaperMm(paperMm);
   const m = thermalMetrics(mm);
   // Always generate QR — previous working format required it on the slip.
   const qrUri = await qrDataUriThermal(p.qr_token, Math.max(220, m.qrPx * 2));
-  const html = renderThermalPattiHtml(p, profile, qrUri, mm);
+  const html = renderThermalPattiHtml(p, profile, qrUri, mm, detailed);
   await printThermalDocument({
     html,
-    escposBase64: encodeFarmerPattiEscPos(p, profile, mm, p.qr_token),
+    escposBase64: encodeFarmerPattiEscPos(p, profile, mm, p.qr_token, detailed),
     paperMm: mm,
   });
 }
@@ -213,15 +245,26 @@ export async function thermalPrintAndMark(
   profile: ShopProfile,
   paperMm: number = 80,
   session?: Session | null,
+  detailed: boolean = false,
 ): Promise<Patti> {
   if (session && !canUserPrintPatti(p, session)) {
     throw new Error(staffPrintBlockedMessage());
   }
-  await thermalPrintPatti(p, profile, paperMm);
+  await thermalPrintPatti(p, profile, paperMm, detailed);
+  // Only mark after the print path returned without throwing.
   return markPattiPrinted(p.id);
 }
 
-export async function sharePattiPdf(p: Patti, profile: ShopProfile, userName: string, detailed: boolean = false): Promise<void> {
+export async function sharePattiPdf(
+  p: Patti,
+  profile: ShopProfile,
+  userName: string,
+  detailed: boolean = false,
+  session?: Session | null,
+): Promise<void> {
+  if (session && !canUserSharePatti(session)) {
+    throw new Error(staffShareBlockedMessage());
+  }
   const qrUri = await qrDataUri(p.qr_token, 260);
   const html = renderPattiHtml(p, profile, qrUri, userName, detailed);
   const { uri } = await Print.printToFileAsync({ html });

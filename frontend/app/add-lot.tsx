@@ -8,13 +8,14 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
-import { api, apiErrorMessage, AuctionDay, Farmer, Lot, Vendor } from "@/src/api";
+import { api, apiErrorMessage, AuctionDay, Farmer, Lot, Patti, Vendor } from "@/src/api";
 import { Input } from "@/src/components/ui";
 import { PartyPicker } from "@/src/components/PartyPicker";
 import { colors, font, money, spacing } from "@/src/theme";
 import { useAuth } from "@/src/context/AuthContext";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
 import { handleBagBillingError } from "@/src/utils/bag-billing";
+import { canUserPrintPatti } from "@/src/utils/patti-print";
 
 type LocalSale = { key: string; vendor_id: string | null; vendor_name: string; bags: string; rate: string };
 const newKey = () => `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -43,6 +44,7 @@ export default function AddLot() {
   ]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [linkedPatti, setLinkedPatti] = useState<Patti | null>(null);
 
   const [farmerPickerOpen, setFarmerPickerOpen] = useState(false);
   const [vendorPickerFor, setVendorPickerFor] = useState<string | null>(null);
@@ -77,6 +79,14 @@ export default function AddLot() {
                   }))
                 : [{ key: newKey(), vendor_id: null, vendor_name: "", bags: "", rate: "" }],
             );
+            if (l.patti_id) {
+              try {
+                const p = await api.get<Patti>(`/pattis/${l.patti_id}`);
+                setLinkedPatti(p);
+              } catch {
+                setLinkedPatti(null);
+              }
+            }
           }
         }
       } catch {
@@ -115,6 +125,8 @@ export default function AddLot() {
   };
   const removeSale = (k: string) =>
     setSales((xs) => (xs.length === 1 ? xs : xs.filter((s) => s.key !== k)));
+
+  const canStaffPrint = isOwner || !linkedPatti || canUserPrintPatti(linkedPatti, session);
 
   const save = async (mode: "save" | "print" | "share" = "save") => {
     // Staff: Save + Save & Print allowed (one print enforced server-side). Share is merchant-only.
@@ -397,9 +409,9 @@ export default function AddLot() {
               <Text style={[styles.actionBtnText, { color: colors.onSurface }]}>SAVE</Text>
             </Pressable>
             <Pressable
-              style={({ pressed }) => [styles.actionBtn, styles.actionPrint, pressed && { opacity: 0.85 }, saving && { opacity: 0.5 }]}
+              style={({ pressed }) => [styles.actionBtn, styles.actionPrint, pressed && { opacity: 0.85 }, (saving || !canStaffPrint) && { opacity: 0.5 }]}
               onPress={() => save("print")}
-              disabled={saving}
+              disabled={saving || !canStaffPrint}
               testID="save-and-print-lot"
             >
               <Ionicons name="print-outline" size={16} color={colors.onSurfaceInverse} />

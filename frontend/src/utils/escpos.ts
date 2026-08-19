@@ -131,7 +131,7 @@ export class EscPosBuilder {
     const r = right || "";
     const maxL = Math.max(0, this.cols - r.length - 1);
     let l = left || "";
-    if (l.length > maxL) l = l.slice(0, Math.max(0, maxL - 1)) + (maxL > 0 ? "…" : "");
+    if (l.length > maxL) l = l.slice(0, Math.max(0, maxL - 1)) + (maxL > 0 ? "..." : "");
     const gap = Math.max(1, this.cols - l.length - r.length);
     return this.align("left").line(l + " ".repeat(gap) + r);
   }
