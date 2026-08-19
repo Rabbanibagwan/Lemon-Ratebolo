@@ -131,18 +131,6 @@ export default function SettingsScreen() {
                 testID="settings-vendor-commission"
               />
 
-              <Text style={[styles.section, { marginTop: spacing.lg }]}>Action Diary OCR</Text>
-              <Input
-                label="Gemini API key (photo OCR)"
-                value={s?.ocr_gemini_api_key || ""}
-                onChangeText={(v) => s && setS({ ...s, ocr_gemini_api_key: v.trim() || null })}
-                autoCapitalize="none"
-                autoCorrect={false}
-                placeholder="Paste key from aistudio.google.com/apikey"
-                hint="Free key. Improves handwritten diary photo reading. Leave blank to use on-device OCR."
-                testID="settings-ocr-key"
-              />
-
               <Text style={[styles.section, { marginTop: spacing.lg }]}>Printing Settings</Text>
               <Pressable
                 onPress={() => s && setS({ ...s, detailed_print_format: !s.detailed_print_format })}

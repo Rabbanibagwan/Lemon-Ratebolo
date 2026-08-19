@@ -306,8 +306,6 @@ class Settings(BaseModel):
     vendor_hamali_default: float = Field(default=0.0, ge=0)
     patti_prefix: str = Field(default="FP", max_length=10)
     vendor_bill_prefix: str = Field(default="VB", max_length=10)
-    # Optional Gemini API key for Action Diary photo OCR (owner can set in Settings)
-    ocr_gemini_api_key: Optional[str] = Field(default=None, max_length=200)
 
 
 class FarmerIn(BaseModel):
@@ -3280,9 +3278,6 @@ class OcrRequest(BaseModel):
     image_base64: str = Field(min_length=100)  # bare base64 (no data URL prefix ok)
     mime_type: str = Field(default="image/jpeg")
     hint: Optional[str] = Field(default=None, max_length=500)  # optional user hint
-    # One-shot key when env/settings missing (from Scan screen paste).
-    gemini_api_key: Optional[str] = Field(default=None, max_length=200)
-    persist_key: bool = False
 
 
 class OcrTextRequest(BaseModel):
@@ -3471,16 +3466,10 @@ def _gemini_api_key() -> Optional[str]:
     )
 
 
-async def _resolve_ocr_api_key(shop_id: str, override: Optional[str] = None) -> Optional[str]:
-    """Override → env key → shop Settings.ocr_gemini_api_key."""
-    if override and str(override).strip():
-        return str(override).strip()
+async def _resolve_ocr_api_key(shop_id: str) -> Optional[str]:
+    """Returns the Gemini API key from backend env only. Key is never accepted from client."""
     env_key = _gemini_api_key()
-    if env_key and env_key.strip():
-        return env_key.strip()
-    doc = await db.settings.find_one({"shop_id": shop_id}, {"_id": 0, "ocr_gemini_api_key": 1}) or {}
-    k = doc.get("ocr_gemini_api_key")
-    return (str(k).strip() if k else None) or None
+    return env_key.strip() if env_key and env_key.strip() else None
 
 
 def _gemini_key_auth_failed(status_code: int, body: str) -> bool:
@@ -3636,7 +3625,8 @@ def _parse_model_json(full_text: str) -> tuple[List[OcrRow], Optional[str]]:
 async def ocr_status(user=Depends(current_user)):
     """Whether photo OCR has a Gemini key (env or Settings) — never returns the key."""
     key = await _resolve_ocr_api_key(user["shop_id"])
-    return {"configured": bool(key and str(key).strip())}
+    # Never reveal whether the key is configured to the client; just report boolean.
+    return {"configured": bool(key)}
 
 
 @api.post("/ocr/action-diary", response_model=OcrResponse)
@@ -3649,19 +3639,11 @@ async def ocr_action_diary(body: OcrRequest, user=Depends(current_user)):
         except Exception:
             pass
 
-    api_key = await _resolve_ocr_api_key(user["shop_id"], body.gemini_api_key)
+    api_key = await _resolve_ocr_api_key(user["shop_id"])
     model_name = "gemini"
     full_text = ""
 
     if api_key:
-        # Optionally remember key in Settings for next scans (owner can always write;
-        # for staff, still allow one-shot via body without persist).
-        if body.persist_key and body.gemini_api_key and str(body.gemini_api_key).strip():
-            await db.settings.update_one(
-                {"shop_id": user["shop_id"]},
-                {"$set": {"ocr_gemini_api_key": str(body.gemini_api_key).strip(), "updated_at": utc_now()}},
-                upsert=True,
-            )
         try:
             import asyncio
             img_b64, mime = _optimize_ocr_image_b64(img_b64, body.mime_type or "image/jpeg")
