@@ -353,6 +353,64 @@ export type VendorDashboard = {
 };
 export type VendorDayLine = {
   lot_id: string; lot_no: string; farmer_name: string; bags: number; auction_rate: number;
+  date?: string | null;
+};
+export type PendingVendorLine = {
+  lot_id: string; lot_no: string; farmer_name: string; bags: number;
+  auction_rate: number; vendor_rate: number; amount: number;
+  date?: string | null;
+};
+export type PendingVendorBill = {
+  vendor_id: string; vendor_name: string; vendor_details?: string | null; phone?: string | null;
+  total_bags: number; goods_total: number; commission_total: number; hamali: number; grand_total: number;
+  lines: PendingVendorLine[];
+};
+
+export type LedgerAccountType = "FARMER" | "VENDOR";
+export type LedgerTxnType = "CREDIT" | "DEBIT";
+export type LedgerSourceType = "MANUAL" | "VENDOR_BILL" | "VENDOR_PAYMENT";
+export type LedgerTxn = {
+  id: string;
+  account_type: LedgerAccountType;
+  farmer_id?: string | null;
+  vendor_id?: string | null;
+  party_name: string;
+  date: string;
+  transaction_type: LedgerTxnType;
+  amount: number;
+  credit: number;
+  debit: number;
+  balance: number;
+  description: string;
+  remarks?: string | null;
+  source_type: LedgerSourceType;
+  source_id: string;
+  created_at: string;
+  updated_at?: string | null;
+};
+export type LedgerParty = {
+  party_id: string;
+  party_name: string;
+  phone?: string | null;
+  details?: string | null;
+  day_credit: number;
+  day_debit: number;
+  balance: number;
+  txn_count: number;
+};
+export type LedgerBillSnap = {
+  id: string; bill_code: string; grand_total: number; paid: number; balance: number; status: string;
+};
+export type LedgerDetail = {
+  account_type: LedgerAccountType;
+  party_id: string;
+  party_name: string;
+  date: string;
+  rows: LedgerTxn[];
+  total_credit: number;
+  total_debit: number;
+  balance: number;
+  bills: LedgerBillSnap[];
 };
 export type PendingVendorLine = {
   lot_id: string; lot_no: string; farmer_name: string; bags: number;
