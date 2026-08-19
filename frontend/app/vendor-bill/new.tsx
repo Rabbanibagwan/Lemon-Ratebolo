@@ -107,7 +107,7 @@ export default function NewVendorBill() {
     try {
       const day = await api.get<VendorDayLine[]>(`/vendors/${v.id}/unbilled-lines?date=${iso}`);
       if (!day.length) {
-        if (!quiet) Alert.alert("No lots", `No pending purchases for ${v.name} on ${iso}.`);
+        if (!quiet) Alert.alert("No lots", `No pending purchases found for ${v.name}.`);
         setLines([]);
         return;
       }

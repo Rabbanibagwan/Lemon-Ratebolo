@@ -34,7 +34,8 @@ export default function VendorsList() {
     try {
       setLoading(true);
       const [p, bills] = await Promise.all([
-        api.get<PendingVendorBill[]>(`/vendor-bills/pending-summary?date=${workingDateISO}`),
+        // pending-summary shows ALL unposted sales across all dates (no date filter needed)
+        api.get<PendingVendorBill[]>(`/vendor-bills/pending-summary`),
         api.get<VendorBill[]>(`/vendor-bills?date=${workingDateISO}`),
       ]);
       setPending(p);
@@ -139,28 +140,37 @@ export default function VendorsList() {
         <FlatList
           data={filteredPending}
           keyExtractor={(x) => x.vendor_id}
-          extraData={workingDateISO}
           contentContainerStyle={{ padding: spacing.lg, gap: spacing.sm, paddingBottom: 140 }}
           refreshControl={<RefreshControl refreshing={loading} onRefresh={load} tintColor={colors.brandPrimary} />}
           ListEmptyComponent={
-            <Empty title="No pending bills" subtitle="Purchases for this date will appear here until a Vendor Bill is saved." />
+            <Empty title="No pending bills" subtitle="Vendor purchases appear here once a Farmer Patti with that vendor is saved." />
           }
-          renderItem={({ item }) => (
-            <Pressable
-              style={styles.card}
-              onPress={() => router.push({ pathname: "/vendor-bill/new", params: { vendor_id: item.vendor_id } })}
-              testID={`pending-vendor-${item.vendor_id}`}
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={styles.name} numberOfLines={1}>{item.vendor_name}</Text>
-              </View>
-              <View style={{ alignItems: "flex-end" }}>
-                <Text style={styles.bags}>{bagsLabel(item.total_bags)}</Text>
-                <Text style={styles.amount}>{money(item.grand_total)}</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={colors.muted} />
-            </Pressable>
-          )}
+          renderItem={({ item }) => {
+            const billCount = item.lines?.length ?? 0;
+            const dates = Array.from(new Set((item.lines || []).map((l: any) => l.date).filter(Boolean))).sort();
+            const dateLabel = dates.length === 1
+              ? dates[0]
+              : dates.length > 1
+                ? `${dates[0]} – ${dates[dates.length - 1]}`
+                : null;
+            return (
+              <Pressable
+                style={styles.card}
+                onPress={() => router.push({ pathname: "/vendor-bill/new", params: { vendor_id: item.vendor_id } })}
+                testID={`pending-vendor-${item.vendor_id}`}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.name} numberOfLines={1}>{item.vendor_name}</Text>
+                  {dateLabel ? <Text style={styles.meta}>{billCount} {billCount === 1 ? "lot" : "lots"} · {dateLabel}</Text> : null}
+                </View>
+                <View style={{ alignItems: "flex-end" }}>
+                  <Text style={styles.bags}>{bagsLabel(item.total_bags)}</Text>
+                  <Text style={styles.amount}>{money(item.grand_total)}</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+              </Pressable>
+            );
+          }}
         />
       ) : (
         <FlatList

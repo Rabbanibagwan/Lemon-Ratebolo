@@ -353,10 +353,12 @@ export type VendorDashboard = {
 };
 export type VendorDayLine = {
   lot_id: string; lot_no: string; farmer_name: string; bags: number; auction_rate: number;
+  date?: string | null;
 };
 export type PendingVendorLine = {
   lot_id: string; lot_no: string; farmer_name: string; bags: number;
   auction_rate: number; vendor_rate: number; amount: number;
+  date?: string | null;
 };
 export type PendingVendorBill = {
   vendor_id: string; vendor_name: string; vendor_details?: string | null; phone?: string | null;

@@ -726,6 +726,7 @@ class PendingVendorLineOut(BaseModel):
     auction_rate: float
     vendor_rate: float
     amount: float
+    date: Optional[str] = None  # auction day date for display (YYYY-MM-DD)
 
 
 class PendingVendorBillOut(BaseModel):
@@ -3012,9 +3013,10 @@ async def list_vendor_bills(user=Depends(current_user), vendor_id: Optional[str]
 
 @api.get("/vendor-bills/pending-summary", response_model=List[PendingVendorBillOut])
 async def pending_vendor_bills(user=Depends(current_user), date: Optional[str] = None):
-    """One row per vendor with PENDING purchases on the working date.
+    """One row per vendor with ALL PENDING purchases (across all dates).
+    The date param is accepted for backward compat but ignored — pending bills
+    must be visible regardless of which working date is selected.
     Amounts use the same vendor-bill formula as create_vendor_bill (settings defaults)."""
-    d = date or _today_str()
     settings_doc = await db.settings.find_one({"shop_id": user["shop_id"]}, {"_id": 0}) or {}
     factor = float(settings_doc.get("vendor_factor", 1.06))
     margin = float(settings_doc.get("vendor_margin_per_bag", 30.0))
@@ -3022,7 +3024,8 @@ async def pending_vendor_bills(user=Depends(current_user), date: Optional[str] =
     hamali_default = float(settings_doc.get("vendor_hamali_default", 0.0))
 
     grouped: dict[str, dict] = {}
-    async for lot in db.lots.find({"shop_id": user["shop_id"], "date": d}, {"_id": 0}):
+    # No date filter — show all unposted sales so vendors never disappear based on working date.
+    async for lot in db.lots.find({"shop_id": user["shop_id"]}, {"_id": 0}):
         for s in lot.get("sales") or []:
             if _sale_status(s) == "POSTED":
                 continue
@@ -3049,6 +3052,7 @@ async def pending_vendor_bills(user=Depends(current_user), date: Optional[str] =
                 auction_rate=_round2(auction),
                 vendor_rate=_round2(vendor_rate),
                 amount=_round2(amount),
+                date=lot.get("date"),
             ))
             row["bags"] += bags
             row["goods"] += amount
@@ -3246,15 +3250,17 @@ class VendorDayLineOut(BaseModel):
     farmer_name: str
     bags: int
     auction_rate: float
+    date: Optional[str] = None  # auction day date (YYYY-MM-DD) for display
 
 
 @api.get("/vendors/{vendor_id}/unbilled-lines", response_model=List[VendorDayLineOut])
 async def unbilled_lines(vendor_id: str, user=Depends(current_user), date: Optional[str] = None):
-    """List every sale to this vendor on the given date (defaults to today).
-    The biller can pick which lines to include in a new vendor bill."""
-    d = date or _today_str()
+    """List every PENDING (unposted) sale to this vendor across all dates.
+    The date param is accepted for backward compat but ignored — all unposted lines
+    must be available for billing regardless of working date."""
     out: List[VendorDayLineOut] = []
-    async for lot in db.lots.find({"shop_id": user["shop_id"], "date": d}, {"_id": 0}):
+    # No date filter — return all unposted sales for this vendor.
+    async for lot in db.lots.find({"shop_id": user["shop_id"]}, {"_id": 0}):
         for s in lot.get("sales", []):
             if s["vendor_id"] != vendor_id:
                 continue
@@ -3264,6 +3270,7 @@ async def unbilled_lines(vendor_id: str, user=Depends(current_user), date: Optio
                 lot_id=lot["id"], lot_no=lot["lot_no"],
                 farmer_name=lot["farmer_name"], bags=int(s["bags"]),
                 auction_rate=float(s["rate_per_bag"]),
+                date=lot.get("date"),
             ))
     return out
 
