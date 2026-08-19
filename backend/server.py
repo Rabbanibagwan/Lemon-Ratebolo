@@ -3500,123 +3500,84 @@ def _gemini_key_auth_failed(status_code: int, body: str) -> bool:
     )
 
 
+class OcrUpstreamError(RuntimeError):
+    def __init__(self, status_code: int, message: str, body: str = "", model: Optional[str] = None):
+        super().__init__(message)
+        self.status_code = int(status_code)
+        self.message = message
+        self.body = body or ""
+        self.model = model
+
+
 def _call_gemini_vision(image_b64: str, mime_type: str, hint: Optional[str], api_key: str) -> tuple[str, str]:
     """Call Google Gemini generateContent. Returns (raw_text, model_name). Raises RuntimeError on failure.
 
-    Uses Gemini 2.5 Flash by default. Retries transient 429/5xx with backoff; never drops the image.
+    Uses one deterministic Gemini model per tap. This avoids multiplying requests
+    across fallback models and unintentionally burning quota during repeated OCR use.
     """
-    import time
     import requests as _requests
 
-    preferred = os.environ.get("GEMINI_OCR_MODEL") or "gemini-2.5-flash"
-    models = [
-        preferred,
-        "gemini-2.5-flash",
-        "gemini-3.6-flash",
-        "gemini-flash-latest",
-        "gemini-3-flash-preview",
-    ]
-    seen = set()
-    models = [m for m in models if m and not (m in seen or seen.add(m))][:4]
+    model = (os.environ.get("GEMINI_OCR_MODEL") or "gemini-2.5-flash").strip()
     hint_line = f"\nHint: {hint}" if hint else ""
     prompt = _OCR_SYSTEM + hint_line + "\nExtract all lots. JSON only."
-    last_err = None
     key = api_key.strip()
-    auth_modes = ("header", "query") if key.startswith("AQ.") else ("query", "header")
+    auth_mode = "header" if key.startswith("AQ.") else "query"
 
     # Long per-request wait so we do not fail while Gemini is still processing.
-    # Client OCR timeout is 360s; keep retries within that budget.
+    # Client OCR timeout is 360s; keep this single upstream call within that budget.
     req_timeout = 200
-    max_attempts_per_model = 2
+    base_url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{model}:generateContent"
+    )
+    payload = {
+        "contents": [{
+            "parts": [
+                {"text": prompt},
+                {"inline_data": {"mime_type": mime_type or "image/jpeg", "data": image_b64}},
+            ]
+        }],
+        "generationConfig": {
+            "temperature": 0.0,
+            "responseMimeType": "application/json",
+            "maxOutputTokens": 8192,
+        },
+    }
+    url = f"{base_url}?key={key}" if auth_mode == "query" else base_url
+    headers = {"Content-Type": "application/json"}
+    if auth_mode == "header":
+        headers["x-goog-api-key"] = key
+    try:
+        resp = _requests.post(url, json=payload, headers=headers, timeout=req_timeout)
+    except Exception as e:
+        raise RuntimeError(f"OCR model transport failed: {e}")
 
-    for model in models:
-        base_url = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{model}:generateContent"
-        )
-        payload = {
-            "contents": [{
-                "parts": [
-                    {"text": prompt},
-                    {"inline_data": {"mime_type": mime_type or "image/jpeg", "data": image_b64}},
-                ]
-            }],
-            "generationConfig": {
-                "temperature": 0.0,
-                "responseMimeType": "application/json",
-                "maxOutputTokens": 8192,
-            },
-        }
-        for attempt in range(max_attempts_per_model):
-            auth_mode = auth_modes[0]
-            url = f"{base_url}?key={key}" if auth_mode == "query" else base_url
-            headers = {"Content-Type": "application/json"}
-            if auth_mode == "header":
-                headers["x-goog-api-key"] = key
-            try:
-                resp = _requests.post(url, json=payload, headers=headers, timeout=req_timeout)
-                if resp.status_code == 404:
-                    last_err = f"{model} not found"
-                    break  # next model
-                if resp.status_code in (429, 500, 502, 503, 504):
-                    last_err = f"{model}: {resp.status_code} transient"
-                    # Backoff then retry same model — do not discard image / create duplicates.
-                    if attempt < max_attempts_per_model - 1:
-                        time.sleep(2 ** attempt * 2)  # 2s, 4s, 8s
-                        continue
-                    break  # exhausted retries → next model
-                if resp.status_code >= 400:
-                    # Try alternate auth once on key-style errors
-                    if _gemini_key_auth_failed(resp.status_code, resp.text or "") and len(auth_modes) > 1:
-                        alt = auth_modes[1]
-                        alt_url = f"{base_url}?key={key}" if alt == "query" else base_url
-                        alt_headers = {"Content-Type": "application/json"}
-                        if alt == "header":
-                            alt_headers["x-goog-api-key"] = key
-                        resp = _requests.post(alt_url, json=payload, headers=alt_headers, timeout=req_timeout)
-                        if resp.status_code < 400:
-                            data = resp.json()
-                            parts = (
-                                data.get("candidates", [{}])[0]
-                                .get("content", {})
-                                .get("parts", [])
-                            )
-                            text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
-                            return text, model
-                    last_err = f"{model}: {resp.status_code} {resp.text[:300]}"
-                    if _gemini_key_auth_failed(resp.status_code, resp.text or ""):
-                        low = (resp.text or "").lower()
-                        if "api key not valid" in low or ("invalid" in low and "key" in low):
-                            raise RuntimeError(
-                                "Gemini API key not valid. In AI Studio click Copy key, then paste into "
-                                "Settings → Gemini API key (or Scan paste box) and Save."
-                            )
-                        raise RuntimeError(f"OCR model call failed: {last_err}")
-                    break  # non-retryable 4xx → next model
-                data = resp.json()
-                parts = (
-                    data.get("candidates", [{}])[0]
-                    .get("content", {})
-                    .get("parts", [])
+    if resp.status_code >= 400:
+        body = (resp.text or "")[:600]
+        if _gemini_key_auth_failed(resp.status_code, body):
+            low = body.lower()
+            if "api key not valid" in low or ("invalid" in low and "key" in low):
+                raise RuntimeError(
+                    "Gemini API key not valid. In AI Studio click Copy key, then paste into "
+                    "Settings → Gemini API key (or Scan paste box) and Save."
                 )
-                text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
-                if not (text or "").strip():
-                    last_err = f"{model}: empty response"
-                    if attempt < max_attempts_per_model - 1:
-                        time.sleep(2 ** attempt * 2)
-                        continue
-                    break
-                return text, model
-            except RuntimeError:
-                raise
-            except Exception as e:
-                last_err = str(e)
-                # Network / read timeouts — retry with backoff
-                if attempt < max_attempts_per_model - 1:
-                    time.sleep(2 ** attempt * 2)
-                    continue
-                break
-    raise RuntimeError(f"OCR model call failed: {last_err}")
+        raise OcrUpstreamError(
+            resp.status_code,
+            f"OCR upstream returned HTTP {resp.status_code}",
+            body=body,
+            model=model,
+        )
+
+    data = resp.json()
+    parts = (
+        data.get("candidates", [{}])[0]
+        .get("content", {})
+        .get("parts", [])
+    )
+    text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+    if not (text or "").strip():
+        raise OcrUpstreamError(502, "OCR upstream returned an empty response", model=model)
+    return text, model
 
 
 def _optimize_ocr_image_b64(image_b64: str, mime_type: str) -> tuple[str, str]:
@@ -3703,9 +3664,8 @@ async def ocr_action_diary(body: OcrRequest, user=Depends(current_user)):
             )
         try:
             import asyncio
-            import logging
             img_b64, mime = _optimize_ocr_image_b64(img_b64, body.mime_type or "image/jpeg")
-            logging.getLogger("uvicorn.error").info(
+            logger.info(
                 "OCR action-diary: Gemini extract starting (shop=%s, bytes≈%s)",
                 user.get("shop_id"),
                 int(len(img_b64) * 0.75) if img_b64 else 0,
@@ -3713,13 +3673,33 @@ async def ocr_action_diary(body: OcrRequest, user=Depends(current_user)):
             full_text, model_name = await asyncio.to_thread(
                 _call_gemini_vision, img_b64, mime, body.hint, api_key
             )
-            logging.getLogger("uvicorn.error").info(
+            logger.info(
                 "OCR action-diary: Gemini extract done (model=%s, chars=%s)",
                 model_name,
                 len(full_text or ""),
             )
+        except OcrUpstreamError as e:
+            logger.warning(
+                "OCR action-diary upstream failure (shop=%s, model=%s, status=%s): %s | body=%s",
+                user.get("shop_id"),
+                e.model or model_name,
+                e.status_code,
+                e.message,
+                (e.body or "")[:300],
+            )
+            raise HTTPException(502, {
+                "code": "OCR_UPSTREAM",
+                "message": e.message,
+                "status_code": e.status_code,
+                "model": e.model or model_name,
+                "upstream_body": (e.body or "")[:300],
+            })
         except Exception as e:
-            raise HTTPException(502, f"OCR model call failed: {e}")
+            logger.warning("OCR action-diary internal failure (shop=%s): %s", user.get("shop_id"), e)
+            raise HTTPException(502, {
+                "code": "OCR_INTERNAL",
+                "message": f"OCR model call failed: {e}",
+            })
     else:
         return OcrResponse(
             rows=[],

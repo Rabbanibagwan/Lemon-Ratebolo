@@ -196,11 +196,25 @@ export default function OcrCapture() {
 
   const classifyOcrError = (e: unknown): string => {
     const err = e as ApiError | undefined;
+    const detailObj = err?.detail && typeof err.detail === "object" ? err.detail as Record<string, unknown> : null;
+    const upstreamStatus = typeof detailObj?.status_code === "number" ? detailObj.status_code : null;
+    const upstreamMessage = typeof detailObj?.message === "string" ? detailObj.message : "";
+    const upstreamBody = typeof detailObj?.upstream_body === "string" ? detailObj.upstream_body : "";
+    const combinedUpstream = `${upstreamMessage} ${upstreamBody}`.toLowerCase();
     if (err?.code === "TIMEOUT" || /timed out|taking longer|longer than expected/i.test(String(err?.detail || ""))) {
       return "OCR is taking longer than usual. Please keep the app open and try again — do not assume it failed mid-extract.";
     }
     if (err?.code === "NETWORK" || err?.status === 0) {
       return apiErrorMessage(e, "Unable to connect to the server. Please check your internet connection and try again.");
+    }
+    if (
+      upstreamStatus === 429 ||
+      /resource_exhausted|quota|rate limit|too many requests|exceeded/i.test(combinedUpstream)
+    ) {
+      return "OCR provider quota or rate limit was reached. Please wait and try again later, or switch to a different Gemini API key.";
+    }
+    if (upstreamStatus && upstreamStatus >= 500) {
+      return "OCR provider is temporarily unavailable. Please try again shortly.";
     }
     const text = apiErrorMessage(e, "We could not extract the information from this image. Please try again.");
     if (/not valid|API key|NO_CLOUD_OCR_KEY|401|403/i.test(text)) {
@@ -255,7 +269,18 @@ export default function OcrCapture() {
       }
       goToPreview(resp.rows, resp.model, resp.warning);
     } catch (e: any) {
-      if (__DEV__) console.warn("[ocr] failed", e?.code, e?.status, e?.detail || e?.message);
+      if (__DEV__) {
+        const detail = e?.detail;
+        if (detail && typeof detail === "object") {
+          console.warn("[ocr] failed", {
+            code: e?.code,
+            status: e?.status,
+            detail,
+          });
+        } else {
+          console.warn("[ocr] failed", e?.code, e?.status, detail || e?.message);
+        }
+      }
       if ((e as ApiError)?.code === "ABORTED" && ac.signal.aborted && !inFlightRef.current) {
         return;
       }
