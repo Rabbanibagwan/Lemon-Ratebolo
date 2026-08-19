@@ -205,8 +205,6 @@ export type Settings = {
   patti_prefix: string; vendor_bill_prefix: string;
   detailed_print_format?: boolean;
   thermal_paper_width_mm?: number;
-  /** Optional Gemini key for photo OCR (Action Diary). Prefer env GEMINI_API_KEY. */
-  ocr_gemini_api_key?: string | null;
 };
 
 export type ShopProfile = {

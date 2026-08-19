@@ -26,8 +26,6 @@ export default function OcrCapture() {
   const [hint, setHint] = useState("");
   const [pasteText, setPasteText] = useState("");
   const [showPaste, setShowPaste] = useState(false);
-  const [geminiKey, setGeminiKey] = useState("");
-  const [needKey, setNeedKey] = useState(false);
   const [keyConfigured, setKeyConfigured] = useState(false);
   const [cropInsets, setCropInsets] = useState({ top: 0, bottom: 0, left: 0, right: 0 });
   const [processing, setProcessing] = useState(false);
@@ -43,7 +41,6 @@ export default function OcrCapture() {
         const st = await api.get<{ configured: boolean }>("/ocr/status");
         if (!cancelled && st?.configured) {
           setKeyConfigured(true);
-          setNeedKey(false);
         }
       } catch {
         // ignore — extract will surface missing-key if needed
@@ -244,10 +241,6 @@ export default function OcrCapture() {
         mime_type: "image/jpeg",
         hint: hint.trim() || "1/5 ABDG (50) then MM 02 1000. Bhada in () is LOT TOTAL.",
       };
-      if (geminiKey.trim()) {
-        payload.gemini_api_key = geminiKey.trim();
-        payload.persist_key = true;
-      }
       if (__DEV__) console.log("[ocr] upload / request started");
       const resp = await api.post<{ rows: OcrExtractedRow[]; model: string; warning?: string }>(
         "/ocr/action-diary",
@@ -256,12 +249,10 @@ export default function OcrCapture() {
       );
       if (__DEV__) console.log("[ocr] response received", { rows: resp.rows?.length, model: resp.model, warning: resp.warning });
       if (resp.warning === "NO_CLOUD_OCR_KEY") {
-        setNeedKey(true);
         setKeyConfigured(false);
-        setError("Paste a free Gemini API key below to extract from the photo (aistudio.google.com/apikey).");
+        setError("OCR is not configured on the server. Please contact your administrator.");
         return;
       }
-      setNeedKey(false);
       setKeyConfigured(true);
       if (!resp.rows?.length) {
         setError(resp.warning || "We could not extract the information from this image. Please try again.");
@@ -286,11 +277,8 @@ export default function OcrCapture() {
       }
       const text = classifyOcrError(e);
       if (/not valid|API key|NO_CLOUD_OCR_KEY|401|403/i.test(text) || /Gemini API key/i.test(String((e as ApiError)?.detail || ""))) {
-        setNeedKey(true);
         setKeyConfigured(false);
-        setError(
-          "Saved Gemini key is invalid or missing. Paste a fresh key from aistudio.google.com/apikey below, then Extract again.",
-        );
+        setError("OCR is not configured correctly on the server. Please contact your administrator.");
       } else {
         setError(text);
       }
@@ -458,25 +446,6 @@ export default function OcrCapture() {
                   testID="ocr-hint"
                 />
               </View>
-              {(!keyConfigured && (needKey || geminiKey.length > 0)) ? (
-                <View style={styles.keyBox}>
-                  <Text style={styles.keyTitle}>
-                    {needKey ? "GEMINI API KEY NEEDED" : "GEMINI API KEY (OPTIONAL OVERRIDE)"}
-                  </Text>
-                  <Input
-                    label="Paste free key"
-                    value={geminiKey}
-                    onChangeText={setGeminiKey}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    placeholder="AIza… or AQ.… from aistudio.google.com/apikey"
-                    testID="ocr-gemini-key"
-                  />
-                  <Pressable onPress={() => Linking.openURL("https://aistudio.google.com/apikey")} testID="ocr-get-key">
-                    <Text style={styles.keyLink}>Get free key → aistudio.google.com/apikey</Text>
-                  </Pressable>
-                </View>
-              ) : null}
             </View>
           ) : null}
 
@@ -591,16 +560,6 @@ const styles = StyleSheet.create({
   },
   autoLinkText: {
     fontSize: 12, color: colors.muted, fontFamily: font.display, fontWeight: "800", letterSpacing: 0.5,
-  },
-  keyBox: {
-    marginTop: spacing.md, borderWidth: 2, borderColor: "#F59E0B",
-    backgroundColor: "#FEF3C7", padding: spacing.md, gap: spacing.sm,
-  },
-  keyTitle: {
-    fontSize: 10, letterSpacing: 1.2, fontFamily: font.display, fontWeight: "900", color: "#78350F",
-  },
-  keyLink: {
-    fontSize: 12, color: colors.brandPrimary, fontFamily: font.display, fontWeight: "800", textDecorationLine: "underline",
   },
   errBox: { marginTop: spacing.md, gap: spacing.sm },
   err: {
