@@ -195,11 +195,9 @@ export function renderThermalPattiHtml(
     <div class="hr"></div>
     <div class="kv farmer"><span class="k">FARMER</span><span class="bold v wrap">${escapeHtml(p.farmer_name)}</span></div>
     <div class="kv"><span class="k">DATE</span><span>${date}</span></div>
-    <div class="kv"><span class="k">DRIVER</span><span class="wrap">${
-      p.driver_name
-        ? escapeHtml(p.driver_name) + (p.driver_place ? " · " + escapeHtml(p.driver_place) : "")
-        : "—"
-    }</span></div>
+    ${p.driver_name
+      ? `<div class="kv"><span class="k">DRIVER</span><span class="wrap">${escapeHtml(p.driver_name)}${p.driver_place ? " · " + escapeHtml(p.driver_place) : ""}</span></div>`
+      : ""}
     <div class="hr"></div>
     <div class="row th"><span class="lot">LOT</span><span class="mid">BAGS × RATE</span><span class="right">AMOUNT</span></div>
     ${lines}

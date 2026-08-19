@@ -76,10 +76,10 @@ export function encodeFarmerPattiEscPos(
   }
   b.size("normal").bold(false);
   b.kv("DATE", date);
-  const drv = p.driver_name
-    ? (p.driver_place ? `${p.driver_name} - ${p.driver_place}` : p.driver_name)
-    : "-";
-  b.kv("DRIVER", slipText(drv));
+  if (p.driver_name) {
+    const drv = p.driver_place ? `${p.driver_name} - ${p.driver_place}` : p.driver_name;
+    b.kv("DRIVER", slipText(drv));
+  }
   b.hr().bold(true).itemRow("LOT", "BAGS x RATE", "AMOUNT").bold(false);
   for (const lot of p.lots) {
     lot.sales.forEach((s, i) => {

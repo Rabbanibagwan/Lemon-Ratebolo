@@ -271,10 +271,12 @@ export default function PattiDetail() {
             <Text style={styles.metaValueFarmer} numberOfLines={2}>{p.farmer_name}</Text>
           </View>
           <View style={styles.metaRow}><Text style={styles.metaLabel}>DATE</Text><Text style={styles.metaValue}>{date}</Text></View>
-          <View style={styles.metaRow}>
-            <Text style={styles.metaLabel}>DRIVER</Text>
-            <Text style={styles.metaValue}>{p.driver_name ? `${p.driver_name}${p.driver_place ? ` · ${p.driver_place}` : ""}` : "—"}</Text>
-          </View>
+          {p.driver_name ? (
+            <View style={styles.metaRow}>
+              <Text style={styles.metaLabel}>DRIVER</Text>
+              <Text style={styles.metaValue}>{p.driver_name}{p.driver_place ? ` · ${p.driver_place}` : ""}</Text>
+            </View>
+          ) : null}
 
           <View style={styles.divider} />
 
