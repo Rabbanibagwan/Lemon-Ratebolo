@@ -9,6 +9,7 @@ import { colors, font, money, spacing } from "@/src/theme";
 import { Empty } from "@/src/components/ui";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
 import { DatePickerModal } from "@/src/components/DatePickerModal";
+import { routeParam } from "@/src/utils/route-params";
 
 type Tab = "pending" | "posted";
 
@@ -18,7 +19,9 @@ function bagsLabel(n: number): string {
 
 export default function VendorsList() {
   const router = useRouter();
-  const { tab: tabParam } = useLocalSearchParams<{ tab?: string; highlight?: string }>();
+  const params = useLocalSearchParams<{ tab?: string; highlight?: string }>();
+  const tabParam = routeParam(params.tab);
+  const highlightId = routeParam(params.highlight);
   const { workingDate, workingDateISO, displayDate, setWorkingDate } = useWorkingDate();
   const [tab, setTab] = useState<Tab>(tabParam === "posted" ? "posted" : "pending");
   const [pending, setPending] = useState<PendingVendorBill[]>([]);

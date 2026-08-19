@@ -457,7 +457,7 @@ export default function OcrPreview() {
                 );
                 continue;
               }
-              await thermalPrintAndMark(patti, profile || ({ shop_name: "" } as any), paperMm, session);
+              await thermalPrintAndMark(patti, profile || ({ shop_name: "" } as any), paperMm, session, !!settingsDoc?.detailed_print_format);
               setLots((xs) =>
                 xs.map((l) =>
                   l.patti_id === pid

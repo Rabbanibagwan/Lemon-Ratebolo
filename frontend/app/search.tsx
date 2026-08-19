@@ -142,7 +142,7 @@ export default function SearchScreen() {
           renderItem={({ item }) => (
             <Pressable
               style={styles.row}
-              onPress={() => router.push(`/patti/${item.id}`)}
+              onPress={() => router.push({ pathname: "/patti/[id]", params: { id: item.id, from: "search" } })}
               testID={`search-patti-${item.id}`}
             >
               <View style={{ flex: 1 }}>

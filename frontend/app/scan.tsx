@@ -28,7 +28,7 @@ export default function Scan() {
       // Accept either a bare token or a URL with token
       const token = extractToken(data);
       const p = await api.get<Patti>(`/pattis/by-qr/${encodeURIComponent(token)}`);
-      router.replace({ pathname: "/patti/[id]", params: { id: p.id } });
+      router.replace({ pathname: "/patti/[id]", params: { id: p.id, from: "scan" } });
     } catch (e: any) {
       Alert.alert("QR not recognised", e?.detail || "This QR does not match any Patti in this shop.", [
         { text: "Scan again", onPress: () => { setScanning(true); setLookingUp(false); } },

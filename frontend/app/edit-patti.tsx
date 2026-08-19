@@ -226,7 +226,7 @@ export default function EditPatti() {
         api.get<any>("/settings").catch(() => null),
       ]);
       const paperMm = clampPaperMm(settings?.thermal_paper_width_mm || 80);
-      const updated = await thermalPrintAndMark(patti, profile || { shop_name: session.shop_name } as any, paperMm, session);
+      const updated = await thermalPrintAndMark(patti, profile || { shop_name: session.shop_name } as any, paperMm, session, !!settings?.detailed_print_format);
       setPatti(updated);
     } catch (e: any) {
       const detail = typeof e?.detail === "string" ? e.detail : null;

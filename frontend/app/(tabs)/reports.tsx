@@ -303,7 +303,17 @@ export default function Reports() {
           </Text>
           <Text style={styles.subtitle}>{displayDate}</Text>
         </View>
-        {showActions ? (
+          {mode === "driver" && !driverDetail ? (
+            <Pressable
+              style={styles.actionBtn}
+              onPress={() => router.push({ pathname: "/(tabs)/auction", params: { editDrivers: "1" } })}
+              testID="reports-edit-drivers"
+            >
+              <Ionicons name="car-outline" size={14} color={colors.onSurfaceInverse} />
+              <Text style={styles.actionBtnText}>DRIVERS</Text>
+            </Pressable>
+          ) : null}
+          {showActions ? (
           <View style={styles.headerActions}>
             <Pressable
               style={styles.actionBtn}
@@ -416,7 +426,7 @@ export default function Reports() {
           onSearch={setSearch}
           loading={loading}
           drivers={auctionDrivers}
-          onOpen={(id) => router.push(`/patti/${id}`)}
+          onOpen={(id) => router.push({ pathname: "/patti/[id]", params: { id, from: "entry" } })}
         />
       ) : mode === "driver" && driverDetail ? (
         <DriverDetailView d={driverDetail} drivers={auctionDrivers} />

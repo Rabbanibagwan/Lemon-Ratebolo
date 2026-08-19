@@ -231,7 +231,7 @@ export default function History() {
           return (
           <Pressable
             testID={`patti-row-${item.id}`}
-            onPress={() => router.push({ pathname: "/patti/[id]", params: { id: item.id } })}
+            onPress={() => router.push({ pathname: "/patti/[id]", params: { id: item.id, from: "history" } })}
             style={({ pressed }) => [
               styles.row,
               isPrinted && styles.rowPrinted,

@@ -15,9 +15,15 @@ import { Button, Input } from "@/src/components/ui";
 import { qrDataUri } from "@/src/utils/qr";
 import { thermalPrintAndMark, sharePattiPdf, canUserPrintPatti, canUserSharePatti, staffPrintBlockedMessage, staffShareBlockedMessage } from "@/src/utils/patti-print";
 import { clampPaperMm, thermalPrintUserMessage } from "@/src/utils/thermal-print";
+import { routeParam } from "@/src/utils/route-params";
 
 export default function PattiDetail() {
-  const { id, fresh, autoPrint, autoShare } = useLocalSearchParams<{ id: string; fresh?: string; autoPrint?: string; autoShare?: string }>();
+  const params = useLocalSearchParams<{ id: string; fresh?: string; autoPrint?: string; autoShare?: string; from?: string }>();
+  const id = routeParam(params.id);
+  const fresh = routeParam(params.fresh);
+  const autoPrint = routeParam(params.autoPrint);
+  const autoShare = routeParam(params.autoShare);
+  const fromScreen = routeParam(params.from);
   const router = useRouter();
   const { session } = useAuth();
   const isOwner = session?.role === "owner";
@@ -35,7 +41,7 @@ export default function PattiDetail() {
   const [receiverErr, setReceiverErr] = useState<string | null>(null);
   const [savingReceiver, setSavingReceiver] = useState(false);
 
-  const canPrint = canUserPrintPatti(p, session);
+  const canPrint = isOwner && canUserPrintPatti(p, session);
   const canShare = canUserSharePatti(session);
 
   const load = useCallback(async () => {
@@ -72,7 +78,9 @@ export default function PattiDetail() {
     if (autoPrint === "1") {
       setAutoActionRan(true);
       if (!canUserPrintPatti(p, session)) {
-        Alert.alert("Already printed", staffPrintBlockedMessage());
+        if (session?.role === "counter") {
+          Alert.alert("Already printed", staffPrintBlockedMessage());
+        }
         return;
       }
       // Small delay so the UI can render first.
@@ -101,6 +109,7 @@ export default function PattiDetail() {
         profile || { shop_name: session.shop_name } as any,
         session.display_name,
         !!settings?.detailed_print_format,
+        session,
       );
     } catch (e) {
       console.warn("share error", e);
@@ -124,6 +133,7 @@ export default function PattiDetail() {
         profile || { shop_name: session.shop_name } as any,
         paperMm,
         session,
+        !!settings?.detailed_print_format,
       );
       setP(updated);
     } catch (e: any) {
@@ -188,7 +198,9 @@ export default function PattiDetail() {
       {fresh === "1" && !isDeleted ? (
         <View style={styles.freshBanner}>
           <Ionicons name="checkmark-circle" size={18} color={colors.success} />
-          <Text style={styles.freshText}>Patti generated · Ready to print/share</Text>
+          <Text style={styles.freshText}>
+            {isOwner ? "Patti generated · Ready to print/share" : "Patti generated · Saved successfully"}
+          </Text>
         </View>
       ) : null}
       {isDeleted ? (
@@ -249,12 +261,10 @@ export default function PattiDetail() {
             <Text style={styles.metaValueFarmer} numberOfLines={2}>{p.farmer_name}</Text>
           </View>
           <View style={styles.metaRow}><Text style={styles.metaLabel}>DATE</Text><Text style={styles.metaValue}>{date}</Text></View>
-          {p.driver_name ? (
-            <View style={styles.metaRow}>
-              <Text style={styles.metaLabel}>DRIVER</Text>
-              <Text style={styles.metaValue}>{p.driver_name}{p.driver_place ? ` · ${p.driver_place}` : ""}</Text>
-            </View>
-          ) : null}
+          <View style={styles.metaRow}>
+            <Text style={styles.metaLabel}>DRIVER</Text>
+            <Text style={styles.metaValue}>{p.driver_name ? `${p.driver_name}${p.driver_place ? ` · ${p.driver_place}` : ""}` : "—"}</Text>
+          </View>
 
           <View style={styles.divider} />
 
@@ -300,6 +310,15 @@ export default function PattiDetail() {
             <Text style={styles.netValue}>{money(p.net_payable)}</Text>
           </View>
 
+          <View style={styles.metaRow}>
+            <Text style={styles.metaLabel}>RECEIVER</Text>
+            <Text style={styles.metaValue}>{p.receiver_name || "—"}</Text>
+          </View>
+          <View style={styles.metaRow}>
+            <Text style={styles.metaLabel}>STATUS</Text>
+            <Text style={styles.metaValue}>{p.status === "received" ? "RECEIVED" : "PENDING"}</Text>
+          </View>
+
           {qr ? (
             <View style={styles.qrBox}>
               <Image source={{ uri: qr }} style={styles.qrImg} />
@@ -314,6 +333,7 @@ export default function PattiDetail() {
         </View>
       </ScrollView>
 
+      {isOwner ? (
       <View style={styles.footerBar}>
         <View style={styles.footerRow}>
           {canPrint ? (
@@ -329,24 +349,17 @@ export default function PattiDetail() {
           ) : isOwner ? (
             <View style={[styles.thermalBtn, styles.thermalBtnDisabled]} testID="patti-print-disabled">
               <Ionicons name="print-outline" size={18} color={colors.muted} />
-              <Text style={[styles.thermalBtnText, { color: colors.muted }]}>PRINTED</Text>
+              <Text style={[styles.thermalBtnText, { color: colors.muted }]}>PRINT</Text>
             </View>
-          ) : (
-            <View style={[styles.thermalBtn, styles.thermalBtnDisabled, { flex: 1 }]} testID="patti-print-disabled">
-              <Ionicons name="print-outline" size={18} color={colors.muted} />
-              <Text style={[styles.thermalBtnText, { color: colors.muted }]}>PRINTED</Text>
-            </View>
-          )}
+          ) : null}
           {canShare ? (
             <View style={{ flex: 1 }}>
               <Button label={sharing ? "PREPARING…" : "SHARE PDF"} onPress={share} loading={sharing} testID="patti-share" />
             </View>
           ) : null}
         </View>
-        {!canPrint && !isOwner ? (
-          <Text style={styles.staffPrintHint}>Staff print used — reprint and share unavailable.</Text>
-        ) : null}
       </View>
+      ) : null}
 
       {/* Edit receiver modal */}
       <Modal visible={showReceiver} transparent animationType="fade" onRequestClose={() => setShowReceiver(false)}>
