@@ -33,13 +33,15 @@ export function encodeTestPrint(paperMm: number, printerName?: string): string {
   return b.toBase64();
 }
 
-/** ASCII-safe slip text — thermal printers often cannot render × / · / ₹. */
+/** ASCII-safe slip text — thermal printers often cannot render × / · / ₹ / em-dash. */
 function slipText(s: string): string {
   return String(s || "")
     .replace(/₹/g, "Rs ")
     .replace(/×/g, "x")
     .replace(/·/g, " - ")
-    .replace(/…/g, "...");
+    .replace(/…/g, "...")
+    .replace(/—/g, "-")
+    .replace(/–/g, "-");
 }
 
 export function encodeFarmerPattiEscPos(
@@ -57,19 +59,34 @@ export function encodeFarmerPattiEscPos(
   if (profile.mobile) b.line(`Mobile: ${profile.mobile}`);
   b.align("left").hr()
     .kv("PATTI / BILL", `NO. ${p.patti_no}`)
-    .hr()
-    .kv("FARMER", slipText(p.farmer_name))
-    .kv("DATE", date);
+    .hr();
+  // Farmer name printed large (bold + tall) to match the prominent farmerFs in the HTML preview.
+  // size("tall") halves the column count, so wrap at half the normal cols.
+  b.bold(true).size("tall");
+  const farmerLabel = "FARMER: ";
+  const farmerName = slipText(p.farmer_name);
+  const halfCols = Math.floor(b.cols / 2);
+  const farmerFull = farmerLabel + farmerName;
+  if (farmerFull.length <= halfCols) {
+    b.line(farmerFull);
+  } else {
+    b.line(farmerLabel + farmerName.slice(0, Math.max(0, halfCols - farmerLabel.length)));
+    const rest = farmerName.slice(Math.max(0, halfCols - farmerLabel.length));
+    for (let i = 0; i < rest.length; i += halfCols) b.line("  " + rest.slice(i, i + halfCols));
+  }
+  b.size("normal").bold(false);
+  b.kv("DATE", date);
   const drv = p.driver_name
     ? (p.driver_place ? `${p.driver_name} - ${p.driver_place}` : p.driver_name)
-    : "—";
+    : "-";
   b.kv("DRIVER", slipText(drv));
-  b.hr().itemRow("LOT", "BAGS x RATE", "AMOUNT");
+  b.hr().bold(true).itemRow("LOT", "BAGS x RATE", "AMOUNT").bold(false);
   for (const lot of p.lots) {
     lot.sales.forEach((s, i) => {
       const lotNo = i === 0 ? String(lot.lot_no || `${lot.lot_serial_no}/${lot.total_bags}`) : "";
       const mid = `${s.bags} x ${rupees(s.rate_per_bag * p.payment_factor)}`;
-      b.itemRow(lotNo, mid, rupees(s.bags * s.rate_per_bag * p.payment_factor));
+      // Bold lot number and bags count to match emphFs emphasis in HTML.
+      b.bold(true).itemRow(lotNo, mid, rupees(s.bags * s.rate_per_bag * p.payment_factor)).bold(false);
     });
   }
   const hamaliLabel = detailed
@@ -80,14 +97,14 @@ export function encodeFarmerPattiEscPos(
     .kv(hamaliLabel, `- ${rupees(p.hamali_total)}`)
     .kv("Bhada", `- ${rupees(p.bhada_total)}`)
     .kv("Stationery", `- ${rupees(p.stationery_total)}`)
-    .kv("Total deduction", `- ${rupees(p.deductions_total)}`)
+    .bold(true).kv("Total deduction", `- ${rupees(p.deductions_total)}`).bold(false)
     .hr()
     .bold(true)
     .size("tall")
     .kv("NET PAYABLE", rupees(p.net_payable))
     .size("normal")
     .bold(false);
-  b.kv("RECEIVER", slipText(p.receiver_name || "—"))
+  b.kv("RECEIVER", slipText(p.receiver_name || "-"))
     .kv("STATUS", p.status === "received" ? "RECEIVED" : "PENDING");
   const token = (qrToken || p.qr_token || "").trim();
   if (token) {

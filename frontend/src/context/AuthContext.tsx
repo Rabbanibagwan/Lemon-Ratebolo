@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { storage } from "@/src/utils/storage";
-import { api, AUTH_SHOP_KEY, AUTH_TOKEN_KEY, Session } from "@/src/api";
+import { api, ApiError, AUTH_SHOP_KEY, AUTH_TOKEN_KEY, Session } from "@/src/api";
 
 type AuthState = {
   loading: boolean;
@@ -26,15 +26,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const token = await storage.secureGet<string>(AUTH_TOKEN_KEY, "");
       const cached = await storage.getItem<string>(AUTH_SHOP_KEY, "");
       if (token && cached) {
+        const cached_session = JSON.parse(cached) as Session;
+        setSession(cached_session);
         try {
-          setSession(JSON.parse(cached) as Session);
           const fresh = await api.get<Session>("/auth/me");
           setSession(fresh);
           await storage.setItem(AUTH_SHOP_KEY, JSON.stringify(fresh));
-        } catch {
-          await storage.secureRemove(AUTH_TOKEN_KEY);
-          await storage.removeItem(AUTH_SHOP_KEY);
-          setSession(null);
+        } catch (e) {
+          const err = e as ApiError | undefined;
+          // Only invalidate the session on explicit auth rejection (401/403).
+          // Network errors and timeouts (Render cold start) keep the cached session.
+          if (err?.status === 401 || err?.status === 403) {
+            await storage.secureRemove(AUTH_TOKEN_KEY);
+            await storage.removeItem(AUTH_SHOP_KEY);
+            setSession(null);
+          }
+          // Otherwise keep cached_session — user stays logged in.
         }
       }
       setLoading(false);

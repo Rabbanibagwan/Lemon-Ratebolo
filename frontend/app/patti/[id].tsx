@@ -127,15 +127,25 @@ export default function PattiDetail() {
     }
     try {
       setSharing(true);
-      const paperMm = clampPaperMm(settings?.thermal_paper_width_mm || 80);
+      // Always fetch fresh settings + profile at print time so paper width is correct
+      // regardless of whether the React state has loaded yet (race with auto-print).
+      const [freshProfile, freshSettings] = await Promise.all([
+        api.get<ShopProfile>("/shop/profile").catch(() => profile),
+        api.get<Settings>("/settings").catch(() => settings),
+      ]);
+      const resolvedProfile = freshProfile || profile || { shop_name: session.shop_name } as any;
+      const paperMm = clampPaperMm((freshSettings ?? settings)?.thermal_paper_width_mm || 80);
+      const detailed = !!( freshSettings ?? settings)?.detailed_print_format;
       const updated = await thermalPrintAndMark(
         p,
-        profile || { shop_name: session.shop_name } as any,
+        resolvedProfile,
         paperMm,
         session,
-        !!settings?.detailed_print_format,
+        detailed,
       );
       setP(updated);
+      if (freshProfile) setProfile(freshProfile);
+      if (freshSettings) setSettings(freshSettings);
     } catch (e: any) {
       console.warn("thermal print error", e);
       const detail = typeof e?.detail === "string" ? e.detail : null;

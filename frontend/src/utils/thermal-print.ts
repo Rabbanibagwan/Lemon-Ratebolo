@@ -212,7 +212,7 @@ export function estimateThermalHeightMm(html: string, paperMm: number): number {
     hrs * 1.1 +
     nets * (m.hugeFs + 12) * pxToMm +
     (hasQr ? (m.qrPx + 14) * pxToMm : 0) +
-    3; // small tear / feed margin only
+    10; // safety buffer: Android WebView line-height rounding + tear margin
   return Math.max(28, Math.ceil(contentMm));
 }
 
