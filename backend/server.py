@@ -3774,7 +3774,7 @@ async def _ledger_row_out(d: dict, party_name: str, running: float) -> LedgerTxn
 
 @api.get("/account-ledger/parties", response_model=List[LedgerPartyOut])
 async def list_ledger_parties(
-    user=Depends(current_user),
+    user=Depends(owner_only),
     account_type: str = Query(...),
     date: Optional[str] = None,
     q: Optional[str] = None,
@@ -3872,7 +3872,7 @@ async def list_ledger_parties(
 
 @api.get("/account-ledger/detail", response_model=LedgerDetailOut)
 async def get_ledger_detail(
-    user=Depends(current_user),
+    user=Depends(owner_only),
     account_type: str = Query(...),
     party_id: str = Query(...),
     date: Optional[str] = None,
@@ -3939,7 +3939,7 @@ async def get_ledger_detail(
 
 
 @api.post("/account-ledger", response_model=LedgerTxnOut, status_code=201)
-async def create_ledger_txn(body: LedgerTxnIn, user=Depends(current_user)):
+async def create_ledger_txn(body: LedgerTxnIn, user=Depends(owner_only)):
     """Manual CREDIT/DEBIT only. Farmer Patti is never written here."""
     _assert_ledger_party(body.account_type, body.farmer_id, body.vendor_id)
     shop_id = user["shop_id"]
