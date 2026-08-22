@@ -118,10 +118,10 @@ export default function Home() {
                 <Text style={styles.bagWarn}>Only {wallet.total_available} bags remaining.</Text>
               ) : null}
               <Text style={styles.bagLine}>
-                FREE {wallet.free_used.toLocaleString()} / {wallet.free_allocated.toLocaleString()} USED · REMAINING {wallet.free_remaining.toLocaleString()}
+                POOL {(wallet.free_allocated + wallet.purchased_bags).toLocaleString()} · USED {(wallet.free_used + wallet.purchased_used).toLocaleString()} · REMAINING {wallet.total_available.toLocaleString()}
               </Text>
               <Text style={styles.bagLine}>
-                PURCHASED {wallet.purchased_bags.toLocaleString()} · USED {wallet.purchased_used.toLocaleString()} · {money(wallet.price_per_bag)} / BAG
+                FREE {wallet.free_used.toLocaleString()} / {wallet.free_allocated.toLocaleString()} · PURCHASED {wallet.purchased_used.toLocaleString()} / {wallet.purchased_bags.toLocaleString()} · {money(wallet.price_per_bag)} / BAG
               </Text>
               <Text style={styles.bagCta}>PURCHASE BAGS →</Text>
             </Pressable>

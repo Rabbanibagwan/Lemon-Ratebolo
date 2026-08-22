@@ -147,18 +147,27 @@ export default function BillingScreen() {
 
             <View style={styles.row}>
               <Stat
-                label="FREE BAGS"
-                value={`${wallet.free_used.toLocaleString()} / ${wallet.free_allocated.toLocaleString()} USED`}
+                label="POOL (FREE + PURCHASED)"
+                value={String((wallet.free_allocated + wallet.purchased_bags).toLocaleString())}
               />
-              <Stat label="FREE REMAINING" value={String(wallet.free_remaining.toLocaleString())} />
+              <Stat
+                label="USED"
+                value={String((wallet.free_used + wallet.purchased_used).toLocaleString())}
+              />
             </View>
             <View style={styles.row}>
-              <Stat label="PURCHASED" value={String(wallet.purchased_bags.toLocaleString())} />
-              <Stat label="PURCHASED USED" value={String(wallet.purchased_used.toLocaleString())} />
-            </View>
-            <View style={styles.row}>
-              <Stat label="PURCHASED REMAINING" value={String(wallet.purchased_remaining.toLocaleString())} />
+              <Stat label="REMAINING" value={String(wallet.total_available.toLocaleString())} />
               <Stat label="CURRENT PRICE" value={`${money(wallet.price_per_bag)} / BAG`} />
+            </View>
+            <View style={styles.row}>
+              <Stat
+                label="FREE USED / ALLOCATED"
+                value={`${wallet.free_used.toLocaleString()} / ${wallet.free_allocated.toLocaleString()}`}
+              />
+              <Stat
+                label="PURCHASED USED / TOTAL"
+                value={`${wallet.purchased_used.toLocaleString()} / ${wallet.purchased_bags.toLocaleString()}`}
+              />
             </View>
           </View>
         ) : null}

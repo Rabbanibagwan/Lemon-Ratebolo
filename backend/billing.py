@@ -116,25 +116,77 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
             doc = await db.platform_billing_settings.find_one({"id": "default"}, {"_id": 0}) or doc
         return doc
 
-    def _wallet_view(w: dict, price: float) -> dict:
-        free_alloc = int(w.get("free_allocated") or 0)
-        free_used = int(w.get("free_used") or 0)
-        purchased = int(w.get("purchased_total") or 0)
-        purchased_used = int(w.get("purchased_used") or 0)
+    async def _active_patti_bags_used(shop_id: str) -> int:
+        """Authoritative used bags = sum(total_bags) on non-deleted Pattis for this shop."""
+        rows = await db.pattis.aggregate(
+            [
+                {"$match": {"shop_id": shop_id, "deleted": {"$ne": True}}},
+                {"$group": {"_id": None, "bags": {"$sum": {"$ifNull": ["$total_bags", 0]}}}},
+            ]
+        ).to_list(1)
+        return max(0, int((rows[0]["bags"] if rows else 0) or 0))
+
+    def _split_used(free_alloc: int, purchased: int, used: int) -> tuple[int, int]:
+        """Allocate used bags to free pool first, then purchased (same order as consume)."""
+        used = max(0, int(used or 0))
+        free_used = min(used, max(0, free_alloc))
+        purchased_used = min(max(0, used - free_used), max(0, purchased))
+        return free_used, purchased_used
+
+    def _wallet_view_from_parts(
+        *,
+        shop_id: str,
+        free_alloc: int,
+        purchased: int,
+        used: int,
+        price: float,
+    ) -> dict:
+        free_used, purchased_used = _split_used(free_alloc, purchased, used)
         free_rem = max(0, free_alloc - free_used)
         purchased_rem = max(0, purchased - purchased_used)
+        total_available = free_rem + purchased_rem  # == max(0, free_alloc + purchased - used) when used <= pool
         return {
-            "shop_id": w["shop_id"],
+            "shop_id": shop_id,
             "free_allocated": free_alloc,
             "free_used": free_used,
             "free_remaining": free_rem,
             "purchased_bags": purchased,
             "purchased_used": purchased_used,
             "purchased_remaining": purchased_rem,
-            "total_available": free_rem + purchased_rem,
+            "total_available": total_available,
             "price_per_bag": float(price),
-            "low_balance": (free_rem + purchased_rem) <= 50,
+            "low_balance": total_available <= 50,
         }
+
+    async def _wallet_view(w: dict, price: float, *, sync_counters: bool = True) -> dict:
+        """
+        Remaining = (free_allocated + purchased_total) - used.
+        Used is authoritative from active (non-deleted) Patti bag totals — not drifted wallet counters.
+        """
+        shop_id = w["shop_id"]
+        free_alloc = int(w.get("free_allocated") or 0)
+        purchased = int(w.get("purchased_total") or 0)
+        used = await _active_patti_bags_used(shop_id)
+        view = _wallet_view_from_parts(
+            shop_id=shop_id,
+            free_alloc=free_alloc,
+            purchased=purchased,
+            used=used,
+            price=price,
+        )
+        if sync_counters:
+            if int(w.get("free_used") or 0) != view["free_used"] or int(w.get("purchased_used") or 0) != view["purchased_used"]:
+                await db.merchant_bag_wallets.update_one(
+                    {"shop_id": shop_id},
+                    {
+                        "$set": {
+                            "free_used": view["free_used"],
+                            "purchased_used": view["purchased_used"],
+                            "updated_at": _utc_now(),
+                        }
+                    },
+                )
+        return view
 
     async def ensure_wallet(shop_id: str) -> dict:
         existing = await db.merchant_bag_wallets.find_one({"shop_id": shop_id}, {"_id": 0})
@@ -182,8 +234,7 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
         lot_id: Optional[str],
         bags: int,
     ) -> Optional[dict]:
-        if user.get("role") != "owner":
-            return None
+        # Always charge the shop wallet (owner or staff). Skipping staff was under-counting used bags.
         bags = int(bags or 0)
         if bags <= 0:
             return None
@@ -204,23 +255,45 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
 
         for _ in range(8):
             w = await ensure_wallet(shop_id)
-            free_rem = max(0, int(w["free_allocated"]) - int(w["free_used"]))
-            purchased_rem = max(0, int(w["purchased_total"]) - int(w["purchased_used"]))
-            if free_rem + purchased_rem < bags:
-                raise _insufficient()
-            free_take = min(free_rem, bags)
-            paid_take = bags - free_take
+            # Authoritative remaining before this consume: pool minus other active pattis
+            # (this patti may already be inserted — exclude it from the used sum for the check).
+            used_all = await _active_patti_bags_used(shop_id)
+            free_alloc = int(w["free_allocated"])
+            purchased = int(w["purchased_total"])
+            pool = free_alloc + purchased
+            # If this patti is already in the sum, used_all includes bags; require pool >= used_all.
+            # If not yet in the sum, require pool - used_all >= bags.
+            patti = await db.pattis.find_one(
+                {"id": patti_id, "shop_id": shop_id, "deleted": {"$ne": True}},
+                {"_id": 0, "total_bags": 1},
+            )
+            if patti:
+                if used_all > pool:
+                    raise _insufficient()
+            else:
+                if pool - used_all < bags:
+                    raise _insufficient()
+            # Keep incremental counters in sync with authoritative used after this charge.
+            used_after = used_all if patti else (used_all + bags)
+            free_used, purchased_used = _split_used(free_alloc, purchased, used_after)
+            prev_free, prev_purchased = _split_used(
+                free_alloc, purchased, used_after - bags,
+            )
+            free_take = max(0, free_used - prev_free)
+            paid_take = max(0, purchased_used - prev_purchased)
             ver = int(w.get("version") or 0)
             res = await db.merchant_bag_wallets.update_one(
                 {
                     "shop_id": shop_id,
                     "version": ver,
-                    "free_used": int(w["free_used"]),
-                    "purchased_used": int(w["purchased_used"]),
                 },
                 {
-                    "$inc": {"free_used": free_take, "purchased_used": paid_take, "version": 1},
-                    "$set": {"updated_at": _utc_now()},
+                    "$set": {
+                        "free_used": free_used,
+                        "purchased_used": purchased_used,
+                        "updated_at": _utc_now(),
+                    },
+                    "$inc": {"version": 1},
                 },
             )
             if res.modified_count != 1:
@@ -254,61 +327,67 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
         old_bags: int,
         new_bags: int,
     ) -> None:
-        if user.get("role") != "owner":
-            return
+        # Always adjust shop wallet for bag edits (owner or staff).
         old_bags = int(old_bags or 0)
         new_bags = int(new_bags or 0)
         delta = new_bags - old_bags
         if delta == 0:
             return
-        if delta > 0:
-            settings = await get_platform_settings()
-            price = float(settings.get("price_per_bag") or 0)
-            for _ in range(8):
-                w = await ensure_wallet(shop_id)
-                free_rem = max(0, int(w["free_allocated"]) - int(w["free_used"]))
-                purchased_rem = max(0, int(w["purchased_total"]) - int(w["purchased_used"]))
-                if free_rem + purchased_rem < delta:
-                    raise _insufficient()
-                free_take = min(free_rem, delta)
-                paid_take = delta - free_take
-                ver = int(w.get("version") or 0)
-                res = await db.merchant_bag_wallets.update_one(
-                    {
-                        "shop_id": shop_id,
-                        "version": ver,
-                        "free_used": int(w["free_used"]),
-                        "purchased_used": int(w["purchased_used"]),
+        if delta < 0:
+            await _restore_bags(
+                shop_id=shop_id, patti_id=patti_id, lot_id=lot_id,
+                bags=-delta, user=user, kind="ADJUST_RETURN",
+            )
+            return
+
+        settings = await get_platform_settings()
+        price = float(settings.get("price_per_bag") or 0)
+        for _ in range(8):
+            w = await ensure_wallet(shop_id)
+            free_alloc = int(w["free_allocated"])
+            purchased = int(w["purchased_total"])
+            pool = free_alloc + purchased
+            used_all = await _active_patti_bags_used(shop_id)
+            # Prefer authoritative post-edit used; if patti not updated yet, add delta.
+            used_after = used_all if used_all >= new_bags else (used_all + delta)
+            if used_after > pool:
+                raise _insufficient()
+            free_used, purchased_used = _split_used(free_alloc, purchased, used_after)
+            prev_free, prev_purchased = _split_used(free_alloc, purchased, used_after - delta)
+            free_take = max(0, free_used - prev_free)
+            paid_take = max(0, purchased_used - prev_purchased)
+            ver = int(w.get("version") or 0)
+            res = await db.merchant_bag_wallets.update_one(
+                {"shop_id": shop_id, "version": ver},
+                {
+                    "$set": {
+                        "free_used": free_used,
+                        "purchased_used": purchased_used,
+                        "updated_at": _utc_now(),
                     },
-                    {
-                        "$inc": {"free_used": free_take, "purchased_used": paid_take, "version": 1},
-                        "$set": {"updated_at": _utc_now()},
-                    },
-                )
-                if res.modified_count != 1:
-                    continue
-                await db.bag_usage.insert_one({
-                    "id": _uid(),
-                    "shop_id": shop_id,
-                    "patti_id": patti_id,
-                    "lot_id": lot_id,
-                    "bags": delta,
-                    "free_bags": free_take,
-                    "purchased_bags": paid_take,
-                    "price_applied": price,
-                    "kind": "ADJUST",
-                    "status": "ACTIVE",
-                    "at": _utc_now(),
-                    "by_user_id": user.get("id"),
-                    "by_role": user.get("role"),
-                    "note": f"edit {old_bags}->{new_bags}",
-                })
-                return
-            raise HTTPException(409, "Bag balance busy — retry")
-        await _restore_bags(
-            shop_id=shop_id, patti_id=patti_id, lot_id=lot_id,
-            bags=-delta, user=user, kind="ADJUST_RETURN",
-        )
+                    "$inc": {"version": 1},
+                },
+            )
+            if res.modified_count != 1:
+                continue
+            await db.bag_usage.insert_one({
+                "id": _uid(),
+                "shop_id": shop_id,
+                "patti_id": patti_id,
+                "lot_id": lot_id,
+                "bags": delta,
+                "free_bags": free_take,
+                "purchased_bags": paid_take,
+                "price_applied": price,
+                "kind": "ADJUST",
+                "status": "ACTIVE",
+                "at": _utc_now(),
+                "by_user_id": user.get("id"),
+                "by_role": user.get("role"),
+                "note": f"edit {old_bags}->{new_bags}",
+            })
+            return
+        raise HTTPException(409, "Bag balance busy — retry")
 
     async def reverse_bags_for_patti(
         *,
@@ -402,14 +481,25 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
             return
         for _ in range(8):
             w = await ensure_wallet(shop_id)
-            paid_dec = min(bags, int(w["purchased_used"]))
-            free_dec = min(bags - paid_dec, int(w["free_used"]))
+            free_alloc = int(w["free_allocated"])
+            purchased = int(w["purchased_total"])
+            # After edit/delete, authoritative used is active patti bag sum.
+            used_after = await _active_patti_bags_used(shop_id)
+            free_used, purchased_used = _split_used(free_alloc, purchased, used_after)
+            prev_free = int(w.get("free_used") or 0)
+            prev_purchased = int(w.get("purchased_used") or 0)
+            free_dec = max(0, prev_free - free_used)
+            paid_dec = max(0, prev_purchased - purchased_used)
             ver = int(w.get("version") or 0)
             res = await db.merchant_bag_wallets.update_one(
                 {"shop_id": shop_id, "version": ver},
                 {
-                    "$inc": {"free_used": -free_dec, "purchased_used": -paid_dec, "version": 1},
-                    "$set": {"updated_at": _utc_now()},
+                    "$set": {
+                        "free_used": free_used,
+                        "purchased_used": purchased_used,
+                        "updated_at": _utc_now(),
+                    },
+                    "$inc": {"version": 1},
                 },
             )
             if res.modified_count != 1:
@@ -433,15 +523,15 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
         raise HTTPException(409, "Bag balance busy — retry")
 
     async def assert_can_consume(user: dict, shop_id: str, bags: int) -> None:
-        if user.get("role") != "owner":
-            return
         bags = int(bags or 0)
         if bags <= 0:
             return
         w = await ensure_wallet(shop_id)
-        free_rem = max(0, int(w["free_allocated"]) - int(w["free_used"]))
-        purchased_rem = max(0, int(w["purchased_total"]) - int(w["purchased_used"]))
-        if free_rem + purchased_rem < bags:
+        free_alloc = int(w.get("free_allocated") or 0)
+        purchased = int(w.get("purchased_total") or 0)
+        used = await _active_patti_bags_used(shop_id)
+        remaining = max(0, free_alloc + purchased - used)
+        if remaining < bags:
             raise _insufficient()
 
     # Bind for server.py imports after attach
@@ -489,7 +579,7 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
         out = []
         async for shop in db.shops.find({}, {"_id": 0, "password_hash": 0}).limit(limit):
             w = await ensure_wallet(shop["id"])
-            view = _wallet_view(w, price)
+            view = await _wallet_view(w, price)
             purchases = await db.bag_purchases.aggregate([
                 {"$match": {"shop_id": shop["id"], "status": "PAID"}},
                 {"$group": {"_id": None, "total": {"$sum": "$total_amount"}, "bags": {"$sum": "$bags"}}},
@@ -499,6 +589,7 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
                 "shop_name": shop.get("shop_name"),
                 "username": shop.get("username"),
                 **view,
+                "active_patti_bags_used": view["free_used"] + view["purchased_used"],
                 "total_amount_purchased": _round2((purchases[0]["total"] if purchases else 0) or 0),
                 "total_bags_purchased": int((purchases[0]["bags"] if purchases else 0) or 0),
             })
@@ -508,7 +599,7 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
     async def get_wallet(user=Depends(owner_only)):
         settings = await get_platform_settings()
         w = await ensure_wallet(user["shop_id"])
-        return WalletOut(**_wallet_view(w, float(settings.get("price_per_bag") or 0)))
+        return WalletOut(**(await _wallet_view(w, float(settings.get("price_per_bag") or 0))))
 
     @api.get("/billing/price")
     async def get_current_price(user=Depends(current_user)):
