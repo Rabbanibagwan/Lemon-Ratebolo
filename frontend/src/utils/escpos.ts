@@ -136,6 +136,24 @@ export class EscPosBuilder {
     return this.align("left").line(l + " ".repeat(gap) + r);
   }
 
+  /**
+   * Draw a visible box around a key/value row (Preview Net Payable).
+   * Uses ASCII borders so generic Bluetooth thermal printers render reliably.
+   */
+  boxedKv(left: string, right: string): this {
+    const inner = Math.max(8, this.cols - 2);
+    const r = (right || "").slice(0, Math.max(0, inner - 1));
+    let l = left || "";
+    const maxL = Math.max(0, inner - r.length - 1);
+    if (l.length > maxL) l = l.slice(0, Math.max(0, maxL - 1)) + (maxL > 0 ? "." : "");
+    const gap = Math.max(1, inner - l.length - r.length);
+    const row = (l + " ".repeat(gap) + r).slice(0, inner).padEnd(inner, " ");
+    this.align("left").line("+" + "-".repeat(inner) + "+");
+    this.line("|" + row + "|");
+    this.line("+" + "-".repeat(inner) + "+");
+    return this;
+  }
+
   columns(parts: string[], widths: number[]): this {
     let row = "";
     for (let i = 0; i < parts.length; i++) {

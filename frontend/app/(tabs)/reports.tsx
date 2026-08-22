@@ -19,7 +19,8 @@ import {
   DriverRangeRef,
   DriverSummary,
   auditReportAoa,
-  driverDetailTotals,
+  driverReportTotals,
+  actualReceiverName,
   exportPdfBytes,
   farmerReportAoa,
   farmerTotals,
@@ -206,7 +207,8 @@ export default function Reports() {
       setExporting(true);
       await fn();
     } catch (e: any) {
-      notify("Failed", e?.message || e?.detail || "Could not export");
+      const { thermalPrintUserMessage } = await import("@/src/utils/thermal-print");
+      notify("Failed", thermalPrintUserMessage(e) || e?.message || e?.detail || "Could not export");
     } finally {
       setExporting(false);
     }
@@ -217,12 +219,12 @@ export default function Reports() {
     void runExport(async () => {
       if (action === "print") {
         await thermalPrintDriverReport(d, workingDateISO, merchant, settings, auctionDrivers);
-        notify("Printed", "Driver report sent to the thermal printer.");
+        notify("Printed", "Driver report preview is open — use Print from that window.");
       } else {
         const result = await shareDriverThermalReport(d, workingDateISO, merchant, settings, auctionDrivers);
-        if (result === "shared") notify("Shared", "Driver report PDF opened in the share sheet.");
+        if (result === "shared") notify("Shared", "Driver report PDF preview is open.");
         else if (result === "downloaded") {
-          notify("Downloaded", "Driver report PDF downloaded (same layout as Print).");
+          notify("Downloaded", "Driver report PDF downloaded.");
         } else notify("Ready", "Driver report PDF is ready.");
       }
     });
@@ -726,28 +728,30 @@ function EntryBook({
   );
 }
 
-function DriverDetailView({ d, drivers }: { d: DriverSummary; drivers: DriverRangeRef[] }) {
-  const totals = driverDetailTotals(d.pattis, drivers);
+function DriverDetailView({ d }: { d: DriverSummary; drivers: DriverRangeRef[] }) {
+  const totals = driverReportTotals(d.pattis, d.driver_name);
   return (
     <FlatList
       data={d.pattis}
       keyExtractor={(x) => x.id}
-      contentContainerStyle={{ padding: spacing.lg, gap: spacing.sm, paddingBottom: 120 }}
+      contentContainerStyle={{ padding: spacing.md, gap: 6, paddingBottom: 120 }}
       ListHeaderComponent={
         <View>
           <Text style={styles.detailMeta}>
             Lots {d.lot_from} – {d.lot_to}
             {d.place ? ` · ${d.place}` : ""}
           </Text>
-          <View style={[styles.thRow, { marginTop: spacing.sm }]}>
-            <Text style={[styles.th, { flex: 0.55 }]}>PATTI</Text>
-            <Text style={[styles.th, { flex: 0.75 }]}>LOT</Text>
-            <Text style={[styles.th, { flex: 1.1 }]}>FARMER</Text>
-            <Text style={[styles.th, { flex: 0.5, textAlign: "right" }]}>BAGS</Text>
-            <Text style={[styles.th, { flex: 0.8, textAlign: "right" }]}>BHADA</Text>
-            <Text style={[styles.th, { flex: 0.9, textAlign: "right" }]}>PAYABLE</Text>
-            <Text style={[styles.th, { flex: 0.8 }]}>RECV</Text>
-          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: spacing.sm }}>
+            <View>
+              <View style={styles.drvThRow}>
+                <Text style={[styles.th, styles.drvWPt]}>PATTI NO.</Text>
+                <Text style={[styles.th, styles.drvWLot]}>LOT NO.</Text>
+                <Text style={[styles.th, styles.drvWFarm]}>FARMER NAME</Text>
+                <Text style={[styles.th, styles.drvWPay]}>NET PAYABLE</Text>
+                <Text style={[styles.th, styles.drvWRecv]}>RECEIVER</Text>
+              </View>
+            </View>
+          </ScrollView>
         </View>
       }
       ListFooterComponent={
@@ -755,14 +759,35 @@ function DriverDetailView({ d, drivers }: { d: DriverSummary; drivers: DriverRan
           rows={[
             { label: "TOTAL BAGS", value: String(totals.total_bags) },
             { label: "TOTAL BHADA", value: money(totals.total_bhada) },
-            { label: "GROSS PAYABLE", value: money(totals.gross_payable) },
-            { label: "RECEIVED", value: money(totals.received_amount) },
-            { label: "OUTSTANDING", value: money(totals.outstanding), emphasize: true },
+            { label: "TOTAL NET PAYABLE", value: money(totals.total_net_payable), emphasize: true },
+            {
+              label: "TOTAL NET PAYABLE RECEIVED BY DRIVER",
+              value: money(totals.driver_received),
+              emphasize: true,
+            },
           ]}
         />
       }
-      renderItem={({ item }) => <PattiMoneyRow p={item} drivers={drivers} />}
+      renderItem={({ item }) => (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          <DriverPattiRow p={item} />
+        </ScrollView>
+      )}
     />
+  );
+}
+
+function DriverPattiRow({ p }: { p: Patti }) {
+  return (
+    <View style={styles.drvRow}>
+      <Text style={[styles.mono, styles.drvWPt, styles.drvCell]} numberOfLines={1}>#{p.patti_no}</Text>
+      <Text style={[styles.mono, styles.drvWLot, styles.drvCell]} numberOfLines={1}>{lotLabel(p)}</Text>
+      <Text style={[styles.cellDim, styles.drvWFarm, styles.drvCell]} numberOfLines={1}>{p.farmer_name || "—"}</Text>
+      <Text style={[styles.mono, styles.strong, styles.drvWPay, styles.drvPay]} numberOfLines={1}>
+        {money(p.net_payable)}
+      </Text>
+      <Text style={[styles.cellDim, styles.drvWRecv, styles.drvCell]} numberOfLines={1}>{actualReceiverName(p)}</Text>
+    </View>
   );
 }
 
@@ -790,33 +815,6 @@ function FarmerDetailsRow({ p, drivers }: { p: Patti; drivers: DriverRangeRef[] 
         {money(p.net_payable)}
       </Text>
       <Text style={[styles.cellDim, { flex: 0.75 }]} numberOfLines={1}>{receiverDisplay(p, drivers)}</Text>
-    </View>
-  );
-}
-
-function PattiMoneyRow({ p, drivers }: { p: Patti; drivers?: DriverRangeRef[] }) {
-  const received = isPattiReceived(p, drivers);
-  return (
-    <View style={[styles.row, received && styles.rowReceived]}>
-      <View style={{ flex: 0.55, flexDirection: "row", alignItems: "center", gap: 2 }}>
-        {received ? <Text style={styles.check}>✓</Text> : null}
-        <Text style={styles.mono}>#{p.patti_no}</Text>
-      </View>
-      <Text style={[styles.mono, { flex: 0.75 }]} numberOfLines={1}>{lotLabel(p)}</Text>
-      <Text style={[styles.cellDim, { flex: 1.1 }]} numberOfLines={1}>{p.farmer_name}</Text>
-      <Text style={[styles.mono, { flex: 0.5, textAlign: "right" }]}>{p.total_bags}</Text>
-      <Text style={[styles.mono, { flex: 0.8, textAlign: "right" }]}>{money(p.bhada_total)}</Text>
-      <Text
-        style={[
-          styles.mono,
-          styles.strong,
-          { flex: 0.9, textAlign: "right" },
-          received && styles.strike,
-        ]}
-      >
-        {money(p.net_payable)}
-      </Text>
-      <Text style={[styles.cellDim, { flex: 0.8 }]} numberOfLines={1}>{receiverDisplay(p, drivers)}</Text>
     </View>
   );
 }
@@ -1010,6 +1008,33 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     backgroundColor: colors.surface,
   },
+  drvRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    paddingVertical: 6,
+    paddingHorizontal: 6,
+    backgroundColor: colors.surface,
+    width: 520,
+  },
+  drvThRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderBottomWidth: 2,
+    borderColor: colors.borderStrong,
+    paddingBottom: 6,
+    width: 520,
+  },
+  drvWPt: { width: 56 },
+  drvWLot: { width: 72 },
+  drvWFarm: { width: 130 },
+  drvWPay: { width: 110, textAlign: "right" },
+  drvWRecv: { width: 120 },
+  drvCell: { fontSize: 11 },
+  drvPay: { fontSize: 12, fontWeight: "800", textAlign: "right" },
   rowReceived: { backgroundColor: colors.brandSecondary },
   label: { fontSize: 14, fontWeight: "800", color: colors.onSurface, fontFamily: font.display },
   cellDim: { fontSize: 12, fontWeight: "700", color: colors.onSurface, fontFamily: font.display },
@@ -1054,8 +1079,11 @@ const styles = StyleSheet.create({
     color: colors.onSurfaceInverse,
     fontFamily: font.display,
     fontWeight: "900",
-    letterSpacing: 1.5,
-    fontSize: 12,
+    letterSpacing: 0.5,
+    fontSize: 10,
+    flexShrink: 1,
+    flex: 1,
+    paddingRight: 8,
   },
   totalEmphValue: {
     color: colors.onSurfaceInverse,

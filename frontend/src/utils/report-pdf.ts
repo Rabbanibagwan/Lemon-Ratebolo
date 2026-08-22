@@ -417,7 +417,7 @@ export function buildAuditLogPdfBytes(
   return pdfToBytes(doc);
 }
 
-/** Narrow thermal-width PDF (driver share on web). */
+/** Narrow thermal-width PDF (driver share on web) — same 5-col layout as Print HTML. */
 export function buildDriverThermalPdfBytes(
   d: {
     driver_name: string;
@@ -431,119 +431,177 @@ export function buildDriverThermalPdfBytes(
   paperMm: number = 80,
 ): Uint8Array {
   const pageW = paperMm <= 58 ? 58 : paperMm <= 80 ? 80 : 100;
-  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: [pageW, 200] });
-  const marginX = 3;
-  let y = 6;
+  const compact = paperMm <= 58;
+  // Tall page so many compact rows fit; add pages if needed.
+  const pageH = 400;
+  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: [pageW, pageH] });
+  const marginX = 1.5;
+  const usable = pageW - marginX * 2;
+  let y = 4.5;
+  let tableStarted = false;
 
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(10);
-  doc.text(pdfSafeText((shopName || "LEMON MANDI").toUpperCase()), pageW / 2, y, { align: "center" });
-  y += 5;
-  doc.setFontSize(9);
-  doc.text("DRIVER DETAILS", pageW / 2, y, { align: "center" });
-  y += 3;
-  doc.setDrawColor(0, 0, 0);
-  doc.setLineWidth(0.3);
-  doc.line(marginX, y, pageW - marginX, y);
-  y += 5;
+  // Match HTML colgroup shares: PT / LOT / FARMER / NET PAY / RECV
+  const gap = 0.6;
+  const shares = [0.11, 0.13, 0.28, 0.23, 0.25];
+  const widths = shares.map((s) => s * (usable - gap * 4));
+  const colX: number[] = [];
+  {
+    let x = marginX;
+    for (let i = 0; i < widths.length; i++) {
+      colX.push(x);
+      x += widths[i] + gap;
+    }
+  }
 
-  doc.setFontSize(8);
-  const kv = (k: string, v: string) => {
-    doc.setFont("helvetica", "bold");
-    doc.text(pdfSafeText(k), marginX, y);
-    doc.setFont("helvetica", "normal");
-    const lines = doc.splitTextToSize(pdfSafeText(v), pageW - marginX * 2 - 22);
-    doc.text(lines[0] || "", pageW - marginX, y, { align: "right" });
-    y += 4;
+  const headFs = compact ? 6 : 6.5;
+  const cellFs = compact ? 6.5 : 7;
+  const payFs = compact ? 7.5 : 8;
+  const lineH = compact ? 2.8 : 3.0;
+
+  const fitText = (raw: string, maxW: number, size: number, style: "normal" | "bold" = "normal") => {
+    doc.setFont("times", style);
+    doc.setFontSize(size);
+    let t = pdfSafeText(raw);
+    if (doc.getTextWidth(t) <= maxW) return t;
+    while (t.length > 1 && doc.getTextWidth(t + ".") > maxW) t = t.slice(0, -1);
+    return t.length ? `${t}.` : "";
   };
-  kv("Driver", d.driver_name || "");
+
+  const wrapText = (raw: string, maxW: number, size: number, maxLines: number) => {
+    doc.setFont("times", "normal");
+    doc.setFontSize(size);
+    const lines = doc.splitTextToSize(pdfSafeText(raw), maxW) as string[];
+    if (lines.length <= maxLines) return lines;
+    const kept = lines.slice(0, maxLines);
+    let last = kept[maxLines - 1] || "";
+    while (last.length > 1 && doc.getTextWidth(last + ".") > maxW) last = last.slice(0, -1);
+    kept[maxLines - 1] = last ? `${last}.` : ".";
+    return kept;
+  };
+
+  const paintHeader = () => {
+    doc.setFont("times", "bold");
+    doc.setFontSize(headFs);
+    const heads = ["PATTI", "LOT", "FARMER", "NET PAY", "RECV"];
+    heads.forEach((h, i) => {
+      const w = widths[i];
+      const x = colX[i];
+      if (i === 3) doc.text(fitText(h, w, headFs, "bold"), x + w, y, { align: "right" });
+      else doc.text(fitText(h, w, headFs, "bold"), x, y);
+    });
+    y += 1.4;
+    doc.setLineWidth(0.3);
+    doc.line(marginX, y, pageW - marginX, y);
+    y += 2.0;
+  };
+
+  const ensureSpace = (need: number) => {
+    if (y + need <= pageH - 6) return;
+    doc.addPage([pageW, pageH]);
+    y = 6;
+    if (tableStarted) paintHeader();
+  };
+
+  doc.setFont("times", "bold");
+  doc.setFontSize(compact ? 10 : 11);
+  doc.text(pdfSafeText((shopName || "LEMON MANDI").toUpperCase()), pageW / 2, y, { align: "center" });
+  y += 3.8;
+  doc.setFontSize(compact ? 8 : 8.5);
+  doc.text("DRIVER DETAILS", pageW / 2, y, { align: "center" });
+  y += 2.2;
+  doc.setDrawColor(0, 0, 0);
+  doc.setLineWidth(0.25);
+  doc.line(marginX, y, pageW - marginX, y);
+  y += 3.2;
+
+  const kv = (k: string, v: string, opts?: { boldValue?: boolean; size?: number }) => {
+    ensureSpace(5);
+    const size = opts?.size || (compact ? 7.5 : 8);
+    doc.setFontSize(size);
+    doc.setFont("times", "bold");
+    doc.text(pdfSafeText(k), marginX, y);
+    doc.setFont("times", opts?.boldValue ? "bold" : "normal");
+    const lines = wrapText(v, usable * 0.55, size, 2);
+    doc.text(lines[0] || "", pageW - marginX, y, { align: "right" });
+    y += 3.2;
+    for (let i = 1; i < lines.length; i++) {
+      ensureSpace(4);
+      doc.text(lines[i], pageW - marginX, y, { align: "right" });
+      y += 3;
+    }
+  };
+
+  kv("Driver", d.driver_name || "", { boldValue: true, size: compact ? 9 : 10 });
   if (d.place) kv("Place", d.place);
   kv("Date", dateISO);
   kv("Lots", `${d.lot_from} - ${d.lot_to}`);
   doc.line(marginX, y, pageW - marginX, y);
-  y += 4;
+  y += 2.8;
 
-  const cols: Col[] = [
-    { key: "PT", w: 8 },
-    { key: "LOT", w: 12 },
-    { key: "FARMER", w: 16 },
-    { key: "BG", w: 8, align: "right" },
-    { key: "BHADA", w: 14, align: "right" },
-    { key: "PAY", w: 14, align: "right" },
-    { key: "RECV", w: 14 },
-  ];
+  tableStarted = true;
+  ensureSpace(lineH + 2);
+  paintHeader();
 
   let totalBags = 0;
   let totalBhada = 0;
   let gross = 0;
-  let received = 0;
-  const rows = (d.pattis || []).map((p) => {
+  let driverReceived = 0;
+  const driverKey = (d.driver_name || "").trim().toLowerCase();
+
+  for (const p of d.pattis || []) {
     const bags = p.total_bags || 0;
     const bhada = p.bhada_total || 0;
     const pay = p.net_payable || 0;
-    const recv = p.status === "received";
     totalBags += bags;
     totalBhada += bhada;
     gross += pay;
-    if (recv) received += pay;
+    const recvName = (p.receiver_name || "").trim();
+    if (recvName && driverKey && recvName.toLowerCase() === driverKey) driverReceived += pay;
     const lots = (p.lots || []).map((l) => l.lot_no).filter(Boolean).join(", ") || "-";
-    return {
-      PT: String(p.patti_no),
-      LOT: lots,
-      FARMER: p.farmer_name || "-",
-      BG: String(bags),
-      BHADA: fmtMoney(bhada),
-      PAY: fmtMoney(pay),
-      RECV: recv ? (p.receiver_name || "").trim() || "-" : "-",
-    };
-  });
 
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(6);
-  const usable = pageW - marginX * 2;
-  const totalW = cols.reduce((s, c) => s + c.w, 0);
-  const widths = cols.map((c) => (c.w / totalW) * usable);
-  let x = marginX;
-  cols.forEach((c, i) => {
-    doc.text(c.key, c.align === "right" ? x + widths[i] : x, y, {
-      align: c.align === "right" ? "right" : "left",
-    });
-    x += widths[i];
-  });
-  y += 3;
-  doc.line(marginX, y, pageW - marginX, y);
-  y += 3;
-  doc.setFont("helvetica", "normal");
-  for (const row of rows) {
-    if (y > 190) {
-      doc.addPage([pageW, 200]);
-      y = 8;
+    const farmLines = wrapText(p.farmer_name || "-", widths[2], cellFs, 2);
+    const recvLines = wrapText(recvName || "-", widths[4], cellFs, 2);
+    const rowLines = Math.max(1, farmLines.length, recvLines.length);
+    const rowH = rowLines * lineH + 0.4;
+    ensureSpace(rowH + 0.5);
+
+    doc.setFont("times", "bold");
+    doc.setFontSize(cellFs);
+    doc.text(fitText(`#${p.patti_no}`, widths[0], cellFs, "bold"), colX[0], y);
+    doc.setFont("times", "normal");
+    doc.text(fitText(lots, widths[1], cellFs), colX[1], y);
+
+    doc.setFont("times", "bold");
+    doc.setFontSize(payFs);
+    doc.text(fitText(fmtMoney(pay), widths[3], payFs, "bold"), colX[3] + widths[3], y, { align: "right" });
+
+    doc.setFont("times", "normal");
+    doc.setFontSize(cellFs);
+    for (let li = 0; li < rowLines; li++) {
+      const yy = y + li * lineH;
+      if (farmLines[li]) doc.text(farmLines[li], colX[2], yy);
+      if (recvLines[li]) doc.text(recvLines[li], colX[4], yy);
     }
-    x = marginX;
-    cols.forEach((c, i) => {
-      const raw = pdfSafeText(row[c.key as keyof typeof row] ?? "");
-      const text = doc.splitTextToSize(String(raw), widths[i] - 0.5)[0] || "";
-      if (c.align === "right") doc.text(text, x + widths[i], y, { align: "right" });
-      else doc.text(text, x, y);
-      x += widths[i];
-    });
-    y += 4;
+
+    y += rowH;
+    doc.setDrawColor(180, 180, 180);
+    doc.setLineWidth(0.15);
+    doc.line(marginX, y - 0.3, pageW - marginX, y - 0.3);
+    doc.setDrawColor(0, 0, 0);
   }
 
-  y += 2;
+  y += 1.2;
+  doc.setLineWidth(0.3);
   doc.line(marginX, y, pageW - marginX, y);
-  y += 5;
-  kv("Total Bags", String(totalBags));
-  kv("Total Bhada", fmtMoney(totalBhada));
-  kv("Total Payable", fmtMoney(gross));
-  kv("Received", fmtMoney(received));
-  doc.setFillColor(20, 20, 20);
-  doc.rect(marginX, y, usable, 8, "F");
-  doc.setTextColor(255, 255, 255);
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(8);
-  doc.text("OUTSTANDING", marginX + 1.5, y + 5.2);
-  doc.text(fmtMoney(gross - received), pageW - marginX - 1.5, y + 5.2, { align: "right" });
+  y += 3.2;
+  tableStarted = false;
+  kv("TOTAL BAGS", String(totalBags), { boldValue: true });
+  kv("TOTAL BHADA", fmtMoney(totalBhada), { boldValue: true });
+  kv("TOTAL NET PAYABLE", fmtMoney(gross), { boldValue: true, size: compact ? 8.5 : 9 });
+  kv("TOTAL NET PAYABLE RECEIVED BY DRIVER", fmtMoney(driverReceived), {
+    boldValue: true,
+    size: compact ? 8.5 : 9,
+  });
 
   return pdfToBytes(doc);
 }

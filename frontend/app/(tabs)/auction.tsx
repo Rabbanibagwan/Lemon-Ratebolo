@@ -284,13 +284,27 @@ export default function Auction() {
                       </Pressable>
                     ) : null}
                   </View>
-                  <View style={{ flexDirection: "row", gap: spacing.sm }}>
-                    <Input style={{ flex: 1 }} label="Range from" keyboardType="number-pad"
-                      value={String(d.range_from || "")} onChangeText={(t) => setDriverField(idx, { range_from: parseInt(t || "0", 10) })}
-                      testID={`driver-from-${idx}`} />
-                    <Input style={{ flex: 1 }} label="Range to" keyboardType="number-pad"
-                      value={String(d.range_to || "")} onChangeText={(t) => setDriverField(idx, { range_to: parseInt(t || "0", 10) })}
-                      testID={`driver-to-${idx}`} />
+                  <View style={styles.rangeRow}>
+                    <View style={styles.rangeField}>
+                      <Input
+                        label="Range from"
+                        keyboardType="number-pad"
+                        value={String(d.range_from || "")}
+                        onChangeText={(t) => setDriverField(idx, { range_from: parseInt(t || "0", 10) })}
+                        style={styles.rangeInput}
+                        testID={`driver-from-${idx}`}
+                      />
+                    </View>
+                    <View style={styles.rangeField}>
+                      <Input
+                        label="Range to"
+                        keyboardType="number-pad"
+                        value={String(d.range_to || "")}
+                        onChangeText={(t) => setDriverField(idx, { range_to: parseInt(t || "0", 10) })}
+                        style={styles.rangeInput}
+                        testID={`driver-to-${idx}`}
+                      />
+                    </View>
                   </View>
                   <Input label="Driver name" value={d.name} onChangeText={(t) => setDriverField(idx, { name: t })} testID={`driver-name-${idx}`} />
                   <Input label="Place (optional)" value={d.place || ""} onChangeText={(t) => setDriverField(idx, { place: t })} testID={`driver-place-${idx}`} />
@@ -408,6 +422,15 @@ const styles = StyleSheet.create({
   driverEditCard: { borderWidth: 2, borderColor: colors.borderStrong, padding: spacing.md, marginBottom: spacing.md, backgroundColor: colors.surfaceSecondary, gap: spacing.sm },
   driverEditHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 4 },
   driverEditTitle: { fontSize: 11, fontWeight: "900", letterSpacing: 1, color: colors.onSurface, fontFamily: font.display },
+  rangeRow: { flexDirection: "row", gap: spacing.sm, alignItems: "flex-start" },
+  rangeField: { flex: 1 },
+  rangeInput: {
+    minHeight: 56,
+    paddingVertical: 16,
+    paddingHorizontal: 14,
+    fontSize: 18,
+    fontWeight: "700",
+  },
   addDriverBtn: { flexDirection: "row", alignItems: "center", gap: 6, justifyContent: "center", padding: spacing.md, borderWidth: 2, borderColor: colors.divider, borderStyle: "dashed" },
   addDriverText: { fontFamily: font.display, fontWeight: "900", letterSpacing: 1, color: colors.brandPrimary, fontSize: 12 },
   err: { color: colors.error, fontFamily: font.display, fontWeight: "700", marginTop: 8 },

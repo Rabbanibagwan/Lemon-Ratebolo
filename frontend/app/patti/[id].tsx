@@ -24,6 +24,7 @@ export default function PattiDetail() {
   const autoPrint = routeParam(params.autoPrint);
   const autoShare = routeParam(params.autoShare);
   const fromScreen = routeParam(params.from);
+  const fromScan = fromScreen === "scan";
   const router = useRouter();
   const { session } = useAuth();
   const isOwner = session?.role === "owner";
@@ -40,6 +41,7 @@ export default function PattiDetail() {
   const [receiver, setReceiver] = useState("");
   const [receiverErr, setReceiverErr] = useState<string | null>(null);
   const [savingReceiver, setSavingReceiver] = useState(false);
+  const [scanReceiverOpened, setScanReceiverOpened] = useState(false);
 
   const canPrint = isOwner && canUserPrintPatti(p, session);
   const canShare = canUserSharePatti(session);
@@ -71,6 +73,24 @@ export default function PattiDetail() {
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
+
+  // SCAN PATTI → open UPDATE RECEIVER directly (same modal as EDIT RECEIVER).
+  useEffect(() => {
+    if (!fromScan || loading || !p || scanReceiverOpened) return;
+    setReceiver(p.receiver_name || "");
+    setReceiverErr(null);
+    setShowReceiver(true);
+    setScanReceiverOpened(true);
+  }, [fromScan, loading, p, scanReceiverOpened]);
+
+  const leaveScanReceiver = useCallback(() => {
+    setShowReceiver(false);
+    if (fromScan) {
+      // scan.tsx used replace → back returns to screen before SCAN PATTI (usually Home).
+      if (router.canGoBack()) router.back();
+      else router.replace("/(tabs)");
+    }
+  }, [fromScan, router]);
 
   // Auto-trigger print/share when navigated with query param from add-lot/save flows.
   useEffect(() => {
@@ -165,13 +185,91 @@ export default function PattiDetail() {
       setSavingReceiver(true);
       const d = await api.put<Patti>(`/pattis/${id}/receiver`, { receiver_name: receiver.trim() });
       setP(d);
-      setShowReceiver(false);
+      if (fromScan) leaveScanReceiver();
+      else setShowReceiver(false);
     } catch (e: any) {
       setReceiverErr(e?.detail || "Failed to save");
     } finally {
       setSavingReceiver(false);
     }
   };
+
+  const receiverModal = (
+    <Modal
+      visible={showReceiver}
+      transparent
+      animationType="fade"
+      onRequestClose={() => (fromScan ? leaveScanReceiver() : setShowReceiver(false))}
+    >
+      <KeyboardFormAvoid style={styles.modalRoot}>
+        <Pressable
+          style={styles.backdrop}
+          onPress={() => (fromScan ? leaveScanReceiver() : setShowReceiver(false))}
+        />
+        <View style={styles.modalSheet}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>UPDATE RECEIVER</Text>
+            <Pressable
+              onPress={() => (fromScan ? leaveScanReceiver() : setShowReceiver(false))}
+              hitSlop={12}
+              testID="receiver-close"
+            >
+              <Ionicons name="close" size={22} color={colors.onSurface} />
+            </Pressable>
+          </View>
+          <View style={{ padding: spacing.lg }}>
+            {fromScan && p ? (
+              <Text style={styles.hintDim}>Patti #{p.patti_no} · {p.farmer_name || "—"}</Text>
+            ) : null}
+            <Text style={styles.hintDim}>
+              Default is the driver name. If someone else collected the Patti, enter their name.
+            </Text>
+            <Input
+              label="Receiver name"
+              value={receiver}
+              onChangeText={setReceiver}
+              autoCapitalize="words"
+              autoFocus
+              placeholder="e.g. Mahesh Patil"
+              testID="receiver-input"
+            />
+            {receiverErr ? <Text style={styles.err}>{receiverErr}</Text> : null}
+            <Button label="SAVE RECEIVER" onPress={saveReceiver} loading={savingReceiver} testID="receiver-save" />
+          </View>
+        </View>
+      </KeyboardFormAvoid>
+    </Modal>
+  );
+
+  // SCAN PATTI: show only UPDATE RECEIVER (reuse same modal/API), not the details screen.
+  if (fromScan) {
+    if (loading) {
+      return (
+        <SafeAreaView style={styles.root}>
+          <View style={styles.center}><ActivityIndicator color={colors.brandPrimary} /></View>
+        </SafeAreaView>
+      );
+    }
+    if (!p) {
+      return (
+        <SafeAreaView style={styles.root}>
+          <View style={styles.center}>
+            <Text style={styles.err}>Patti not found</Text>
+            <View style={{ height: spacing.md }} />
+            <Button label="GO BACK" onPress={leaveScanReceiver} testID="scan-receiver-missing-back" />
+          </View>
+        </SafeAreaView>
+      );
+    }
+    return (
+      <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
+        <View style={styles.center}>
+          <ActivityIndicator color={colors.brandPrimary} />
+        </View>
+        {receiverModal}
+      </SafeAreaView>
+    );
+  }
 
   if (loading) {
     return (
@@ -326,10 +424,6 @@ export default function PattiDetail() {
             <Text style={styles.metaLabel}>RECEIVER</Text>
             <Text style={styles.metaValue}>{p.receiver_name || "—"}</Text>
           </View>
-          <View style={styles.metaRow}>
-            <Text style={styles.metaLabel}>STATUS</Text>
-            <Text style={styles.metaValue}>{p.status === "received" ? "RECEIVED" : "PENDING"}</Text>
-          </View>
 
           {qr ? (
             <View style={styles.qrBox}>
@@ -373,36 +467,7 @@ export default function PattiDetail() {
       </View>
       ) : null}
 
-      {/* Edit receiver modal */}
-      <Modal visible={showReceiver} transparent animationType="fade" onRequestClose={() => setShowReceiver(false)}>
-        <KeyboardFormAvoid style={styles.modalRoot}>
-          <Pressable style={styles.backdrop} onPress={() => setShowReceiver(false)} />
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>UPDATE RECEIVER</Text>
-              <Pressable onPress={() => setShowReceiver(false)} hitSlop={12}>
-                <Ionicons name="close" size={22} color={colors.onSurface} />
-              </Pressable>
-            </View>
-            <View style={{ padding: spacing.lg }}>
-              <Text style={styles.hintDim}>
-                Default is the driver name. If someone else collected the Patti, enter their name.
-              </Text>
-              <Input
-                label="Receiver name"
-                value={receiver}
-                onChangeText={setReceiver}
-                autoCapitalize="words"
-                autoFocus
-                placeholder="e.g. Mahesh Patil"
-                testID="receiver-input"
-              />
-              {receiverErr ? <Text style={styles.err}>{receiverErr}</Text> : null}
-              <Button label="SAVE RECEIVER" onPress={saveReceiver} loading={savingReceiver} testID="receiver-save" />
-            </View>
-          </View>
-        </KeyboardFormAvoid>
-      </Modal>
+      {receiverModal}
     </SafeAreaView>
   );
 }

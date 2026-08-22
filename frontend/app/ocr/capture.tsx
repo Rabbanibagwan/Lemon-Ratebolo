@@ -191,13 +191,46 @@ export default function OcrCapture() {
     );
   };
 
+  const OCR_QUOTA_MSG = "OCR limit temporarily reached. Please wait a moment and try again.";
+  const OCR_CONFIG_MSG = "OCR is not configured correctly on the server. Please contact your administrator.";
+  const OCR_UPSTREAM_TEMP_MSG = "OCR provider is temporarily unavailable. Please try again shortly.";
+
+  /** True only for real missing/invalid-key configuration failures — not quota text that mentions "API key". */
+  const isGenuineOcrConfigError = (e: unknown): boolean => {
+    const err = e as ApiError | undefined;
+    const detailObj = err?.detail && typeof err.detail === "object" ? err.detail as Record<string, unknown> : null;
+    const detailStr = typeof err?.detail === "string" ? err.detail : "";
+    const upstreamStatus = typeof detailObj?.status_code === "number" ? detailObj.status_code : null;
+    const upstreamMessage = typeof detailObj?.message === "string" ? detailObj.message : "";
+    const upstreamBody = typeof detailObj?.upstream_body === "string" ? detailObj.upstream_body : "";
+    const code = typeof detailObj?.code === "string" ? detailObj.code : "";
+    const combined = `${detailStr} ${upstreamMessage} ${upstreamBody} ${code}`.toLowerCase();
+
+    // Quota / rate-limit must never be treated as configuration failure.
+    if (
+      upstreamStatus === 429 ||
+      /resource_exhausted|quota|rate limit|too many requests|exceeded your current quota/i.test(combined)
+    ) {
+      return false;
+    }
+
+    if (code === "NO_CLOUD_OCR_KEY" || /no_cloud_ocr_key/i.test(combined)) return true;
+    if (/api key not valid|gemini api key not valid|invalid.*api.?key|api.?key.*invalid/i.test(combined)) return true;
+    if ((upstreamStatus === 401 || upstreamStatus === 403) && /api.?key|unauthorized|forbidden|permission|credential/i.test(combined)) {
+      return true;
+    }
+    return false;
+  };
+
   const classifyOcrError = (e: unknown): string => {
     const err = e as ApiError | undefined;
     const detailObj = err?.detail && typeof err.detail === "object" ? err.detail as Record<string, unknown> : null;
     const upstreamStatus = typeof detailObj?.status_code === "number" ? detailObj.status_code : null;
     const upstreamMessage = typeof detailObj?.message === "string" ? detailObj.message : "";
     const upstreamBody = typeof detailObj?.upstream_body === "string" ? detailObj.upstream_body : "";
+    const detailCode = typeof detailObj?.code === "string" ? detailObj.code : "";
     const combinedUpstream = `${upstreamMessage} ${upstreamBody}`.toLowerCase();
+
     if (err?.code === "TIMEOUT" || /timed out|taking longer|longer than expected/i.test(String(err?.detail || ""))) {
       return "OCR is taking longer than usual. Please keep the app open and try again — do not assume it failed mid-extract.";
     }
@@ -206,22 +239,26 @@ export default function OcrCapture() {
     }
     if (
       upstreamStatus === 429 ||
-      /resource_exhausted|quota|rate limit|too many requests|exceeded/i.test(combinedUpstream)
+      /resource_exhausted|quota|rate limit|too many requests|exceeded your current quota/i.test(combinedUpstream)
     ) {
-      return "OCR provider quota or rate limit was reached. Please wait and try again later, or switch to a different Gemini API key.";
+      return OCR_QUOTA_MSG;
     }
-    if (upstreamStatus && upstreamStatus >= 500) {
-      return "OCR provider is temporarily unavailable. Please try again shortly.";
+    if (isGenuineOcrConfigError(e)) {
+      return OCR_CONFIG_MSG;
+    }
+    if (
+      detailCode === "OCR_UPSTREAM" ||
+      detailCode === "OCR_INTERNAL" ||
+      (upstreamStatus != null && upstreamStatus >= 500) ||
+      err?.status === 502 ||
+      err?.status === 503 ||
+      err?.status === 504
+    ) {
+      return OCR_UPSTREAM_TEMP_MSG;
     }
     const text = apiErrorMessage(e, "We could not extract the information from this image. Please try again.");
-    if (/not valid|API key|NO_CLOUD_OCR_KEY|401|403/i.test(text)) {
-      return text;
-    }
     if (/blurry|unreadable|no rows|nothing extracted|select a clear/i.test(text)) {
       return text.includes("clear") ? text : "Please select a clear Action Diary image.";
-    }
-    if (/502|OCR model|Gemini|quota/i.test(text)) {
-      return "We could not extract the information from this image. Please try again.";
     }
     return text;
   };
@@ -250,7 +287,7 @@ export default function OcrCapture() {
       if (__DEV__) console.log("[ocr] response received", { rows: resp.rows?.length, model: resp.model, warning: resp.warning });
       if (resp.warning === "NO_CLOUD_OCR_KEY") {
         setKeyConfigured(false);
-        setError("OCR is not configured on the server. Please contact your administrator.");
+        setError(OCR_CONFIG_MSG);
         return;
       }
       setKeyConfigured(true);
@@ -276,12 +313,10 @@ export default function OcrCapture() {
         return;
       }
       const text = classifyOcrError(e);
-      if (/not valid|API key|NO_CLOUD_OCR_KEY|401|403/i.test(text) || /Gemini API key/i.test(String((e as ApiError)?.detail || ""))) {
+      if (isGenuineOcrConfigError(e)) {
         setKeyConfigured(false);
-        setError("OCR is not configured correctly on the server. Please contact your administrator.");
-      } else {
-        setError(text);
       }
+      setError(text);
     } finally {
       inFlightRef.current = false;
       abortRef.current = null;

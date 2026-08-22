@@ -69,6 +69,7 @@ export function Input({
   error,
   testID,
   inputRef,
+  style,
   ...rest
 }: TextInputProps & { label?: string; hint?: string; error?: string; testID?: string; inputRef?: React.Ref<TextInput> }) {
   return (
@@ -81,6 +82,7 @@ export function Input({
           styles.input,
           rest.multiline ? { minHeight: 90, textAlignVertical: "top" } : null,
           error ? { borderColor: colors.error } : null,
+          style,
         ]}
         {...rest}
         ref={inputRef as any}

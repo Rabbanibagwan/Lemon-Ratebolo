@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Alert, Image, Pressable,
+  Alert, Image, Platform, Pressable, ScrollView,
   StyleSheet, Text, View,
 } from "react-native";
 import { KeyboardAwareScrollView, KeyboardStickyView } from "react-native-keyboard-controller";
@@ -18,6 +18,9 @@ import { clampPaperMm } from "@/src/utils/thermal-print";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
 import { useAuth } from "@/src/context/AuthContext";
 import { handleBagBillingError, isInsufficientBagBalance } from "@/src/utils/bag-billing";
+
+/** Web Preview: plain ScrollView (KASV keyboard-hide animation resets offset). */
+const LotsScrollView: any = Platform.OS === "web" ? ScrollView : KeyboardAwareScrollView;
 
 type VendorDraft = {
   key: string;
@@ -177,6 +180,11 @@ export default function OcrPreview() {
   const { session } = useAuth();
   const scrollRef = useRef<any>(null);
   const scrollYRef = useRef(0);
+  /** Y to restore after PartyPicker closes; null when idle. */
+  const pendingRestoreYRef = useRef<number | null>(null);
+  const pickerWasOpenRef = useRef(false);
+  const lotCardRefs = useRef<Record<string, View | null>>({});
+  const pendingLotKeyRef = useRef<string | null>(null);
 
   const [lots, setLots] = useState<LotDraft[]>([]);
   const [warning, setWarning] = useState<string | null>(null);
@@ -218,18 +226,90 @@ export default function OcrPreview() {
   >(null);
   const [pickerQuery, setPickerQuery] = useState("");
 
-  const restoreScrollAfterLink = () => {
-    const y = scrollYRef.current;
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        try {
-          scrollRef.current?.scrollTo?.({ y, animated: false });
-        } catch {
-          /* ignore */
+  const scrollToY = useCallback((y: number) => {
+    const sv = scrollRef.current;
+    if (!sv) return false;
+    try {
+      if (typeof sv.scrollTo === "function") {
+        sv.scrollTo({ x: 0, y, animated: false });
+      }
+    } catch {
+      /* ignore */
+    }
+    try {
+      sv.getScrollResponder?.()?.scrollTo?.({ x: 0, y, animated: false });
+    } catch {
+      /* ignore */
+    }
+    // RN Web: set DOM scrollTop when ScrollView methods no-op after Modal close.
+    try {
+      const node =
+        (typeof sv.getScrollableNode === "function" && sv.getScrollableNode()) ||
+        sv._scrollRef?.getScrollableNode?.() ||
+        sv._component?.getScrollableNode?.() ||
+        null;
+      if (node && typeof (node as HTMLElement).scrollTop === "number") {
+        (node as HTMLElement).scrollTop = y;
+      }
+    } catch {
+      /* ignore */
+    }
+    return true;
+  }, []);
+
+  const applyPendingScrollRestore = useCallback(() => {
+    const y = pendingRestoreYRef.current;
+    if (y == null) return;
+
+    scrollToY(y);
+
+    // Prefer keeping the linked lot visible if its card is mounted.
+    const lotKey = pendingLotKeyRef.current;
+    if (lotKey && Platform.OS === "web") {
+      try {
+        const card = lotCardRefs.current[lotKey] as any;
+        const el =
+          card?.getNode?.() ||
+          card?._nativeNode ||
+          card;
+        if (el && typeof el.scrollIntoView === "function") {
+          el.scrollIntoView({ block: "nearest", inline: "nearest" });
         }
-      });
-    });
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [scrollToY]);
+
+  const captureScrollBeforePicker = (lotKey: string) => {
+    pendingRestoreYRef.current = scrollYRef.current;
+    pendingLotKeyRef.current = lotKey;
   };
+
+  // After PartyPicker closes, restore once layout settles (not an arbitrary timeout).
+  useEffect(() => {
+    if (pickerFor) {
+      pickerWasOpenRef.current = true;
+      return;
+    }
+    if (!pickerWasOpenRef.current) return;
+    pickerWasOpenRef.current = false;
+    if (pendingRestoreYRef.current == null) return;
+
+    let cancelled = false;
+    const run = () => {
+      if (!cancelled) applyPendingScrollRestore();
+    };
+    run();
+    const raf1 = requestAnimationFrame(() => {
+      run();
+      requestAnimationFrame(run);
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf1);
+    };
+  }, [pickerFor, applyPendingScrollRestore]);
 
   const updateLot = (lotKey: string, patch: Partial<LotDraft>) =>
     setLots((xs) =>
@@ -305,13 +385,18 @@ export default function OcrPreview() {
 
   const pickMaster = (id: string, name: string) => {
     if (!pickerFor) return;
+    // Capture again in case onScroll stalled while modal was open.
+    if (pendingRestoreYRef.current == null) {
+      pendingRestoreYRef.current = scrollYRef.current;
+    }
+    pendingLotKeyRef.current = pickerFor.lotKey;
     if (pickerFor.kind === "farmer") {
       updateLot(pickerFor.lotKey, { farmer_id: id, farmer_name: name });
     } else {
       updateVendor(pickerFor.lotKey, pickerFor.vendorKey, { vendor_id: id, vendor_name: name });
     }
-    setPickerFor(null); setPickerQuery("");
-    restoreScrollAfterLink();
+    setPickerFor(null);
+    setPickerQuery("");
   };
 
   const findOrCreateFarmer = useCallback(async (name: string): Promise<string | null> => {
@@ -579,15 +664,38 @@ export default function OcrPreview() {
         </View>
       ) : null}
 
-      <KeyboardAwareScrollView
+      <LotsScrollView
         ref={scrollRef}
         style={{ flex: 1 }}
         contentContainerStyle={{ padding: spacing.lg, paddingBottom: 220 }}
         keyboardShouldPersistTaps="handled"
-        bottomOffset={120}
         scrollEventThrottle={16}
+        // Native KASV: don't yank offset when keyboard hides after PartyPicker closes.
+        {...(Platform.OS !== "web"
+          ? {
+              bottomOffset: 120,
+              disableScrollOnKeyboardHide: true,
+              enabled: !pickerFor,
+            }
+          : {})}
         onScroll={(e: any) => {
-          scrollYRef.current = e?.nativeEvent?.contentOffset?.y || 0;
+          const y = e?.nativeEvent?.contentOffset?.y || 0;
+          scrollYRef.current = y;
+          const pending = pendingRestoreYRef.current;
+          if (pending != null && Math.abs(y - pending) < 3) {
+            pendingRestoreYRef.current = null;
+            pendingLotKeyRef.current = null;
+          }
+        }}
+        onContentSizeChange={() => {
+          if (pendingRestoreYRef.current != null && !pickerFor) {
+            applyPendingScrollRestore();
+          }
+        }}
+        onLayout={() => {
+          if (pendingRestoreYRef.current != null && !pickerFor) {
+            applyPendingScrollRestore();
+          }
         }}
       >
         {photoUri ? (
@@ -604,6 +712,10 @@ export default function OcrPreview() {
           return (
             <View
               key={lot.key}
+              ref={(node) => {
+                lotCardRefs.current[lot.key] = node;
+              }}
+              collapsable={false}
               style={[
                 styles.lotCard,
                 isDone && styles.lotSaved,
@@ -687,6 +799,7 @@ export default function OcrPreview() {
                 <Pressable
                   style={[styles.pickBtn, lot.farmer_id && styles.pickBtnOn]}
                   onPress={() => {
+                    captureScrollBeforePicker(lot.key);
                     setPickerQuery(lot.farmer_name);
                     setPickerFor({ lotKey: lot.key, kind: "farmer" });
                   }}
@@ -719,6 +832,7 @@ export default function OcrPreview() {
                     <Pressable
                       style={[styles.pickBtn, v.vendor_id && styles.pickBtnOn]}
                       onPress={() => {
+                        captureScrollBeforePicker(lot.key);
                         setPickerQuery(v.vendor_name);
                         setPickerFor({ lotKey: lot.key, vendorKey: v.key, kind: "vendor" });
                       }}
@@ -792,7 +906,7 @@ export default function OcrPreview() {
             <Text style={styles.emptyText}>No lots to review. Go back and scan again, or paste diary text.</Text>
           </View>
         ) : null}
-      </KeyboardAwareScrollView>
+      </LotsScrollView>
 
       <KeyboardStickyView>
         <View style={styles.footer}>
@@ -830,7 +944,14 @@ export default function OcrPreview() {
         kind={pickerFor?.kind === "vendor" ? "vendor" : "farmer"}
         items={pickerFor?.kind === "vendor" ? vendors : farmers}
         initialQuery={pickerQuery}
-        onClose={() => { setPickerFor(null); setPickerQuery(""); }}
+        onClose={() => {
+          if (pendingRestoreYRef.current == null) {
+            pendingRestoreYRef.current = scrollYRef.current;
+          }
+          if (pickerFor?.lotKey) pendingLotKeyRef.current = pickerFor.lotKey;
+          setPickerFor(null);
+          setPickerQuery("");
+        }}
         onSelect={(item) => pickMaster(item.id, item.name)}
         onCreated={(item) => {
           if (pickerFor?.kind === "vendor") {

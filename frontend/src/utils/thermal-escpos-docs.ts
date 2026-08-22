@@ -12,7 +12,9 @@ export type CashBookDoc = {
 
 function shopHead(b: EscPosBuilder, profile: ShopProfile | { shop_name?: string } | null) {
   const shop = (profile?.shop_name || "").trim().toUpperCase();
-  b.init().align("center").bold(true).size("tall").line(shop || "LEMON MANDI").size("normal").bold(false);
+  // Merchant name: double-size bold (closest ESC/POS match to Preview prominence).
+  // Built-in printer fonts cannot load Times New Roman; HTML thermal path uses Times.
+  b.init().align("center").bold(true).size("big").line(shop || "LEMON MANDI").size("normal").bold(false);
 }
 
 export function encodeTestPrint(paperMm: number, printerName?: string): string {
@@ -55,26 +57,28 @@ export function encodeFarmerPattiEscPos(
   const addr = [profile.address, profile.village, profile.taluk, profile.district, profile.state].filter(Boolean).join(", ");
   const date = new Date(p.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
   shopHead(b, profile);
-  if (addr) b.wrapped(slipText(addr));
-  if (profile.mobile) b.line(`Mobile: ${profile.mobile}`);
+  // Address / mobile: smaller secondary header (normal weight).
+  if (addr) b.align("center").bold(false).size("normal").wrapped(slipText(addr));
+  if (profile.mobile) b.align("center").line(`Mobile: ${profile.mobile}`);
   b.align("left").hr()
     .kv("PATTI / BILL", `NO. ${p.patti_no}`)
     .hr();
-  // Farmer name printed large (bold + tall) to match the prominent farmerFs in the HTML preview.
-  // size("tall") halves the column count, so wrap at half the normal cols.
-  b.bold(true).size("tall");
-  const farmerLabel = "FARMER: ";
+
+  // Farmer: label normal, name double-size bold (Preview metaValueFarmer).
+  // size("big") halves effective columns in both axes.
+  b.align("left").bold(false).size("normal").line("FARMER");
+  b.bold(true).size("big");
   const farmerName = slipText(p.farmer_name);
-  const halfCols = Math.floor(b.cols / 2);
-  const farmerFull = farmerLabel + farmerName;
-  if (farmerFull.length <= halfCols) {
-    b.line(farmerFull);
+  const halfCols = Math.max(8, Math.floor(b.cols / 2));
+  if (farmerName.length <= halfCols) {
+    b.align("right").line(farmerName);
   } else {
-    b.line(farmerLabel + farmerName.slice(0, Math.max(0, halfCols - farmerLabel.length)));
-    const rest = farmerName.slice(Math.max(0, halfCols - farmerLabel.length));
-    for (let i = 0; i < rest.length; i += halfCols) b.line("  " + rest.slice(i, i + halfCols));
+    b.align("left");
+    for (let i = 0; i < farmerName.length; i += halfCols) {
+      b.line(farmerName.slice(i, i + halfCols));
+    }
   }
-  b.size("normal").bold(false);
+  b.size("normal").bold(false).align("left");
   b.kv("DATE", date);
   if (p.driver_name) {
     const drv = p.driver_place ? `${p.driver_name} - ${p.driver_place}` : p.driver_name;
@@ -85,7 +89,6 @@ export function encodeFarmerPattiEscPos(
     lot.sales.forEach((s, i) => {
       const lotNo = i === 0 ? String(lot.lot_no || `${lot.lot_serial_no}/${lot.total_bags}`) : "";
       const mid = `${s.bags} x ${rupees(s.rate_per_bag * p.payment_factor)}`;
-      // Bold lot number and bags count to match emphFs emphasis in HTML.
       b.bold(true).itemRow(lotNo, mid, rupees(s.bags * s.rate_per_bag * p.payment_factor)).bold(false);
     });
   }
@@ -98,14 +101,14 @@ export function encodeFarmerPattiEscPos(
     .kv("Bhada", `- ${rupees(p.bhada_total)}`)
     .kv("Stationery", `- ${rupees(p.stationery_total)}`)
     .bold(true).kv("Total deduction", `- ${rupees(p.deductions_total)}`).bold(false)
-    .hr()
-    .bold(true)
-    .size("tall")
-    .kv("NET PAYABLE", rupees(p.net_payable))
-    .size("normal")
-    .bold(false);
-  b.kv("RECEIVER", slipText(p.receiver_name || "-"))
-    .kv("STATUS", p.status === "received" ? "RECEIVED" : "PENDING");
+    .feed(1);
+
+  // Net Payable box — must remain visible on physical paper (Preview netBox).
+  b.bold(true).size("tall");
+  b.boxedKv("NET PAYABLE", rupees(p.net_payable));
+  b.size("normal").bold(false);
+
+  b.kv("RECEIVER", slipText(p.receiver_name || "-"));
   const token = (qrToken || p.qr_token || "").trim();
   if (token) {
     b.align("center").feed(1).qr(token, paperMm <= 58 ? 3 : 4).line("Scan at counter").align("left");

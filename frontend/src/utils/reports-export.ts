@@ -7,7 +7,17 @@ import type { DriverRange, Patti, PattiAuditLogEntry, Settings, VendorBill } fro
 import { EscPosBuilder, rupees } from "@/src/utils/escpos";
 import { printThermalDocument } from "@/src/utils/thermal-connection";
 import { resolvePrintPaperMm } from "@/src/utils/printer-prefs";
-import { thermalBaseCss, thermalMetrics, injectThermalPageSize, estimateThermalHeightMm, clampPaperMm } from "@/src/utils/thermal-print";
+import {
+  thermalBaseCss,
+  thermalMetrics,
+  injectThermalPageSize,
+  estimateThermalHeightMm,
+  clampPaperMm,
+  openThermalPreviewWindow,
+  fillThermalPreviewAndPrint,
+  showInPageThermalPreview,
+  openPdfBytesPreviewWeb,
+} from "@/src/utils/thermal-print";
 import { buildXlsxBytes, bytesToBase64 } from "@/src/utils/simple-xlsx";
 
 /** Auction-day driver ranges used for Entry Book "driver receiving". */
@@ -93,6 +103,46 @@ export type DriverDetailTotals = {
   received_amount: number;
   outstanding: number;
 };
+
+/** Driver report footer totals — assignment ≠ money received. */
+export type DriverReportTotals = {
+  total_bags: number;
+  total_bhada: number;
+  total_net_payable: number;
+  /** Sum of net_payable only when actual receiver_name is this driver. */
+  driver_received: number;
+};
+
+/**
+ * Actual money receiver for Driver report column (raw receiver_name).
+ * Does not invent "Driver/…" from lot-range assignment.
+ */
+export function actualReceiverName(p: Patti): string {
+  return (p.receiver_name || "").trim() || "—";
+}
+
+/** True only when receiver_name is this driver. Assignment alone does not count. */
+export function isActualDriverReceiver(p: Patti, driverName: string): boolean {
+  const recv = (p.receiver_name || "").trim().toLowerCase();
+  const drv = (driverName || "").trim().toLowerCase();
+  return !!recv && !!drv && recv === drv;
+}
+
+/** Totals for Driver Details print/share/UI (does not deduct received from payable). */
+export function driverReportTotals(pattis: Patti[], driverName: string): DriverReportTotals {
+  let total_bags = 0;
+  let total_bhada = 0;
+  let total_net_payable = 0;
+  let driver_received = 0;
+  for (const p of pattis) {
+    total_bags += p.total_bags || 0;
+    total_bhada += p.bhada_total || 0;
+    const pay = p.net_payable || 0;
+    total_net_payable += pay;
+    if (isActualDriverReceiver(p, driverName)) driver_received += pay;
+  }
+  return { total_bags, total_bhada, total_net_payable, driver_received };
+}
 
 export function groupDrivers(pattis: Patti[]): DriverSummary[] {
   const map = new Map<string, Patti[]>();
@@ -302,48 +352,42 @@ function pdfShell(title: string, subtitle: string, body: string, foot: string): 
   </body></html>`;
 }
 
-/** A4 PDF — Driver Details (also used for SHARE). Includes Farmer Name. */
+/** A4 PDF — Driver Details (same 5-column layout as thermal). */
 export function renderDriverReportHtml(
   d: DriverSummary,
   dateISO: string,
   shopName: string,
   userName: string,
 ): string {
-  const totals = driverDetailTotals(d.pattis);
+  const totals = driverReportTotals(d.pattis, d.driver_name);
   const rows = d.pattis
-    .map((p) => {
-      const recv = isPattiReceived(p);
-      return `<tr>
+    .map(
+      (p) => `<tr>
       <td class="mono">#${p.patti_no}</td>
       <td class="mono">${escHtml(lotLabel(p))}</td>
       <td>${escHtml(p.farmer_name || "—")}</td>
-      <td class="mono right">${p.total_bags}</td>
-      <td class="mono right">${fmtMoney(p.bhada_total)}</td>
-      <td class="mono right ${recv ? "strike" : "strong"}">${fmtMoney(p.net_payable)}</td>
-      <td>${escHtml(receiverDisplay(p))}</td>
-    </tr>`;
-    })
+      <td class="mono right strong">${fmtMoney(p.net_payable)}</td>
+      <td>${escHtml(actualReceiverName(p))}</td>
+    </tr>`,
+    )
     .join("");
   const body = `
     <table>
       <thead><tr>
-        <th style="width:10%">PATTI</th>
-        <th style="width:12%">LOT</th>
-        <th style="width:18%">FARMER</th>
-        <th class="right" style="width:10%">BAGS</th>
-        <th class="right" style="width:14%">BHADA</th>
-        <th class="right" style="width:16%">PAYABLE</th>
-        <th style="width:20%">RECEIVER</th>
+        <th style="width:12%">PATTI NO.</th>
+        <th style="width:14%">LOT NO.</th>
+        <th style="width:28%">FARMER NAME</th>
+        <th class="right" style="width:22%">NET PAYABLE</th>
+        <th style="width:24%">RECEIVER NAME</th>
       </tr></thead>
-      <tbody>${rows || `<tr><td colspan="7" style="text-align:center;color:#6B7280;padding:14px">No pattis</td></tr>`}</tbody>
+      <tbody>${rows || `<tr><td colspan="5" style="text-align:center;color:#6B7280;padding:14px">No pattis</td></tr>`}</tbody>
     </table>
     <div style="margin-top:10px">
-      <div class="trow"><span>Total bags</span><span class="mono strong">${totals.total_bags}</span></div>
-      <div class="trow"><span>Total bhada</span><span class="mono strong">${fmtMoney(totals.total_bhada)}</span></div>
-      <div class="trow"><span>Total payable</span><span class="mono strong">${fmtMoney(totals.gross_payable)}</span></div>
-      <div class="trow"><span>Received deduction</span><span class="mono">${fmtMoney(totals.received_amount)}</span></div>
-    </div>
-    <div class="net"><div class="netl">OUTSTANDING</div><div class="netv">${fmtMoney(totals.outstanding)}</div></div>`;
+      <div class="trow"><span>TOTAL BAGS</span><span class="mono strong">${totals.total_bags}</span></div>
+      <div class="trow"><span>TOTAL BHADA</span><span class="mono strong">${fmtMoney(totals.total_bhada)}</span></div>
+      <div class="trow"><span>TOTAL NET PAYABLE</span><span class="mono strong">${fmtMoney(totals.total_net_payable)}</span></div>
+      <div class="trow"><span>TOTAL NET PAYABLE RECEIVED BY DRIVER</span><span class="mono strong">${fmtMoney(totals.driver_received)}</span></div>
+    </div>`;
   return pdfShell(
     `${shopName.toUpperCase()} — DRIVER DETAILS`,
     `Driver: <b>${escHtml(d.driver_name)}</b>${d.place ? " · " + escHtml(d.place) : ""} · Date ${escHtml(dateISO)} · Lots ${escHtml(d.lot_from)}–${escHtml(d.lot_to)}`,
@@ -352,76 +396,144 @@ export function renderDriverReportHtml(
   );
 }
 
-/** Compact 58/80/100 mm thermal receipt for Driver Details. */
+/** Compact thermal Driver Details (Print + Share): one row per Patti, Times/Roman. */
 export function renderDriverThermalHtml(
   d: DriverSummary,
   dateISO: string,
   shopName: string,
   paperMm: number = 80,
-  drivers?: DriverRangeRef[],
+  _drivers?: DriverRangeRef[],
 ): string {
   const m = thermalMetrics(paperMm);
-  const totals = driverDetailTotals(d.pattis, drivers);
+  const totals = driverReportTotals(d.pattis, d.driver_name);
+  const compact = paperMm <= 58;
+  const thFs = compact ? 7 : paperMm <= 80 ? 7.5 : 8.5;
+  const tdFs = compact ? 8 : paperMm <= 80 ? 8.5 : 9.5;
+  const payFs = compact ? 8.5 : paperMm <= 80 ? 9.5 : 10.5;
+  const headFs = compact ? 13 : paperMm <= 80 ? 15 : 17;
+  const nameFs = compact ? 11 : paperMm <= 80 ? 13 : 15;
+  // Column % must match Print HTML, Share PDF, and Preview intent.
+  const colPt = 11;
+  const colLot = 13;
+  const colFarm = 28;
+  const colPay = 23;
+  const colRecv = 25;
   const rows = d.pattis
-    .map((p) => {
-      const recv = isPattiReceived(p, drivers);
-      const strike = recv ? "strike" : "";
-      return `<tr class="row">
-        <td>${p.patti_no}</td>
-        <td class="wrap">${escHtml(lotLabel(p))}</td>
-        <td class="wrap">${escHtml(p.farmer_name || "—")}</td>
-        <td class="r">${p.total_bags}</td>
-        <td class="r">${fmtMoney(p.bhada_total)}</td>
-        <td class="r ${strike}">${fmtMoney(p.net_payable)}</td>
-        <td class="wrap">${escHtml(receiverDisplay(p, drivers))}</td>
-      </tr>`;
-    })
+    .map(
+      (p) => `<tr class="drv-tr">
+      <td class="pt">#${p.patti_no}</td>
+      <td class="lot">${escHtml(lotLabel(p))}</td>
+      <td class="farm">${escHtml(p.farmer_name || "-")}</td>
+      <td class="pay">${fmtMoney(p.net_payable)}</td>
+      <td class="recv">${escHtml(actualReceiverName(p))}</td>
+    </tr>`,
+    )
     .join("");
   return `<!doctype html><html><head><meta charset="utf-8"/>
   <meta name="viewport" content="width=${m.widthPx}, initial-scale=1, maximum-scale=1"/>
   <title>Driver ${escHtml(d.driver_name)}</title>
   <style>${thermalBaseCss(m)}
-    table.drv { width:100%; border-collapse:collapse; table-layout:fixed; }
-    table.drv th, table.drv td {
-      font-size:${Math.max(8, m.rowFs - 2)}px; font-weight:800; padding:2px 1px; vertical-align:top;
-      word-break:break-word;
+    #slip { padding: ${Math.max(1, m.padY - 1)}px 1px !important; }
+    .drv-shop {
+      font-size: ${headFs}px !important;
+      font-weight: 900 !important;
+      line-height: 1.05;
+      margin: 0 0 1px 0;
     }
-    table.drv th { text-align:left; border-bottom:1px solid #000; }
-    table.drv td.r, table.drv th.r { text-align:right; }
-    table.drv .strike { text-decoration:line-through; }
-    table.drv col.c1 { width:9%; } table.drv col.c2 { width:12%; } table.drv col.c3 { width:18%; }
-    table.drv col.c4 { width:9%; } table.drv col.c5 { width:16%; } table.drv col.c6 { width:18%; }
-    table.drv col.c7 { width:18%; }
+    .drv-title { font-size: ${tdFs}px !important; font-weight: 900 !important; margin: 0 0 1px 0; }
+    .driver-name {
+      font-size: ${nameFs}px !important;
+      font-weight: 900 !important;
+      line-height: 1.05;
+      text-align: right;
+    }
+    .meta-kv { padding: 0 !important; font-size: ${tdFs}px !important; }
+    .drv-table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      margin: 2px 0 0 0;
+    }
+    .drv-table col.c-pt { width: ${colPt}%; }
+    .drv-table col.c-lot { width: ${colLot}%; }
+    .drv-table col.c-farm { width: ${colFarm}%; }
+    .drv-table col.c-pay { width: ${colPay}%; }
+    .drv-table col.c-recv { width: ${colRecv}%; }
+    .drv-table th {
+      font-size: ${thFs}px !important;
+      font-weight: 900 !important;
+      text-align: left;
+      padding: 1px 2px 2px 1px;
+      border-bottom: 1.5px solid #000;
+      line-height: 1.05;
+      text-transform: uppercase;
+      vertical-align: bottom;
+      overflow: hidden;
+    }
+    .drv-table th.pay { text-align: right; padding-right: 1px; }
+    .drv-table td {
+      font-size: ${tdFs}px !important;
+      font-weight: 700 !important;
+      padding: 1px 2px 1px 1px;
+      border-bottom: 0.5px solid #000;
+      line-height: 1.12;
+      vertical-align: top;
+      overflow: hidden;
+    }
+    .drv-table td.pt,
+    .drv-table td.lot {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .drv-table td.farm,
+    .drv-table td.recv {
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      hyphens: auto;
+    }
+    .drv-table td.pay {
+      text-align: right;
+      font-size: ${payFs}px !important;
+      font-weight: 900 !important;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: clip;
+      padding-right: 1px;
+    }
+    .tot { padding: 1px 0 !important; font-size: ${tdFs}px !important; }
+    .tot.emph span:last-child { font-size: ${payFs}px !important; font-weight: 900 !important; }
+    .tot-label { max-width: 68%; line-height: 1.1; }
   </style></head><body>
   <div id="slip">
-    <div class="center big bold wrap">${escHtml((shopName || "LEMON MANDI").toUpperCase())}</div>
-    <div class="center bold">DRIVER DETAILS</div>
+    <div class="center drv-shop wrap">${escHtml((shopName || "LEMON MANDI").toUpperCase())}</div>
+    <div class="center drv-title">DRIVER DETAILS</div>
     <div class="hr"></div>
-    <div class="kv"><span class="k">Driver</span><span class="bold wrap">${escHtml(d.driver_name)}</span></div>
-    ${d.place ? `<div class="kv"><span class="k">Place</span><span class="wrap">${escHtml(d.place)}</span></div>` : ""}
-    <div class="kv"><span class="k">Date</span><span>${escHtml(dateISO)}</span></div>
-    <div class="kv"><span class="k">Lots</span><span>${escHtml(d.lot_from)} – ${escHtml(d.lot_to)}</span></div>
+    <div class="kv meta-kv"><span class="k">Driver</span><span class="driver-name wrap">${escHtml(d.driver_name)}</span></div>
+    ${d.place ? `<div class="kv meta-kv"><span class="k">Place</span><span class="wrap">${escHtml(d.place)}</span></div>` : ""}
+    <div class="kv meta-kv"><span class="k">Date</span><span>${escHtml(dateISO)}</span></div>
+    <div class="kv meta-kv"><span class="k">Lots</span><span>${escHtml(d.lot_from)} - ${escHtml(d.lot_to)}</span></div>
     <div class="hr"></div>
-    <table class="drv">
+    <table class="drv-table">
       <colgroup>
-        <col class="c1"/><col class="c2"/><col class="c3"/><col class="c4"/>
-        <col class="c5"/><col class="c6"/><col class="c7"/>
+        <col class="c-pt"/><col class="c-lot"/><col class="c-farm"/><col class="c-pay"/><col class="c-recv"/>
       </colgroup>
-      <thead>
-        <tr class="row">
-          <th>PT</th><th>LOT</th><th>FARMER</th><th class="r">BG</th>
-          <th class="r">BHADA</th><th class="r">PAY</th><th>RECV</th>
-        </tr>
-      </thead>
-      <tbody>${rows || `<tr><td colspan="7" class="center">No pattis</td></tr>`}</tbody>
+      <thead><tr>
+        <th class="pt">Patti</th>
+        <th class="lot">Lot</th>
+        <th class="farm">Farmer</th>
+        <th class="pay">Net Pay</th>
+        <th class="recv">Receiver</th>
+      </tr></thead>
+      <tbody>
+        ${rows || `<tr class="drv-tr"><td colspan="5" style="text-align:center">No pattis</td></tr>`}
+      </tbody>
     </table>
     <div class="hr"></div>
-    <div class="kv"><span>Total Bags</span><span>${totals.total_bags}</span></div>
-    <div class="kv"><span>Total Bhada</span><span>${fmtMoney(totals.total_bhada)}</span></div>
-    <div class="kv"><span>Total Payable</span><span>${fmtMoney(totals.gross_payable)}</span></div>
-    <div class="kv"><span>Received</span><span>${fmtMoney(totals.received_amount)}</span></div>
-    <div class="netbox"><span class="bold">OUTSTANDING</span><span class="huge">${fmtMoney(totals.outstanding)}</span></div>
-    <div class="hr"></div>
+    <div class="kv tot"><span class="tot-label">TOTAL BAGS</span><span class="bold">${totals.total_bags}</span></div>
+    <div class="kv tot"><span class="tot-label">TOTAL BHADA</span><span class="bold">${fmtMoney(totals.total_bhada)}</span></div>
+    <div class="kv tot emph"><span class="tot-label">TOTAL NET PAYABLE</span><span class="bold">${fmtMoney(totals.total_net_payable)}</span></div>
+    <div class="kv tot emph"><span class="tot-label">TOTAL NET PAYABLE RECEIVED BY DRIVER</span><span class="bold">${fmtMoney(totals.driver_received)}</span></div>
   </div>
   </body></html>`;
 }
@@ -433,12 +545,30 @@ export async function thermalPrintDriverReport(
   settings?: Settings | null,
   drivers?: DriverRangeRef[],
 ): Promise<void> {
+  // CRITICAL (web): open the preview window synchronously during the button click
+  // before any await — otherwise browsers block / null the popup.
+  const preview =
+    Platform.OS === "web" ? openThermalPreviewWindow(`Driver ${d.driver_name || "report"}`) : null;
+
   const mm = await resolvePrintPaperMm(settings?.thermal_paper_width_mm);
   const html = renderDriverThermalHtml(d, dateISO, shopName, mm, drivers);
+
+  if (Platform.OS === "web") {
+    if (preview && !preview.closed) {
+      await fillThermalPreviewAndPrint(preview, html, mm);
+      return;
+    }
+    // Popup blocked (Cursor/embedded browser, strict blockers): visible in-page preview.
+    showInPageThermalPreview(html, `Driver ${d.driver_name || "report"} — Print`);
+    return;
+  }
+
+  // Native: always print the compact Roman HTML table (same as Share / Preview).
   await printThermalDocument({
     html,
     escposBase64: encodeDriverReportEscPos(d, dateISO, shopName, mm, drivers),
     paperMm: mm,
+    preferHtml: true,
   });
 }
 
@@ -453,16 +583,19 @@ export async function shareDriverThermalReport(
   settings?: Settings | null,
   drivers?: DriverRangeRef[],
 ): Promise<"shared" | "downloaded" | "printed"> {
+  // CRITICAL (web): open preview tab during the click gesture before awaits.
+  const preview =
+    Platform.OS === "web" ? openThermalPreviewWindow(`Driver ${d.driver_name || "report"}`) : null;
+
   const mm = await resolvePrintPaperMm(settings?.thermal_paper_width_mm);
   const html = renderDriverThermalHtml(d, dateISO, shopName, mm, drivers);
   const safeName = `driver-${(d.driver_name || "report").replace(/[^\w.\-]+/g, "_")}-${dateISO}.pdf`;
   const title = `Driver ${d.driver_name}`;
 
   if (Platform.OS === "web") {
-    // Build a real PDF file from the same thermal report data/columns.
     const { buildDriverThermalPdfBytes } = await import("@/src/utils/report-pdf");
     const bytes = buildDriverThermalPdfBytes(d, dateISO, shopName, mm);
-    return exportPdfBytes(bytes, safeName, title, "share");
+    return openPdfBytesPreviewWeb(bytes, safeName, preview);
   }
 
   const w = clampPaperMm(mm);
@@ -489,45 +622,72 @@ export function encodeDriverReportEscPos(
   dateISO: string,
   shopName: string,
   paperMm: number,
-  drivers?: DriverRangeRef[],
+  _drivers?: DriverRangeRef[],
 ): string {
   const b = new EscPosBuilder(paperMm);
-  const totals = driverDetailTotals(d.pattis, drivers);
+  const totals = driverReportTotals(d.pattis, d.driver_name);
+  const ascii = (s: string) =>
+    String(s || "")
+      .replace(/₹/g, "Rs ")
+      .replace(/×/g, "x")
+      .replace(/·/g, " - ")
+      .replace(/…/g, "...")
+      .replace(/—/g, "-")
+      .replace(/–/g, "-");
+  const clip = (s: string, n: number) => {
+    const t = ascii(s);
+    if (t.length <= n) return t.padEnd(n, " ");
+    return t.slice(0, Math.max(0, n - 1)) + ".";
+  };
+  // Compact 5-col widths summing to printer cols.
+  const c = b.cols;
+  const wPt = Math.max(3, Math.floor(c * 0.1));
+  const wLot = Math.max(4, Math.floor(c * 0.14));
+  const wPay = Math.max(8, Math.floor(c * 0.22));
+  const wRecv = Math.max(6, Math.floor(c * 0.22));
+  const wFarm = Math.max(6, c - wPt - wLot - wPay - wRecv);
+  const row5 = (pt: string, lot: string, farm: string, pay: string, recv: string) => {
+    const payRaw = ascii(pay);
+    const payCell = payRaw.length > wPay ? payRaw.slice(-wPay) : payRaw.padStart(wPay, " ");
+    return clip(pt, wPt) + clip(lot, wLot) + clip(farm, wFarm) + payCell + clip(recv, wRecv);
+  };
+
   b.init()
     .align("center")
     .bold(true)
     .size("tall")
-    .line((shopName || "LEMON MANDI").toUpperCase())
+    .line(ascii((shopName || "LEMON MANDI").toUpperCase()))
     .size("normal")
     .line("DRIVER DETAILS")
     .bold(false)
     .hr()
     .align("left")
-    .kv("Driver", d.driver_name);
-  if (d.place) b.kv("Place", d.place);
+    .kv("Driver", ascii(d.driver_name));
+  if (d.place) b.kv("Place", ascii(d.place));
   b.kv("Date", dateISO)
-    .kv("Lots", `${d.lot_from} - ${d.lot_to}`)
+    .kv("Lots", ascii(`${d.lot_from} - ${d.lot_to}`))
     .hr()
-    .line("PT LOT FARMER BG BHADA PAY RECV");
+    .bold(true)
+    .line(row5("PT", "LOT", "FARMER", "NET PAY", "RECV"))
+    .bold(false)
+    .hr("-");
   for (const p of d.pattis) {
-    const recv = isPattiReceived(p, drivers);
-    const pay = rupees(p.net_payable);
-    b.wrapped(`#${p.patti_no} ${lotLabel(p)} ${p.farmer_name || "—"}`);
-    b.kv(
-      `${p.total_bags}b  ${rupees(p.bhada_total)}${recv ? " *" : ""}`,
-      recv ? `(${pay})` : pay,
+    b.line(
+      row5(
+        `#${p.patti_no}`,
+        lotLabel(p),
+        p.farmer_name || "-",
+        rupees(p.net_payable),
+        actualReceiverName(p),
+      ),
     );
-    b.line(`  Recv: ${receiverDisplay(p, drivers)}`);
   }
   b.hr()
-    .kv("Total Bags", String(totals.total_bags))
-    .kv("Total Bhada", rupees(totals.total_bhada))
-    .kv("Total Payable", rupees(totals.gross_payable))
-    .kv("Received", rupees(totals.received_amount))
+    .kv("TOTAL BAGS", String(totals.total_bags))
+    .kv("TOTAL BHADA", rupees(totals.total_bhada))
     .bold(true)
-    .size("tall")
-    .kv("OUTSTANDING", rupees(totals.outstanding))
-    .size("normal")
+    .kv("TOTAL NET PAYABLE", rupees(totals.total_net_payable))
+    .kv("DRV NET RECVD", rupees(totals.driver_received))
     .bold(false)
     .cut();
   return b.toBase64();

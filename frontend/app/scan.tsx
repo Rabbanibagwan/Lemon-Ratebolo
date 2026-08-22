@@ -28,6 +28,7 @@ export default function Scan() {
       // Accept either a bare token or a URL with token
       const token = extractToken(data);
       const p = await api.get<Patti>(`/pattis/by-qr/${encodeURIComponent(token)}`);
+      // Opens UPDATE RECEIVER directly (patti screen handles from=scan — not the details view).
       router.replace({ pathname: "/patti/[id]", params: { id: p.id, from: "scan" } });
     } catch (e: any) {
       Alert.alert("QR not recognised", e?.detail || "This QR does not match any Patti in this shop.", [
@@ -51,7 +52,7 @@ export default function Scan() {
           <View style={styles.permIcon}><Ionicons name="camera-outline" size={36} color={colors.onSurface} /></View>
           <Text style={styles.permTitle}>Camera Permission Needed</Text>
           <Text style={styles.permText}>
-            Point the camera at a Patti QR to open it directly and update the receiver name.
+            Point the camera at a Patti QR to update the receiver name.
           </Text>
           {permission.canAskAgain ? (
             <Button label="ALLOW CAMERA" onPress={() => requestPermission()} testID="scan-request-perm" />
@@ -84,7 +85,7 @@ export default function Scan() {
             <View style={[styles.corner, styles.bl]} />
             <View style={[styles.corner, styles.br]} />
           </View>
-          <Text style={styles.overlayText}>{lookingUp ? "OPENING PATTI…" : "POINT AT PATTI QR"}</Text>
+          <Text style={styles.overlayText}>{lookingUp ? "OPENING RECEIVER…" : "POINT AT PATTI QR"}</Text>
         </View>
       </View>
     </SafeAreaView>

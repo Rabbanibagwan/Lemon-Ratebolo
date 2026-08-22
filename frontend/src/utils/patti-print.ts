@@ -150,7 +150,7 @@ export function renderPattiHtml(p: Patti, profile: ShopProfile, qrUri: string, u
       <div class="trow"><span class="strong">Total deduction</span><span class="mono strong">− ${fmt(p.deductions_total)}</span></div>
     </div>
     <div class="net"><div class="netl">NET PAYABLE</div><div class="netv">${fmt(p.net_payable)}</div></div>
-    <div class="rec"><div><div class="recL">RECEIVER</div><div class="recV">${escapeHtml(p.receiver_name || "—")}</div></div><div class="recL">${p.status === "received" ? "✓ RECEIVED" : "⧗ PENDING"}</div></div>
+    <div class="rec"><div><div class="recL">RECEIVER</div><div class="recV">${escapeHtml(p.receiver_name || "—")}</div></div></div>
     <div class="qr">
       <img src="${qrUri}"/>
       <div><div class="qrLbl">SCAN AT PAYMENT COUNTER</div><div class="qrHint">Scan this QR to open Patti #${p.patti_no} and update receiver name.</div></div>
@@ -187,9 +187,9 @@ export function renderThermalPattiHtml(
   <title>Patti #${p.patti_no}</title>
   <style>${thermalBaseCss(m)}</style></head><body>
   <div id="slip" class="patti">
-    ${shop ? `<div class="center big bold wrap">${escapeHtml(shop)}</div>` : ""}
-    ${addr ? `<div class="center wrap">${escapeHtml(addr)}</div>` : ""}
-    ${mobile ? `<div class="center">Mobile: ${escapeHtml(mobile)}</div>` : ""}
+    ${shop ? `<div class="center shop wrap">${escapeHtml(shop)}</div>` : ""}
+    ${addr ? `<div class="center addr wrap">${escapeHtml(addr)}</div>` : ""}
+    ${mobile ? `<div class="center addr">Mobile: ${escapeHtml(mobile)}</div>` : ""}
     <div class="hr"></div>
     <div class="kv"><span class="k">PATTI / BILL</span><span class="bold">NO. ${p.patti_no}</span></div>
     <div class="hr"></div>
@@ -209,9 +209,8 @@ export function renderThermalPattiHtml(
     <div class="kv bold"><span>Total deduction</span><span>- ${fmt(p.deductions_total)}</span></div>
     <div class="netbox"><span class="bold">NET PAYABLE</span><span class="huge">${fmt(p.net_payable)}</span></div>
     <div class="kv"><span class="k">RECEIVER</span><span class="bold wrap">${escapeHtml(p.receiver_name || "—")}</span></div>
-    <div class="kv"><span class="k">STATUS</span><span class="bold">${p.status === "received" ? "RECEIVED" : "PENDING"}</span></div>
     <img class="qr" src="${qrUri}" alt="QR"/>
-    <div class="center">Scan at counter</div>
+    <div class="center addr">Scan at counter</div>
   </div>
   </body></html>`;
 }
