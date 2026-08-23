@@ -137,7 +137,7 @@ export class EscPosBuilder {
   }
 
   /**
-   * Draw a visible box around a key/value row (Preview Net Payable).
+   * Draw a visible box around a key/value row (Preview Net Payable / TOTAL).
    * Uses ASCII borders so generic Bluetooth thermal printers render reliably.
    */
   boxedKv(left: string, right: string): this {
@@ -152,6 +152,25 @@ export class EscPosBuilder {
     this.line("|" + row + "|");
     this.line("+" + "-".repeat(inner) + "+");
     return this;
+  }
+
+  /**
+   * Preview-style emphasized total: double rule + tall boxed row + double rule.
+   * Closest ESC/POS stand-in for the HTML black NET PAYABLE / TOTAL box.
+   */
+  emphasizedTotalBox(left: string, right: string): this {
+    this.align("left").feed(1);
+    this.line("=".repeat(this.cols));
+    this.bold(true).size("tall");
+    this.boxedKv(left, right);
+    this.size("normal").bold(false);
+    this.line("=".repeat(this.cols));
+    return this.feed(1);
+  }
+
+  /** White-on-black line where the printer supports GS B reverse mode (optional emphasis). */
+  reverse(on: boolean): this {
+    return this.raw(u8(0x1d, 0x42, on ? 1 : 0));
   }
 
   columns(parts: string[], widths: number[]): this {

@@ -10,11 +10,14 @@ export type CashBookDoc = {
   khar: CashBookLine[];
 };
 
-function shopHead(b: EscPosBuilder, profile: ShopProfile | { shop_name?: string } | null) {
+function shopHead(b: EscPosBuilder, profile: ShopProfile | { shop_name?: string; address?: string; village?: string; taluk?: string; district?: string; state?: string; mobile?: string } | null) {
   const shop = (profile?.shop_name || "").trim().toUpperCase();
-  // Merchant name: double-size bold (closest ESC/POS match to Preview prominence).
-  // Built-in printer fonts cannot load Times New Roman; HTML thermal path uses Times.
+  // Merchant name: double-size bold — Preview .shop hierarchy. Printer cannot load Times New Roman.
   b.init().align("center").bold(true).size("big").line(shop || "LEMON MANDI").size("normal").bold(false);
+  const addr = [profile?.address, profile?.village, profile?.taluk, profile?.district, profile?.state].filter(Boolean).join(", ");
+  // Address / mobile: smaller than merchant (Preview .addr).
+  if (addr) b.align("center").bold(false).size("normal").wrapped(slipText(addr));
+  if (profile?.mobile) b.align("center").bold(false).size("normal").line(`Mobile: ${slipText(profile.mobile)}`);
 }
 
 export function encodeTestPrint(paperMm: number, printerName?: string): string {
@@ -46,6 +49,28 @@ function slipText(s: string): string {
     .replace(/–/g, "-");
 }
 
+/** Large name block matching Preview farmer/vendor prominence (size big + bold). */
+function printProminentName(b: EscPosBuilder, label: string, name: string): void {
+  b.align("left").bold(false).size("normal").line(label);
+  b.bold(true).size("big");
+  const text = slipText(name);
+  const halfCols = Math.max(8, Math.floor(b.cols / 2));
+  if (text.length <= halfCols) {
+    b.align("right").line(text);
+  } else {
+    b.align("left");
+    for (let i = 0; i < text.length; i += halfCols) {
+      b.line(text.slice(i, i + halfCols));
+    }
+  }
+  b.size("normal").bold(false).align("left");
+}
+
+/**
+ * ESC/POS Farmer Patti — presentation mirrors Preview `renderThermalPattiHtml`.
+ * Amounts/fields are unchanged; only size/alignment/emphasis differ for hardware.
+ * STATUS is never printed.
+ */
 export function encodeFarmerPattiEscPos(
   p: Patti,
   profile: ShopProfile,
@@ -54,36 +79,24 @@ export function encodeFarmerPattiEscPos(
   detailed: boolean = false,
 ): string {
   const b = new EscPosBuilder(paperMm);
-  const addr = [profile.address, profile.village, profile.taluk, profile.district, profile.state].filter(Boolean).join(", ");
   const date = new Date(p.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
   shopHead(b, profile);
-  // Address / mobile: smaller secondary header (normal weight).
-  if (addr) b.align("center").bold(false).size("normal").wrapped(slipText(addr));
-  if (profile.mobile) b.align("center").line(`Mobile: ${profile.mobile}`);
-  b.align("left").hr()
-    .kv("PATTI / BILL", `NO. ${p.patti_no}`)
-    .hr();
 
-  // Farmer: label normal, name double-size bold (Preview metaValueFarmer).
-  // size("big") halves effective columns in both axes.
-  b.align("left").bold(false).size("normal").line("FARMER");
-  b.bold(true).size("big");
-  const farmerName = slipText(p.farmer_name);
-  const halfCols = Math.max(8, Math.floor(b.cols / 2));
-  if (farmerName.length <= halfCols) {
-    b.align("right").line(farmerName);
-  } else {
-    b.align("left");
-    for (let i = 0; i < farmerName.length; i += halfCols) {
-      b.line(farmerName.slice(i, i + halfCols));
-    }
-  }
-  b.size("normal").bold(false).align("left");
+  b.align("left").hr();
+  // Patti number clearly visible (Preview PATTI / BILL · NO.).
+  b.bold(true).kv("PATTI / BILL", `NO. ${p.patti_no}`).bold(false);
+  b.hr();
+
+  printProminentName(b, "FARMER", p.farmer_name || "-");
+
+  b.size("normal").bold(false);
   b.kv("DATE", date);
   if (p.driver_name) {
     const drv = p.driver_place ? `${p.driver_name} - ${p.driver_place}` : p.driver_name;
     b.kv("DRIVER", slipText(drv));
   }
+
+  // Full paper width 3-col table (Preview LOT | BAGS x RATE | AMOUNT).
   b.hr().bold(true).itemRow("LOT", "BAGS x RATE", "AMOUNT").bold(false);
   for (const lot of p.lots) {
     lot.sales.forEach((s, i) => {
@@ -92,6 +105,7 @@ export function encodeFarmerPattiEscPos(
       b.bold(true).itemRow(lotNo, mid, rupees(s.bags * s.rate_per_bag * p.payment_factor)).bold(false);
     });
   }
+
   const hamaliLabel = detailed
     ? `Hamali (${p.total_bags} x ${rupees(p.hamali_per_bag)})`
     : "Hamali";
@@ -100,58 +114,80 @@ export function encodeFarmerPattiEscPos(
     .kv(hamaliLabel, `- ${rupees(p.hamali_total)}`)
     .kv("Bhada", `- ${rupees(p.bhada_total)}`)
     .kv("Stationery", `- ${rupees(p.stationery_total)}`)
-    .bold(true).kv("Total deduction", `- ${rupees(p.deductions_total)}`).bold(false)
-    .feed(1);
+    .bold(true).kv("Total deduction", `- ${rupees(p.deductions_total)}`).bold(false);
 
-  // Net Payable box — must remain visible on physical paper (Preview netBox).
-  b.bold(true).size("tall");
-  b.boxedKv("NET PAYABLE", rupees(p.net_payable));
-  b.size("normal").bold(false);
+  // Preview .netbox — strong box + tall text (no CSS black fill on ESC/POS).
+  b.emphasizedTotalBox("NET PAYABLE", rupees(p.net_payable));
 
-  b.kv("RECEIVER", slipText(p.receiver_name || "-"));
+  // Receiver: bold + readable (Preview RECEIVER is bold wrap, not farmer-sized). Never print STATUS.
+  b.bold(true).size("normal").kv("RECEIVER", slipText(p.receiver_name || "-")).bold(false);
+
   const token = (qrToken || p.qr_token || "").trim();
   if (token) {
-    b.align("center").feed(1).qr(token, paperMm <= 58 ? 3 : 4).line("Scan at counter").align("left");
+    b.align("center").feed(1).qr(token, paperMm <= 58 ? 3 : paperMm <= 80 ? 4 : 5);
+    b.size("normal").bold(false).line("Scan at counter").align("left");
   }
   b.cut();
   return b.toBase64();
 }
 
+/**
+ * ESC/POS Vendor Bill — presentation mirrors Preview `renderThermalVendorBillHtml`.
+ * No QR (Preview thermal has none). Calculations unchanged.
+ */
 export function encodeVendorBillEscPos(bill: VendorBill, profile: ShopProfile, paperMm: number): string {
   const b = new EscPosBuilder(paperMm);
-  const addr = [profile.address, profile.village, profile.taluk, profile.district, profile.state].filter(Boolean).join(", ");
   shopHead(b, profile);
-  if (addr) b.wrapped(addr);
-  if (profile.mobile) b.line(profile.mobile);
-  b.bold(true).line("VENDOR BILL").bold(false).align("left").hr()
-    .kv("Bill", bill.bill_code)
-    .kv("Date", bill.date)
-    .kv("Vendor", bill.vendor_name);
-  if (bill.vendor_details) b.wrapped(bill.vendor_details);
-  b.hr().itemRow("LOT", "DETAIL", "AMT");
-  for (const l of bill.lines) {
-    b.itemRow(l.lot_no, `${l.farmer_name}`, rupees(l.amount));
-    b.itemRow("", `${l.bags} x ${rupees(l.vendor_rate)}`, "");
+
+  b.align("center").bold(true).size("tall").line("VENDOR BILL").size("normal").bold(false);
+  b.align("left").hr();
+  b.bold(true).kv("Bill", slipText(bill.bill_code)).bold(false);
+  b.kv("Date", slipText(bill.date));
+
+  printProminentName(b, "VENDOR", bill.vendor_name || "-");
+  if (bill.vendor_details) {
+    b.size("normal").bold(false).kv("Details", slipText(bill.vendor_details));
   }
+
+  // Preview columns: LOT | DETAIL | AMOUNT — use full width; wrap detail when needed.
+  b.hr().bold(true).itemRow("LOT", "DETAIL", "AMOUNT").bold(false);
+  for (const l of bill.lines) {
+    const detail = slipText(`${l.farmer_name} - ${l.bags} x ${rupees(l.vendor_rate)}`);
+    const [, mw] = b.lineWidths();
+    if (detail.length <= mw) {
+      b.itemRow(l.lot_no, detail, rupees(l.amount));
+    } else {
+      // Narrow paper: farmer on first row, bags x rate on second (still aligned).
+      b.itemRow(l.lot_no, slipText(l.farmer_name), rupees(l.amount));
+      b.itemRow("", `${l.bags} x ${rupees(l.vendor_rate)}`, "");
+    }
+  }
+
   b.hr()
     .kv("Bags", String(bill.total_bags))
     .kv("Goods", rupees(bill.goods_total))
     .kv("Commission", rupees(bill.commission_total))
     .kv("Hamali", rupees(bill.hamali));
   if (bill.cess > 0) b.kv("Cess", rupees(bill.cess));
-  b.hr().bold(true).size("tall").kv("TOTAL", rupees(bill.grand_total)).size("normal").bold(false)
-    .kv("Paid", rupees(bill.paid))
-    .kv("Balance", rupees(bill.balance));
+
+  // Preview TOTAL .netbox equivalent.
+  b.emphasizedTotalBox("TOTAL", rupees(bill.grand_total));
+
+  b.kv("Paid", rupees(bill.paid));
+  b.bold(true).kv("Balance", rupees(bill.balance)).bold(false);
+
   const bank: string[] = [];
   if (profile.bank_account_holder) bank.push(`A/c Name: ${profile.bank_account_holder}`);
   if (profile.bank_account_number) bank.push(`A/c No: ${profile.bank_account_number}`);
   if (profile.bank_ifsc) bank.push(`IFSC: ${profile.bank_ifsc}`);
   if (profile.bank_name) bank.push(`Bank: ${profile.bank_name}`);
   if (bank.length) {
-    b.hr().align("center").bold(true).line("BANK DETAILS").bold(false).align("left");
-    bank.forEach((x) => b.wrapped(x));
+    b.hr().align("center").bold(true).size("normal").line("BANK DETAILS").bold(false).align("left");
+    bank.forEach((x) => b.size("normal").wrapped(slipText(x)));
   }
-  if (bill.notes) b.wrapped(bill.notes);
+  if (bill.notes) {
+    b.hr().align("center").size("normal").wrapped(slipText(bill.notes)).align("left");
+  }
   b.cut();
   return b.toBase64();
 }
