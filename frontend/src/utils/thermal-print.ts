@@ -295,8 +295,15 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       box-sizing: border-box !important;
     }
     #slip.patti .netbox {
+      /* Outline only — no black fill (Vendor Bill keeps filled TOTAL). */
+      background: #fff !important;
       padding: 12px 12px;
       gap: 14px;
+    }
+    #slip.patti .netbox,
+    #slip.patti .netbox * {
+      color: #000 !important;
+      -webkit-text-stroke: 0 !important;
     }
     #slip.patti .netbox .bold {
       letter-spacing: 0.1em;
