@@ -152,12 +152,13 @@ export function encodeVendorBillEscPos(bill: VendorBill, profile: ShopProfile, p
   b.bold(true).kv("Bill", slipText(bill.bill_code)).bold(false);
   b.kv("Date", slipText(bill.date));
 
-  printProminentName(b, "VENDOR", bill.vendor_name || "-");
+  // Same line as Preview: Vendor label left, name right (not a two-line block).
+  b.size("normal").bold(true).kvPreferValue("Vendor", slipText(bill.vendor_name || "-")).bold(false);
   if (bill.vendor_details) {
-    b.size("normal").bold(false).kv("Details", slipText(bill.vendor_details));
+    b.size("normal").bold(false).kvPreferValue("Details", slipText(bill.vendor_details));
   }
 
-  // Preview columns: LOT | DETAIL | AMOUNT — use full width; wrap detail when needed.
+  // Preview columns: LOT | DETAIL | AMOUNT — full content width; wrap detail when needed.
   b.hr().bold(true).itemRow("LOT", "DETAIL", "AMOUNT").bold(false);
   for (const l of bill.lines) {
     const detail = slipText(`${l.farmer_name} - ${l.bags} x ${rupees(l.vendor_rate)}`);
@@ -173,7 +174,7 @@ export function encodeVendorBillEscPos(bill: VendorBill, profile: ShopProfile, p
 
   b.hr()
     .kv("Bags", String(bill.total_bags))
-    .kv("Goods", rupees(bill.goods_total))
+    .kv("Lemon", rupees(bill.goods_total))
     .kv("Commission", rupees(bill.commission_total))
     .kv("Hamali", rupees(bill.hamali));
   if (bill.cess > 0) b.kv("Cess", rupees(bill.cess));

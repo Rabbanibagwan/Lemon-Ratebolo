@@ -136,22 +136,22 @@ export function renderThermalVendorBillHtml(b: VendorBill, profile: ShopProfile,
   <meta name="viewport" content="width=${m.widthPx}, initial-scale=1, maximum-scale=1"/>
   <title>${escapeHtml(b.bill_code)}</title>
   <style>${thermalBaseCss(m)}</style></head><body>
-  <div id="slip">
+  <div id="slip" class="vendor">
     <div class="center big bold wrap">${escapeHtml((profile.shop_name || "").toUpperCase())}</div>
-    ${addr ? `<div class="center wrap">${escapeHtml(addr)}</div>` : ""}
-    ${profile.mobile ? `<div class="center">${escapeHtml(profile.mobile)}</div>` : ""}
+    ${addr ? `<div class="center addr wrap">${escapeHtml(addr)}</div>` : ""}
+    ${profile.mobile ? `<div class="center addr">${escapeHtml(profile.mobile)}</div>` : ""}
     <div class="center bold">VENDOR BILL</div>
     <div class="hr"></div>
     <div class="kv"><span class="k">Bill</span><span class="bold">${escapeHtml(b.bill_code)}</span></div>
-    <div class="kv"><span class="k">Date</span><span>${escapeHtml(b.date)}</span></div>
+    <div class="kv"><span class="k">Date</span><span class="v">${escapeHtml(b.date)}</span></div>
     <div class="kv vendor"><span class="k">Vendor</span><span class="bold v wrap">${escapeHtml(b.vendor_name)}</span></div>
-    ${b.vendor_details ? `<div class="kv"><span class="k">Details</span><span class="wrap">${escapeHtml(b.vendor_details)}</span></div>` : ""}
+    ${b.vendor_details ? `<div class="kv"><span class="k">Details</span><span class="v wrap">${escapeHtml(b.vendor_details)}</span></div>` : ""}
     <div class="hr"></div>
     <div class="row th"><span class="lot">LOT</span><span class="mid">DETAIL</span><span class="right">AMOUNT</span></div>
     ${lines}
     <div class="hr"></div>
     <div class="kv"><span>Bags</span><span>${b.total_bags}</span></div>
-    <div class="kv"><span>Goods</span><span>${fmt(b.goods_total)}</span></div>
+    <div class="kv"><span>Lemon</span><span>${fmt(b.goods_total)}</span></div>
     <div class="kv"><span>Commission</span><span>${fmt(b.commission_total)}</span></div>
     <div class="kv"><span>Hamali</span><span>${fmt(b.hamali)}</span></div>
     ${b.cess > 0 ? `<div class="kv"><span>Cess</span><span>${fmt(b.cess)}</span></div>` : ""}

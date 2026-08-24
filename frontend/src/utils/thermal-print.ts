@@ -23,10 +23,10 @@ export function thermalMetrics(paperMm: number) {
   const w = clampPaperMm(paperMm);
   // Full paper width in CSS px — viewport + measurement must match @page width.
   const widthPx = Math.round(w * MM_TO_CSS_PX);
-  // Global Y pad for head/cut edge. Farmer Patti adds horizontal margins via pattiPadX.
+  // Global Y pad for head/cut edge. Slip docs add horizontal margins via pattiPadX.
   const padX = 0;
   const padY = w <= 58 ? 2 : 3;
-  /** Farmer Patti side inset (~1.5–2.5 mm) so content is not edge-to-edge on the roll. */
+  /** Shared side inset (~1.5–2.5 mm) for Farmer Patti + Vendor Bill (not edge-to-edge). */
   const pattiPadX = w <= 58 ? 5 : w <= 80 ? 8 : 10;
   /** QR display px — slightly larger, still under (widthPx - 2*pattiPadX). */
   const qrPx = w <= 58 ? 108 : w <= 80 ? 140 : 168;
@@ -55,6 +55,8 @@ export function thermalMetrics(paperMm: number) {
     midPct: w <= 58 ? 48 : 50,
     rightPct: w <= 58 ? 32 : 32,
     farmerFs: w <= 58 ? 20 : w <= 80 ? 24 : 28,
+    /** Vendor name — one step under farmerFs, still bold/readable on the same row. */
+    vendorFs: w <= 58 ? 16 : w <= 80 ? 18 : 22,
     /** Merchant shop name — largest header signal (Preview shopName ~20–24px). */
     shopFs: w <= 58 ? 18 : w <= 80 ? 24 : 28,
   };
@@ -269,7 +271,8 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       -webkit-print-color-adjust: exact !important;
       print-color-adjust: exact !important;
     }
-    .netbox, .netbox * { color: #fff !important; -webkit-text-stroke: 0 !important; }
+    /* Must beat #slip * color:#000 or TOTAL text vanishes on the black fill. */
+    #slip .netbox, #slip .netbox * { color: #fff !important; -webkit-text-stroke: 0 !important; }
     .netbox .bold {
       font-size: ${m.emphFs}px !important;
       font-weight: 900 !important;
@@ -333,6 +336,43 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       height: ${m.qrPx}px !important;
       max-width: calc(100% - 2px) !important;
       margin: 10px auto 4px !important;
+    }
+    /* Vendor Bill only: Times + printable side margins + same-row vendor name. */
+    #slip.vendor,
+    #slip.vendor * {
+      font-family: "Times New Roman", Times, "Liberation Serif", Georgia, serif !important;
+    }
+    #slip.vendor {
+      padding-left: ${m.pattiPadX}px !important;
+      padding-right: ${m.pattiPadX}px !important;
+      box-sizing: border-box !important;
+    }
+    /* Label left + name right on one row (not stacked). */
+    #slip.vendor .kv.vendor {
+      flex-wrap: nowrap;
+      align-items: center;
+      gap: 8px;
+    }
+    #slip.vendor .kv.vendor .k {
+      flex: 0 0 auto;
+      max-width: 32%;
+    }
+    #slip.vendor .kv.vendor .v {
+      flex: 1 1 auto;
+      min-width: 0;
+      font-size: ${m.vendorFs}px !important;
+      font-weight: 900 !important;
+      text-align: right !important;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    #slip.vendor .netbox {
+      padding: 10px 10px;
+      gap: 12px;
+    }
+    #slip.vendor .netbox .bold,
+    #slip.vendor .netbox .huge {
+      color: #fff !important;
     }
     .foot {
       font-size: ${Math.max(8, m.bodyFs - 1)}px; font-weight: 700 !important;
