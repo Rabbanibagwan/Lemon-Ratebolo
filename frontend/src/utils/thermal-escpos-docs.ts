@@ -11,7 +11,8 @@ export type CashBookDoc = {
 };
 
 function shopHead(b: EscPosBuilder, profile: ShopProfile | { shop_name?: string; address?: string; village?: string; taluk?: string; district?: string; state?: string; mobile?: string } | null) {
-  const shop = (profile?.shop_name || "").trim().toUpperCase();
+  // Preserve merchant shop name casing exactly as entered.
+  const shop = (profile?.shop_name || "").trim();
   // Merchant name: double-size bold — Preview .shop hierarchy. Printer cannot load Times New Roman.
   b.init().align("center").bold(true).size("big").line(shop || "LEMON MANDI").size("normal").bold(false);
   const addr = [profile?.address, profile?.village, profile?.taluk, profile?.district, profile?.state].filter(Boolean).join(", ");
@@ -83,48 +84,55 @@ export function encodeFarmerPattiEscPos(
   shopHead(b, profile);
 
   b.align("left").hr();
-  // Patti number clearly visible (Preview PATTI / BILL · NO.).
-  b.bold(true).kv("PATTI / BILL", `NO. ${p.patti_no}`).bold(false);
+  // Patti number clearly visible (Preview Patti / Bill · No.).
+  b.bold(true).kv("Patti / Bill", `No. ${p.patti_no}`).bold(false);
   b.hr();
 
-  printProminentName(b, "FARMER", p.farmer_name || "-");
-
-  b.size("normal").bold(false);
-  b.kv("DATE", date);
+  // Same line as Date/Driver: label left, name right (not a two-line block).
+  // Labels are system sentence-case; farmer/driver names keep user casing via slipText.
+  b.size("normal").bold(true).kv("Farmer", slipText(p.farmer_name || "-")).bold(false);
+  b.kv("Date", date);
   if (p.driver_name) {
     const drv = p.driver_place ? `${p.driver_name} - ${p.driver_place}` : p.driver_name;
-    b.kv("DRIVER", slipText(drv));
+    // Prefer value width so driver names are not clipped on narrow paper.
+    b.kvPreferValue("Driver", slipText(drv));
   }
 
-  // Full paper width 3-col table (Preview LOT | BAGS x RATE | AMOUNT).
-  b.hr().bold(true).itemRow("LOT", "BAGS x RATE", "AMOUNT").bold(false);
+  // Full paper width 3-col table (Preview Lot | Bags x Rate | Amount).
+  // Lot cell bold only — mid/amount stay normal so 58 mm stays readable.
+  b.hr().bold(true).itemRow("Lot", "Bags x Rate", "Amount").bold(false);
   for (const lot of p.lots) {
     lot.sales.forEach((s, i) => {
       const lotNo = i === 0 ? String(lot.lot_no || `${lot.lot_serial_no}/${lot.total_bags}`) : "";
       const mid = `${s.bags} x ${rupees(s.rate_per_bag * p.payment_factor)}`;
-      b.bold(true).itemRow(lotNo, mid, rupees(s.bags * s.rate_per_bag * p.payment_factor)).bold(false);
+      b.itemRowLotEmph(lotNo, mid, rupees(s.bags * s.rate_per_bag * p.payment_factor));
     });
   }
 
   const hamaliLabel = detailed
     ? `Hamali (${p.total_bags} x ${rupees(p.hamali_per_bag)})`
     : "Hamali";
+  // Deductions: same base size; only Total deduction bold (ESC/POS has no smaller font).
   b.hr()
     .kv("Gross total", rupees(p.farmer_gross))
+    .bold(false)
     .kv(hamaliLabel, `- ${rupees(p.hamali_total)}`)
     .kv("Bhada", `- ${rupees(p.bhada_total)}`)
     .kv("Stationery", `- ${rupees(p.stationery_total)}`)
-    .bold(true).kv("Total deduction", `- ${rupees(p.deductions_total)}`).bold(false);
+    .bold(true)
+    .kv("Total deduction", `- ${rupees(p.deductions_total)}`)
+    .bold(false);
 
-  // Preview .netbox — strong box + tall text (no CSS black fill on ESC/POS).
-  b.emphasizedTotalBox("NET PAYABLE", rupees(p.net_payable));
+  // Preview .netbox — strong box + tall text; slight amount padding for readability.
+  b.emphasizedTotalBox("Net payable", `  ${rupees(p.net_payable)}`);
 
-  // Receiver: bold + readable (Preview RECEIVER is bold wrap, not farmer-sized). Never print STATUS.
-  b.bold(true).size("normal").kv("RECEIVER", slipText(p.receiver_name || "-")).bold(false);
+  // Receiver: bold + readable (Preview Receiver is bold wrap, not farmer-sized). Never print STATUS.
+  b.bold(true).size("normal").kv("Receiver", slipText(p.receiver_name || "-")).bold(false);
 
   const token = (qrToken || p.qr_token || "").trim();
   if (token) {
-    b.align("center").feed(1).qr(token, paperMm <= 58 ? 3 : paperMm <= 80 ? 4 : 5);
+    // Slightly larger modules; still fits 58/80/100 printable width.
+    b.align("center").feed(1).qr(token, paperMm <= 58 ? 4 : paperMm <= 80 ? 5 : 6);
     b.size("normal").bold(false).line("Scan at counter").align("left");
   }
   b.cut();

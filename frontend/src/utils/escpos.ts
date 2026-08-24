@@ -137,6 +137,35 @@ export class EscPosBuilder {
   }
 
   /**
+   * Same-line label/value like kv(), but prefers value width and wraps long
+   * values onto following right-aligned lines instead of clipping.
+   */
+  kvPreferValue(left: string, right: string): this {
+    const label = left || "";
+    const value = right || "";
+    if (!value) return this.kv(label, value);
+    // Keep at least ~45% of the line for the value when the label is short.
+    const minValueCols = Math.min(value.length, Math.max(12, Math.floor(this.cols * 0.45)));
+    const maxLabel = Math.max(4, this.cols - minValueCols - 1);
+    let l = label;
+    if (l.length > maxLabel) l = l.slice(0, Math.max(0, maxLabel - 1)) + (maxLabel > 0 ? "." : "");
+    const firstAvail = Math.max(1, this.cols - l.length - 1);
+    if (value.length <= firstAvail) {
+      const gap = Math.max(1, this.cols - l.length - value.length);
+      return this.align("left").line(l + " ".repeat(gap) + value);
+    }
+    const first = value.slice(0, firstAvail);
+    this.align("left").line(l + " ".repeat(Math.max(1, this.cols - l.length - first.length)) + first);
+    let rest = value.slice(firstAvail);
+    while (rest.length > 0) {
+      const chunk = rest.slice(0, this.cols);
+      rest = rest.slice(this.cols);
+      this.align("left").line(chunk.padStart(this.cols, " "));
+    }
+    return this;
+  }
+
+  /**
    * Draw a visible box around a key/value row (Preview Net Payable / TOTAL).
    * Uses ASCII borders so generic Bluetooth thermal printers render reliably.
    */
@@ -183,6 +212,19 @@ export class EscPosBuilder {
     }
     if (row.length > this.cols) row = row.slice(0, this.cols);
     return this.line(row);
+  }
+
+  /** Lot / mid / amount — bold only the lot cell (matches Preview .lot weight). */
+  itemRowLotEmph(lot: string, mid: string, amount: string): this {
+    const [lw, mw, aw] = this.lineWidths();
+    this.align("left");
+    const lotCell = pad(lot || "", lw).slice(0, lw);
+    const midCell = pad(mid || "", mw).slice(0, mw);
+    const amtCell = (amount || "").slice(0, aw).padStart(aw);
+    if ((lot || "").trim()) this.bold(true).text(lotCell).bold(false);
+    else this.text(lotCell);
+    this.text(midCell).text(amtCell).raw(u8(0x0a));
+    return this;
   }
 
   /** Lot / detail / amount row sized to the selected paper columns. */

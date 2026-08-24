@@ -179,7 +179,8 @@ export function renderThermalPattiHtml(
       </div>`).join(""),
   ).join("");
   const addr = [profile.address, profile.village, profile.taluk, profile.district, profile.state].filter(Boolean).join(", ");
-  const shop = (profile.shop_name || "").trim().toUpperCase();
+  // Preserve merchant shop name casing exactly as entered (do not force UPPERCASE).
+  const shop = (profile.shop_name || "").trim();
   const mobile = (profile.mobile || "").trim();
   return `
   <!doctype html><html><head><meta charset="utf-8"/>
@@ -191,26 +192,27 @@ export function renderThermalPattiHtml(
     ${addr ? `<div class="center addr wrap">${escapeHtml(addr)}</div>` : ""}
     ${mobile ? `<div class="center addr">Mobile: ${escapeHtml(mobile)}</div>` : ""}
     <div class="hr"></div>
-    <div class="kv"><span class="k">PATTI / BILL</span><span class="bold">NO. ${p.patti_no}</span></div>
+    <div class="kv"><span class="k">Patti / Bill</span><span class="bold patti-no">No. ${p.patti_no}</span></div>
     <div class="hr"></div>
-    <div class="kv farmer"><span class="k">FARMER</span><span class="bold v wrap">${escapeHtml(p.farmer_name)}</span></div>
-    <div class="kv"><span class="k">DATE</span><span>${date}</span></div>
+    <div class="kv farmer"><span class="k">Farmer</span><span class="bold v wrap">${escapeHtml(p.farmer_name)}</span></div>
+    <div class="kv"><span class="k">Date</span><span class="v">${date}</span></div>
     ${p.driver_name
-      ? `<div class="kv"><span class="k">DRIVER</span><span class="wrap">${escapeHtml(p.driver_name)}${p.driver_place ? " · " + escapeHtml(p.driver_place) : ""}</span></div>`
+      ? `<div class="kv driver"><span class="k">Driver</span><span class="v wrap">${escapeHtml(p.driver_name)}${p.driver_place ? " · " + escapeHtml(p.driver_place) : ""}</span></div>`
       : ""}
     <div class="hr"></div>
-    <div class="row th"><span class="lot">LOT</span><span class="mid">BAGS × RATE</span><span class="right">AMOUNT</span></div>
+    <div class="row th"><span class="lot">Lot</span><span class="mid">Bags × Rate</span><span class="right">Amount</span></div>
     ${lines}
     <div class="hr"></div>
     <div class="kv"><span>Gross total</span><span>${fmt(p.farmer_gross)}</span></div>
-    <div class="kv"><span>${detailed ? `Hamali (${p.total_bags} × ${fmt(p.hamali_per_bag)})` : "Hamali"}</span><span>- ${fmt(p.hamali_total)}</span></div>
-    <div class="kv"><span>Bhada</span><span>- ${fmt(p.bhada_total)}</span></div>
-    <div class="kv"><span>Stationery</span><span>- ${fmt(p.stationery_total)}</span></div>
-    <div class="kv bold"><span>Total deduction</span><span>- ${fmt(p.deductions_total)}</span></div>
-    <div class="netbox"><span class="bold">NET PAYABLE</span><span class="huge">${fmt(p.net_payable)}</span></div>
-    <div class="kv"><span class="k">RECEIVER</span><span class="bold wrap">${escapeHtml(p.receiver_name || "—")}</span></div>
-    <img class="qr" src="${qrUri}" alt="QR"/>
-    <div class="center addr">Scan at counter</div>
+    <div class="kv deduct"><span>${detailed ? `Hamali (${p.total_bags} × ${fmt(p.hamali_per_bag)})` : "Hamali"}</span><span>- ${fmt(p.hamali_total)}</span></div>
+    <div class="kv deduct"><span>Bhada</span><span>- ${fmt(p.bhada_total)}</span></div>
+    <div class="kv deduct"><span>Stationery</span><span>- ${fmt(p.stationery_total)}</span></div>
+    <div class="kv deduct-total"><span>Total deduction</span><span>- ${fmt(p.deductions_total)}</span></div>
+    <div class="netbox"><span class="bold">Net payable</span><span class="huge">${fmt(p.net_payable)}</span></div>
+    <div class="kv"><span class="k">Receiver</span><span class="bold wrap">${escapeHtml(p.receiver_name || "—")}</span></div>
+    ${qrUri
+      ? `<img class="qr" src="${qrUri}" alt="QR"/><div class="center addr">Scan at counter</div>`
+      : ""}
   </div>
   </body></html>`;
 }

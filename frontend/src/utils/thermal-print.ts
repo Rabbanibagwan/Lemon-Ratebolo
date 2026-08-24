@@ -23,9 +23,13 @@ export function thermalMetrics(paperMm: number) {
   const w = clampPaperMm(paperMm);
   // Full paper width in CSS px — viewport + measurement must match @page width.
   const widthPx = Math.round(w * MM_TO_CSS_PX);
-  // Near-zero side pad so content spans the roll; tiny Y pad for head/cut edge.
+  // Global Y pad for head/cut edge. Farmer Patti adds horizontal margins via pattiPadX.
   const padX = 0;
   const padY = w <= 58 ? 2 : 3;
+  /** Farmer Patti side inset (~1.5–2.5 mm) so content is not edge-to-edge on the roll. */
+  const pattiPadX = w <= 58 ? 5 : w <= 80 ? 8 : 10;
+  /** QR display px — slightly larger, still under (widthPx - 2*pattiPadX). */
+  const qrPx = w <= 58 ? 108 : w <= 80 ? 140 : 168;
   return {
     w,
     widthPx,
@@ -34,11 +38,18 @@ export function thermalMetrics(paperMm: number) {
     hugeFs: w <= 58 ? 17 : w <= 80 ? 22 : 26,
     rowFs: w <= 58 ? 10 : w <= 80 ? 12 : 13,
     emphFs: w <= 58 ? 13 : w <= 80 ? 15 : 17,
-    qrPx: w <= 58 ? 84 : w <= 80 ? 110 : 130,
+    /** Lot no. — one step above emph, still below bigFs (safe on 58 mm). */
+    lotFs: w <= 58 ? 14 : w <= 80 ? 16 : 18,
+    /** Hamali / Bhada / Stationery — slightly under body. */
+    deductFs: w <= 58 ? 9 : w <= 80 ? 11 : 13,
+    /** TOTAL DEDUCTION — one step above deductFs, still below bodyFs. */
+    deductTotalFs: w <= 58 ? 10 : w <= 80 ? 12 : 14,
+    qrPx,
     /** @deprecated use padX / padY — kept so older callers still compile */
     padPx: padY,
     padX,
     padY,
+    pattiPadX,
     // Column shares (percent of slip) — avoid fixed px mins that overflow narrow rolls
     lotPct: w <= 58 ? 20 : 18,
     midPct: w <= 58 ? 48 : 50,
@@ -145,10 +156,52 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       font-size: ${m.rowFs}px !important;
       overflow-wrap: anywhere;
     }
-    #slip.patti .row .lot,
+    #slip.patti .row .lot {
+      font-size: ${m.lotFs}px !important;
+      font-weight: 900 !important;
+    }
     #slip.patti .row .bags {
       font-size: ${m.emphFs}px !important;
       font-weight: 900 !important;
+    }
+    /* Deduction lines: same Times family, slightly under body; amounts stay right. */
+    #slip.patti .kv.deduct {
+      font-size: ${m.deductFs}px !important;
+      font-weight: 400 !important;
+      -webkit-text-stroke: 0 !important;
+      gap: 4px;
+    }
+    #slip.patti .kv.deduct > span:first-child {
+      flex: 1 1 auto;
+      min-width: 0;
+      font-weight: 400 !important;
+      overflow-wrap: anywhere;
+    }
+    #slip.patti .kv.deduct > span:last-child {
+      flex: 0 0 auto;
+      text-align: right !important;
+      font-weight: 400 !important;
+      white-space: nowrap;
+    }
+    /* Same family as deduct; one step larger; bold (still ≤ bodyFs). */
+    #slip.patti .kv.deduct-total {
+      font-size: ${m.deductTotalFs}px !important;
+      font-weight: 900 !important;
+      -webkit-text-stroke: 0 !important;
+      gap: 4px;
+      text-transform: none;
+    }
+    #slip.patti .kv.deduct-total > span:first-child {
+      flex: 1 1 auto;
+      min-width: 0;
+      font-weight: 900 !important;
+      overflow-wrap: anywhere;
+    }
+    #slip.patti .kv.deduct-total > span:last-child {
+      flex: 0 0 auto;
+      text-align: right !important;
+      font-weight: 900 !important;
+      white-space: nowrap;
     }
     .th { font-size: ${m.rowFs}px; font-weight: 900 !important; text-transform: uppercase; }
     .kv {
@@ -164,6 +217,12 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       justify-content: space-between;
       gap: 4px;
       padding: 3px 0;
+    }
+    /* Farmer label + name must stay one row (label left, name right). */
+    #slip.patti .kv.farmer {
+      flex-wrap: nowrap;
+      align-items: center;
+      gap: 8px;
     }
     .kv.farmer .k, .kv.vendor .k {
       font-size: ${m.bodyFs}px;
@@ -181,6 +240,24 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       min-width: 0;
       word-break: break-word;
       overflow-wrap: anywhere;
+    }
+    /* Driver: reserve most of the line for the name; wrap value, never drop the row. */
+    #slip.patti .kv.driver {
+      flex-wrap: nowrap;
+      align-items: baseline;
+      gap: 8px;
+    }
+    #slip.patti .kv.driver .k {
+      flex: 0 0 auto;
+      max-width: 32%;
+    }
+    #slip.patti .kv.driver .v {
+      flex: 1 1 auto;
+      min-width: 60%;
+      text-align: right !important;
+      font-weight: 800 !important;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     .netbox {
       border: 3px solid #000 !important;
@@ -203,6 +280,46 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       font-size: ${m.hugeFs}px !important;
       font-weight: 900 !important;
     }
+    /* Farmer Patti only: Times Roman + clearer Net Payable spacing (size unchanged). */
+    #slip.patti,
+    #slip.patti * {
+      font-family: "Times New Roman", Times, "Liberation Serif", Georgia, serif !important;
+    }
+    /* Side margins so content is centered in the printable area (not edge-to-edge). */
+    #slip.patti {
+      padding-left: ${m.pattiPadX}px !important;
+      padding-right: ${m.pattiPadX}px !important;
+      box-sizing: border-box !important;
+    }
+    #slip.patti .netbox {
+      padding: 12px 12px;
+      gap: 14px;
+    }
+    #slip.patti .netbox .bold {
+      letter-spacing: 0.1em;
+      flex-shrink: 0;
+      text-transform: none !important;
+    }
+    #slip.patti .netbox .huge {
+      letter-spacing: 0.06em;
+      font-variant-numeric: lining-nums tabular-nums;
+      padding-left: 10px;
+      white-space: nowrap;
+      text-align: right;
+    }
+    /* Fixed labels: sentence case (override shared uppercase rules). Values keep user casing. */
+    #slip.patti .kv .k,
+    #slip.patti .th,
+    #slip.patti .th .lot,
+    #slip.patti .th .mid,
+    #slip.patti .th .right {
+      text-transform: none !important;
+    }
+    /* Patti number slightly larger than body, still bold. */
+    #slip.patti .patti-no {
+      font-size: ${m.emphFs}px !important;
+      font-weight: 900 !important;
+    }
     img.qr {
       display: block; margin: 4px auto 2px;
       width: ${m.qrPx}px; height: ${m.qrPx}px;
@@ -210,6 +327,12 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       image-rendering: pixelated;
       -webkit-print-color-adjust: exact !important;
       print-color-adjust: exact !important;
+    }
+    #slip.patti img.qr {
+      width: ${m.qrPx}px !important;
+      height: ${m.qrPx}px !important;
+      max-width: calc(100% - 2px) !important;
+      margin: 10px auto 4px !important;
     }
     .foot {
       font-size: ${Math.max(8, m.bodyFs - 1)}px; font-weight: 700 !important;
