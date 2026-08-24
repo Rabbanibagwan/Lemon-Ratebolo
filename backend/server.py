@@ -9,7 +9,7 @@ import uuid
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Annotated, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 from pathlib import Path
 
 import certifi
@@ -3498,6 +3498,99 @@ class OcrUpstreamError(RuntimeError):
         self.model = model
 
 
+def _log_gemini_429_diagnostic(raw_body: str, model: str) -> None:
+    """TEMPORARY: one-line Gemini 429 dump for Render (no API key / no request URL).
+
+    Logs the full upstream JSON compacted onto a single line, plus extracted quota fields.
+    Remove after the quota subtype is identified.
+    """
+    import json as _json
+
+    raw = raw_body or ""
+    # Never echo credentials if a key somehow appeared in the body text.
+    redacted = re.sub(
+        r"(?i)(AIza[0-9A-Za-z_-]{10,}|AQ\.[0-9A-Za-z._-]{10,}|key=)[^\s\"'&]*",
+        r"\1[REDACTED]",
+        raw,
+    )
+    one_line = ""
+    extracted: Dict[str, Any] = {
+        "model": model,
+        "http_status": 429,
+        "error.code": None,
+        "error.status": None,
+        "error.message": None,
+        "details": [],
+    }
+    try:
+        parsed = _json.loads(redacted)
+        one_line = _json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+        err = parsed.get("error") if isinstance(parsed, dict) else None
+        if isinstance(err, dict):
+            extracted["error.code"] = err.get("code")
+            extracted["error.status"] = err.get("status")
+            extracted["error.message"] = err.get("message")
+            details = err.get("details") if isinstance(err.get("details"), list) else []
+            for det in details:
+                if not isinstance(det, dict):
+                    continue
+                row: Dict[str, Any] = {"@type": det.get("@type")}
+                md = det.get("metadata") if isinstance(det.get("metadata"), dict) else {}
+                for k in (
+                    "quotaMetric",
+                    "quota_metric",
+                    "quotaLimit",
+                    "quota_limit",
+                    "quotaValue",
+                    "quota_value",
+                    "quotaId",
+                    "quota_id",
+                    "model",
+                    "limit",
+                    "consumer",
+                ):
+                    if k in md:
+                        row[k] = md.get(k)
+                # Nested violations often carry the same quota fields.
+                viols = []
+                for v in det.get("violations") or []:
+                    if isinstance(v, dict):
+                        viols.append(
+                            {
+                                k: v.get(k)
+                                for k in (
+                                    "quotaMetric",
+                                    "quota_metric",
+                                    "quotaLimit",
+                                    "quota_limit",
+                                    "quotaValue",
+                                    "quota_value",
+                                    "subject",
+                                    "description",
+                                )
+                                if k in v
+                            }
+                        )
+                if viols:
+                    row["violations"] = viols
+                if det.get("retryDelay") is not None:
+                    row["retryDelay"] = det.get("retryDelay")
+                if det.get("retry_delay") is not None:
+                    row["retry_delay"] = det.get("retry_delay")
+                # Surface spend / RESOURCE_EXHAUSTED style strings if present anywhere in detail.
+                blob = _json.dumps(det, ensure_ascii=False)
+                if re.search(r"(?i)spend|billing|budget|RESOURCE_EXHAUSTED", blob):
+                    row["spend_or_resource_hint"] = True
+                extracted["details"].append(row)
+    except Exception:
+        # Fallback: still one line, even if body is not JSON.
+        one_line = " ".join(redacted.split())
+
+    extracted_line = _json.dumps(extracted, ensure_ascii=False, separators=(",", ":"))
+    logger.warning("OCR_GEMINI_429_DIAG_RAW model=%s body=%s", model, one_line)
+    logger.warning("OCR_GEMINI_429_DIAG_FIELDS %s", extracted_line)
+
+
 def _call_gemini_vision(image_b64: str, mime_type: str, hint: Optional[str], api_key: str) -> tuple[str, str]:
     """Call Google Gemini generateContent. Returns (raw_text, model_name). Raises RuntimeError on failure.
 
@@ -3542,7 +3635,14 @@ def _call_gemini_vision(image_b64: str, mime_type: str, hint: Optional[str], api
         raise RuntimeError(f"OCR model transport failed: {e}")
 
     if resp.status_code >= 400:
-        body = (resp.text or "")[:600]
+        raw_body = resp.text or ""
+        # TEMPORARY diagnostic: full one-line 429 body for Render (no key / no URL).
+        if resp.status_code == 429:
+            try:
+                _log_gemini_429_diagnostic(raw_body, model)
+            except Exception as diag_err:
+                logger.warning("OCR_GEMINI_429_DIAG_FAILED err=%s", diag_err)
+        body = raw_body[:600]
         if _gemini_key_auth_failed(resp.status_code, body):
             low = body.lower()
             if "api key not valid" in low or ("invalid" in low and "key" in low):
