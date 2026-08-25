@@ -14,6 +14,9 @@ const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 const TOKEN_KEY = "lm.google.drive.token";
 const META_KEY = "lm.google.drive.backup.meta";
 const FOLDER_NAME = "Lemon Ratebolo Backups";
+const APP_ID = "lemon-ratebolo";
+
+export type BackupKind = "drive_backup" | "restore_point" | "safety_backup";
 
 export type DriveBackupMeta = {
   fileId: string;
@@ -21,6 +24,12 @@ export type DriveBackupMeta = {
   modifiedTime?: string;
   size?: string;
   shopId: string;
+  kind?: BackupKind | string;
+  label?: string;
+  version?: number;
+  createdBy?: string;
+  exportedAt?: string;
+  counts?: Record<string, number>;
 };
 
 export type LocalBackupStatus = {
@@ -232,6 +241,90 @@ function datedFileName(shopId: string, iso: string) {
   return `LemonRatebolo_backup_${shopId}_${stamp}.json`;
 }
 
+function stampIso(iso: string) {
+  return iso.replace(/[:.]/g, "-");
+}
+
+export function restorePointFileName(shopId: string, iso: string) {
+  return `LemonRatebolo_rp_${shopId}_${stampIso(iso)}.json`;
+}
+
+export function safetyBackupFileName(shopId: string, iso: string) {
+  return `LemonRatebolo_safety_${shopId}_${stampIso(iso)}.json`;
+}
+
+function truncateProp(value: string, max = 120): string {
+  const s = String(value || "");
+  return s.length <= max ? s : s.slice(0, max);
+}
+
+/** Compact counts for Drive appProperties (value length limited). */
+function packCounts(counts?: Record<string, number> | null): string {
+  if (!counts) return "";
+  const keys = ["pattis", "farmers", "vendors", "lots", "staff", "vendor_bills"];
+  const parts = keys
+    .map((k) => `${k[0]}${Number(counts[k] || 0)}`)
+    .join(",");
+  return truncateProp(parts, 120);
+}
+
+function unpackCounts(packed?: string): Record<string, number> | undefined {
+  if (!packed) return undefined;
+  const alias: Record<string, string> = {
+    p: "pattis",
+    f: "farmers",
+    v: "vendors",
+    l: "lots",
+    s: "staff",
+    b: "vendor_bills",
+  };
+  const out: Record<string, number> = {};
+  for (const part of packed.split(",")) {
+    const m = /^([a-z])(\d+)$/i.exec(part.trim());
+    if (!m) continue;
+    const key = alias[m[1].toLowerCase()];
+    if (key) out[key] = Number(m[2]);
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+type DriveAppProps = {
+  lemonRatebolo?: string;
+  app?: string;
+  shopId: string;
+  kind?: string;
+  version?: string;
+  label?: string;
+  createdBy?: string;
+  exportedAt?: string;
+  counts?: string;
+};
+
+function metaFromDriveFile(f: any, shopId: string): DriveBackupMeta {
+  const props = (f.appProperties || {}) as DriveAppProps;
+  const name: string = f.name || "";
+  let kind = props.kind;
+  if (!kind) {
+    if (name.includes("_rp_")) kind = "restore_point";
+    else if (name.includes("_safety_")) kind = "safety_backup";
+    else kind = "drive_backup";
+  }
+  const versionRaw = props.version ? Number(props.version) : undefined;
+  return {
+    fileId: f.id,
+    fileName: name,
+    modifiedTime: f.modifiedTime,
+    size: f.size,
+    shopId: props.shopId || shopId,
+    kind,
+    label: props.label || undefined,
+    version: Number.isFinite(versionRaw) ? versionRaw : undefined,
+    createdBy: props.createdBy || undefined,
+    exportedAt: props.exportedAt || undefined,
+    counts: unpackCounts(props.counts),
+  };
+}
+
 async function findFileInFolder(
   token: string,
   folderId: string,
@@ -256,11 +349,25 @@ async function uploadOrUpdateJson(
   jsonText: string,
   existingId: string | null,
   shopId: string,
+  appProperties?: Omit<DriveAppProps, "shopId" | "lemonRatebolo">,
 ): Promise<DriveBackupMeta> {
+  const props: DriveAppProps = {
+    lemonRatebolo: "1",
+    app: APP_ID,
+    shopId,
+    ...(appProperties || {}),
+  };
+  // Drive appProperty values must be strings
+  const stringProps: Record<string, string> = {};
+  for (const [k, v] of Object.entries(props)) {
+    if (v == null || v === "") continue;
+    stringProps[k] = truncateProp(String(v));
+  }
+
   const metadata = {
     name: fileName,
     parents: existingId ? undefined : [folderId],
-    appProperties: { lemonRatebolo: "1", shopId },
+    appProperties: stringProps,
   };
   const boundary = "lemon_ratebolo_boundary";
   const body =
@@ -273,8 +380,8 @@ async function uploadOrUpdateJson(
     `--${boundary}--`;
 
   const path = existingId
-    ? `/upload/drive/v3/files/${existingId}?uploadType=multipart&fields=id,name,modifiedTime,size`
-    : `/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime,size`;
+    ? `/upload/drive/v3/files/${existingId}?uploadType=multipart&fields=id,name,modifiedTime,size,appProperties`
+    : `/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime,size,appProperties`;
 
   const res = await driveFetch(path, token, {
     method: existingId ? "PATCH" : "POST",
@@ -283,12 +390,38 @@ async function uploadOrUpdateJson(
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error?.message || "Drive upload failed");
+  return metaFromDriveFile(data, shopId);
+}
+
+function assertBackupSize(jsonText: string) {
+  // Soft guard — large shops can fail mid-upload on weak networks.
+  const bytes = typeof TextEncoder !== "undefined" ? new TextEncoder().encode(jsonText).length : jsonText.length;
+  const mb = bytes / (1024 * 1024);
+  if (mb > 25) {
+    throw new Error(
+      `Backup is too large (${mb.toFixed(1)} MB). Connect to Wi‑Fi and try again, or contact support.`,
+    );
+  }
+}
+
+function propsFromBackupPayload(
+  backup: object,
+  kind: BackupKind,
+  shopId: string,
+): Omit<DriveAppProps, "shopId" | "lemonRatebolo"> {
+  const b = backup as any;
+  const created =
+    b.created_by?.display_name ||
+    b.created_by?.username ||
+    "";
   return {
-    fileId: data.id,
-    fileName: data.name,
-    modifiedTime: data.modifiedTime,
-    size: data.size,
-    shopId,
+    app: APP_ID,
+    kind,
+    version: String(b.version ?? 2),
+    label: truncateProp(String(b.label || ""), 60),
+    createdBy: truncateProp(String(created), 80),
+    exportedAt: String(b.exported_at || new Date().toISOString()),
+    counts: packCounts(b.counts || null),
   };
 }
 
@@ -300,8 +433,10 @@ export async function uploadShopBackupToDrive(
 ): Promise<DriveBackupMeta> {
   const folderId = await ensureBackupFolder(token);
   const jsonText = JSON.stringify(backup);
+  assertBackupSize(jsonText);
   const exportedAt =
     (backup as any)?.exported_at || new Date().toISOString();
+  const props = propsFromBackupPayload(backup, "drive_backup", shopId);
 
   const latestName = latestFileName(shopId);
   const existingLatest = await findFileInFolder(token, folderId, latestName);
@@ -312,6 +447,7 @@ export async function uploadShopBackupToDrive(
     jsonText,
     existingLatest,
     shopId,
+    props,
   );
 
   // Dated snapshot for restore picker
@@ -322,6 +458,7 @@ export async function uploadShopBackupToDrive(
     jsonText,
     null,
     shopId,
+    props,
   );
 
   await saveLocalBackupStatus({
@@ -330,6 +467,52 @@ export async function uploadShopBackupToDrive(
     lastFileId: latest.fileId,
   });
   return latest;
+}
+
+/** Upload a labeled Restore Point (never overwrites; unique timestamped file). */
+export async function uploadRestorePointToDrive(
+  token: string,
+  shopId: string,
+  backup: object,
+): Promise<DriveBackupMeta> {
+  const folderId = await ensureBackupFolder(token);
+  const jsonText = JSON.stringify(backup);
+  assertBackupSize(jsonText);
+  const exportedAt =
+    (backup as any)?.exported_at || new Date().toISOString();
+  const props = propsFromBackupPayload(backup, "restore_point", shopId);
+  return uploadOrUpdateJson(
+    token,
+    folderId,
+    restorePointFileName(shopId, exportedAt),
+    jsonText,
+    null,
+    shopId,
+    props,
+  );
+}
+
+/** Upload mandatory safety backup before a Restore Point restore. */
+export async function uploadSafetyBackupToDrive(
+  token: string,
+  shopId: string,
+  backup: object,
+): Promise<DriveBackupMeta> {
+  const folderId = await ensureBackupFolder(token);
+  const jsonText = JSON.stringify(backup);
+  assertBackupSize(jsonText);
+  const exportedAt =
+    (backup as any)?.exported_at || new Date().toISOString();
+  const props = propsFromBackupPayload(backup, "safety_backup", shopId);
+  return uploadOrUpdateJson(
+    token,
+    folderId,
+    safetyBackupFileName(shopId, exportedAt),
+    jsonText,
+    null,
+    shopId,
+    props,
+  );
 }
 
 export async function listShopBackupsOnDrive(
@@ -348,14 +531,32 @@ export async function listShopBackupsOnDrive(
   if (!res.ok) throw new Error(data.error?.message || "Could not list Drive backups");
   const files = (data.files || []) as any[];
   return files
-    .filter((f) => !f.appProperties?.shopId || f.appProperties.shopId === shopId)
-    .map((f) => ({
-      fileId: f.id,
-      fileName: f.name,
-      modifiedTime: f.modifiedTime,
-      size: f.size,
-      shopId,
-    }));
+    .map((f) => metaFromDriveFile(f, shopId))
+    .filter((f) => !f.shopId || f.shopId === shopId)
+    .filter((f) => f.kind !== "restore_point" && f.kind !== "safety_backup");
+}
+
+/** List Restore Points for this shop (appProperties kind or `_rp_` filename fallback). */
+export async function listRestorePointsOnDrive(
+  token: string,
+  shopId: string,
+): Promise<DriveBackupMeta[]> {
+  const folderId = await ensureBackupFolder(token);
+  // Filename fallback covers Drive clients that strip custom appProperties.
+  const q = encodeURIComponent(
+    `'${folderId}' in parents and trashed=false and name contains 'LemonRatebolo_rp_${shopId}'`,
+  );
+  const res = await driveFetch(
+    `/drive/v3/files?q=${q}&spaces=drive&orderBy=modifiedTime desc&pageSize=50&fields=files(id,name,modifiedTime,size,appProperties)`,
+    token,
+  );
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error?.message || "Could not list Restore Points");
+  const files = (data.files || []) as any[];
+  return files
+    .map((f) => metaFromDriveFile(f, shopId))
+    .filter((f) => !f.shopId || f.shopId === shopId)
+    .filter((f) => f.kind === "restore_point" || (f.fileName || "").includes("_rp_"));
 }
 
 export async function downloadBackupFromDrive(

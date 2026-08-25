@@ -8,6 +8,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -26,9 +27,12 @@ import {
   getStoredGoogleToken,
   googleOAuthConfigured,
   googleOAuthSetupHint,
+  listRestorePointsOnDrive,
   listShopBackupsOnDrive,
   loadLocalBackupStatus,
   storeAccessTokenFromAuthSession,
+  uploadRestorePointToDrive,
+  uploadSafetyBackupToDrive,
   uploadShopBackupToDrive,
   type DriveBackupMeta,
   type LocalBackupStatus,
@@ -36,7 +40,21 @@ import {
 
 WebBrowser.maybeCompleteAuthSession();
 
-type BusyKind = "idle" | "signin" | "backup" | "list" | "restore" | "validate";
+type BusyKind =
+  | "idle"
+  | "signin"
+  | "backup"
+  | "list"
+  | "restore"
+  | "validate"
+  | "rp_create"
+  | "rp_list"
+  | "rp_download"
+  | "rp_validate"
+  | "rp_safety"
+  | "rp_restore";
+
+const LABEL_MAX = 60;
 
 function formatWhen(iso?: string | null) {
   if (!iso) return "Never";
@@ -53,6 +71,45 @@ function formatWhen(iso?: string | null) {
   }
 }
 
+function countLine(counts?: Record<string, number> | null): string {
+  if (!counts) return "";
+  const parts: string[] = [];
+  const order: [string, string][] = [
+    ["pattis", "Pattis"],
+    ["farmers", "Farmers"],
+    ["vendors", "Vendors"],
+    ["lots", "Lots"],
+    ["staff", "Staff"],
+    ["vendor_bills", "Vendor bills"],
+  ];
+  for (const [k, label] of order) {
+    const n = counts[k];
+    if (typeof n === "number") parts.push(`${label}: ${n}`);
+  }
+  return parts.join(" · ");
+}
+
+function stampPayload(
+  exportPayload: any,
+  opts: {
+    kind: "restore_point" | "safety_backup";
+    label: string;
+    created_by: {
+      user_id: string;
+      username: string;
+      display_name: string;
+      role: string;
+    };
+  },
+) {
+  return {
+    ...exportPayload,
+    kind: opts.kind,
+    label: opts.label,
+    created_by: opts.created_by,
+  };
+}
+
 export default function BackupScreen() {
   const router = useRouter();
   const { session } = useAuth();
@@ -60,16 +117,20 @@ export default function BackupScreen() {
   const isOwner = session?.role === "owner";
 
   const oauthOk = googleOAuthConfigured();
+  // expo-auth-session throws if webClientId is undefined on web — use a stub when unset.
+  const googleWebClientId =
+    process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ||
+    "000000000000-stub.apps.googleusercontent.com";
   const [request, response, promptAsync] = Google.useAuthRequest({
-    webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || undefined,
+    webClientId: googleWebClientId,
     androidClientId:
       process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ||
       process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ||
-      undefined,
+      googleWebClientId,
     iosClientId:
       process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ||
       process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ||
-      undefined,
+      googleWebClientId,
     scopes: [
       "openid",
       "profile",
@@ -87,6 +148,14 @@ export default function BackupScreen() {
   const [backups, setBackups] = useState<DriveBackupMeta[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
 
+  const [rpLabel, setRpLabel] = useState("");
+  const [restorePoints, setRestorePoints] = useState<DriveBackupMeta[]>([]);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [pendingRp, setPendingRp] = useState<DriveBackupMeta | null>(null);
+  const [pendingBackup, setPendingBackup] = useState<any | null>(null);
+  const [confirmPhrase, setConfirmPhrase] = useState("");
+
   const refreshStatus = useCallback(async () => {
     setStatus(await loadLocalBackupStatus());
     setToken(await getStoredGoogleToken());
@@ -95,6 +164,28 @@ export default function BackupScreen() {
   useEffect(() => {
     void refreshStatus();
   }, [refreshStatus]);
+
+  // Preview-only sample when Google OAuth is not configured (no Drive calls).
+  useEffect(() => {
+    if (oauthOk || !isOwner) return;
+    setRestorePoints((cur) => {
+      if (cur.length) return cur;
+      return [
+        {
+          fileId: "preview-sample",
+          fileName: "LemonRatebolo_rp_preview_sample.json",
+          shopId,
+          kind: "restore_point",
+          label: "Before Rate Update",
+          version: 2,
+          createdBy: session?.display_name || session?.shop_name || "Owner",
+          exportedAt: new Date().toISOString(),
+          modifiedTime: new Date().toISOString(),
+          counts: { pattis: 120, farmers: 40, vendors: 25, lots: 10 },
+        },
+      ];
+    });
+  }, [oauthOk, isOwner, shopId, session?.display_name, session?.shop_name]);
 
   useEffect(() => {
     if (!response) return;
@@ -120,6 +211,13 @@ export default function BackupScreen() {
       }
     })();
   }, [response, refreshStatus, status?.googleEmail]);
+
+  const createdBy = () => ({
+    user_id: session?.id || session?.shop_id || shopId,
+    username: session?.username || "",
+    display_name: session?.display_name || session?.shop_name || "",
+    role: session?.role || "owner",
+  });
 
   const ensureToken = async (): Promise<string> => {
     const existing = token || (await getStoredGoogleToken());
@@ -251,11 +349,226 @@ export default function BackupScreen() {
     }
   };
 
+  const refreshRestorePoints = async (accessToken?: string) => {
+    const access = accessToken || (await ensureToken());
+    setBusy("rp_list");
+    setProgress("Loading Restore Points…");
+    const list = await listRestorePointsOnDrive(access, shopId);
+    setRestorePoints(list);
+    return list;
+  };
+
+  const createRestorePoint = async () => {
+    if (!isOwner || !shopId) return;
+    const label = rpLabel.trim();
+    if (!label) {
+      setError("Restore Point name is required.");
+      return;
+    }
+    if (label.length > LABEL_MAX) {
+      setError(`Name must be ${LABEL_MAX} characters or fewer.`);
+      return;
+    }
+    setError(null);
+    setMsg(null);
+    setCreateOpen(false);
+    try {
+      setBusy("rp_create");
+      setProgress("Creating Restore Point…");
+      const access = await ensureToken();
+      setProgress("Exporting shop data…");
+      const exported = await api.get<any>("/backup/export", { timeoutMs: 120_000 });
+      const payload = stampPayload(exported, {
+        kind: "restore_point",
+        label,
+        created_by: createdBy(),
+      });
+      setBusy("rp_validate");
+      setProgress("Validating backup…");
+      await api.post("/backup/validate", { backup: payload }, { timeoutMs: 60_000 });
+      setProgress("Uploading to Google Drive…");
+      const meta = await uploadRestorePointToDrive(access, shopId, payload);
+      setProgress("Refreshing Restore Points…");
+      await refreshRestorePoints(access);
+      setRpLabel("");
+      setMsg(
+        `Restore Point saved.\n${meta.label || label}\n${meta.fileName}\n${formatWhen(meta.modifiedTime || meta.exportedAt)}`,
+      );
+    } catch (e: any) {
+      setError(apiErrorMessage(e, e?.message || "Could not create Restore Point"));
+    } finally {
+      setBusy("idle");
+      setProgress("");
+    }
+  };
+
+  const beginRestorePointFlow = async (item: DriveBackupMeta) => {
+    if (!isOwner || !shopId || busy !== "idle") return;
+    setError(null);
+    setMsg(null);
+    setConfirmPhrase("");
+
+    // Preview sample (no Drive) — open confirmation UI only.
+    if (item.fileId === "preview-sample") {
+      const backup = {
+        version: 2,
+        app: "lemon-ratebolo",
+        kind: "restore_point",
+        label: item.label || "Before Rate Update",
+        exported_at: item.exportedAt,
+        created_by: createdBy(),
+        shop_id: shopId,
+        shop: { id: shopId, shop_name: session?.shop_name || "Shop" },
+        counts: item.counts || {},
+      };
+      setPendingRp(item);
+      setPendingBackup(backup);
+      setConfirmOpen(true);
+      return;
+    }
+
+    try {
+      setBusy("rp_download");
+      setProgress("Downloading Restore Point…");
+      const access = await ensureToken();
+      const backup = await downloadBackupFromDrive(access, item.fileId);
+
+      setBusy("rp_validate");
+      setProgress("Validating backup…");
+      await api.post("/backup/validate", { backup }, { timeoutMs: 60_000 });
+
+      // Enrich list meta from payload when Drive props were sparse
+      const enriched: DriveBackupMeta = {
+        ...item,
+        label: (backup as any).label || item.label,
+        version: (backup as any).version ?? item.version,
+        exportedAt: (backup as any).exported_at || item.exportedAt,
+        createdBy:
+          (backup as any).created_by?.display_name ||
+          (backup as any).created_by?.username ||
+          item.createdBy,
+        counts: (backup as any).counts || item.counts,
+      };
+      setPendingRp(enriched);
+      setPendingBackup(backup);
+      setConfirmOpen(true);
+    } catch (e: any) {
+      setPendingRp(null);
+      setPendingBackup(null);
+      setError(apiErrorMessage(e, e?.message || "Validation failed — restore cancelled"));
+    } finally {
+      setBusy("idle");
+      setProgress("");
+    }
+  };
+
+  const cancelConfirm = () => {
+    if (working) return;
+    setConfirmOpen(false);
+    setPendingRp(null);
+    setPendingBackup(null);
+    setConfirmPhrase("");
+  };
+
+  const executeRestorePoint = async () => {
+    if (!isOwner || !shopId || !pendingRp || !pendingBackup) return;
+    if (confirmPhrase.trim().toUpperCase() !== "RESTORE") {
+      setError("Type RESTORE to confirm.");
+      return;
+    }
+    if (pendingRp.fileId === "preview-sample") {
+      setError(
+        "This is a Preview sample only. Configure Google OAuth to create and restore real Restore Points.",
+      );
+      setConfirmOpen(false);
+      setPendingRp(null);
+      setPendingBackup(null);
+      setConfirmPhrase("");
+      return;
+    }
+    const rpLabelName = pendingRp.label || pendingRp.fileName;
+    setConfirmOpen(false);
+    setError(null);
+    setMsg(null);
+    try {
+      setBusy("rp_safety");
+      setProgress("Preparing restore…");
+      const access = await ensureToken();
+
+      setProgress("Creating safety backup…");
+      const liveExport = await api.get<any>("/backup/export", { timeoutMs: 120_000 });
+      const safetyPayload = stampPayload(liveExport, {
+        kind: "safety_backup",
+        label: `Safety before restore: ${rpLabelName}`.slice(0, LABEL_MAX + 40),
+        created_by: createdBy(),
+      });
+      setProgress("Validating safety backup…");
+      await api.post("/backup/validate", { backup: safetyPayload }, { timeoutMs: 60_000 });
+      setProgress("Uploading safety backup to Google Drive…");
+      let safetyMeta: DriveBackupMeta;
+      try {
+        safetyMeta = await uploadSafetyBackupToDrive(access, shopId, safetyPayload);
+      } catch (uploadErr: any) {
+        throw new Error(
+          `Safety backup failed — restore aborted. Current data was NOT changed. (${uploadErr?.message || "upload failed"})`,
+        );
+      }
+
+      setBusy("rp_restore");
+      setProgress("Restoring data…");
+      const result = await api.post<{
+        ok: boolean;
+        restored_at: string;
+        exported_at?: string;
+        counts?: Record<string, number>;
+      }>("/backup/restore", { backup: pendingBackup }, { timeoutMs: 180_000 });
+
+      if (!result?.ok) {
+        throw new Error("Restore failed on server.");
+      }
+
+      setMsg(
+        `Restore completed.\nRestored: ${rpLabelName}\nSafety backup: ${safetyMeta.fileName}\n${formatWhen(result.exported_at)}`,
+      );
+      Alert.alert(
+        "Restore completed",
+        `Shop data was replaced from “${rpLabelName}”.\n\nSafety backup saved as:\n${safetyMeta.fileName}\n\nReopen screens or pull to refresh to see updated data.`,
+      );
+      try {
+        await refreshRestorePoints(access);
+      } catch {
+        /* list refresh optional after success */
+      }
+    } catch (e: any) {
+      setError(apiErrorMessage(e, e?.message || "Restore failed"));
+    } finally {
+      setPendingRp(null);
+      setPendingBackup(null);
+      setConfirmPhrase("");
+      setBusy("idle");
+      setProgress("");
+    }
+  };
+
   const signOutGoogle = async () => {
     await clearGoogleSession();
     setToken(null);
     await refreshStatus();
     setMsg("Signed out of Google Drive");
+  };
+
+  const loadRpList = async () => {
+    if (!isOwner || !shopId) return;
+    setError(null);
+    try {
+      const access = await ensureToken();
+      await refreshRestorePoints(access);
+    } catch (e: any) {
+      setError(apiErrorMessage(e, e?.message || "Could not list Restore Points"));
+    } finally {
+      setBusy("idle");
+      setProgress("");
+    }
   };
 
   if (!isOwner) {
@@ -275,6 +588,22 @@ export default function BackupScreen() {
   }
 
   const working = busy !== "idle";
+  const overlayTitle =
+    busy === "backup"
+      ? "BACKING UP"
+      : busy === "restore" || busy === "validate"
+        ? "RESTORING"
+        : busy === "signin"
+          ? "SIGNING IN"
+          : busy === "rp_create" || busy === "rp_validate"
+            ? "RESTORE POINT"
+            : busy === "rp_safety"
+              ? "SAFETY BACKUP"
+              : busy === "rp_restore"
+                ? "RESTORING"
+                : busy === "rp_download" || busy === "rp_list"
+                  ? "PLEASE WAIT"
+                  : "PLEASE WAIT";
 
   return (
     <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
@@ -309,10 +638,11 @@ export default function BackupScreen() {
           </View>
         ) : null}
 
-        <Text style={styles.section}>Backup</Text>
+        <Text style={styles.section}>Google Drive Backup</Text>
         <Text style={styles.hint}>
-          Exports all shop data (masters, auction days, lots, pattis, vendor bills, ledger, settings)
-          and saves it to your Google Drive. One shop’s backup cannot be restored into another shop.
+          Exports all shop data (masters, auction days, lots, pattis, vendor bills, ledger, settings,
+          audit, bag wallet) and saves it to your Google Drive. One shop’s backup cannot be restored
+          into another shop.
         </Text>
         <Button
           label={working && busy === "backup" ? "BACKING UP…" : "BACKUP TO GOOGLE DRIVE"}
@@ -322,10 +652,10 @@ export default function BackupScreen() {
           testID="backup-to-drive"
         />
 
-        <Text style={[styles.section, { marginTop: spacing.xl }]}>Restore</Text>
+        <Text style={[styles.section, { marginTop: spacing.xl }]}>Google Drive Restore</Text>
         <Text style={styles.hint}>
-          Choose a previous backup from your Drive. Current data is not deleted until the backup
-          passes validation.
+          Choose a previous Drive backup. Current data is not deleted until the backup passes
+          validation.
         </Text>
         <Button
           label={working && busy === "list" ? "LOADING…" : "RESTORE FROM GOOGLE DRIVE"}
@@ -335,6 +665,66 @@ export default function BackupScreen() {
           disabled={working || !request}
           testID="restore-from-drive"
         />
+
+        <Text style={[styles.section, { marginTop: spacing.xl }]} testID="restore-points-section">
+          Restore Points
+        </Text>
+        <Text style={styles.hint}>
+          Named snapshots of this shop. Restoring a point replaces current data after a safety
+          backup is saved to Drive.
+        </Text>
+        <Button
+          label={working && busy === "rp_create" ? "CREATING…" : "CREATE RESTORE POINT"}
+          onPress={() => {
+            setError(null);
+            setCreateOpen(true);
+          }}
+          loading={busy === "rp_create"}
+          disabled={working || !request}
+          testID="create-restore-point"
+        />
+        <View style={{ height: spacing.sm }} />
+        <Button
+          label={working && busy === "rp_list" ? "LOADING…" : "REFRESH RESTORE POINTS"}
+          variant="secondary"
+          onPress={() => void loadRpList()}
+          loading={busy === "rp_list"}
+          disabled={working || !request}
+          testID="refresh-restore-points"
+        />
+
+        <View style={{ marginTop: spacing.md, gap: spacing.sm }}>
+          {restorePoints.length === 0 ? (
+            <Text style={styles.hint}>No Restore Points listed yet. Create one or refresh.</Text>
+          ) : (
+            restorePoints.map((item) => (
+              <View key={item.fileId} style={styles.rpCard} testID={`restore-point-${item.fileId}`}>
+                <Text style={styles.rpTitle} numberOfLines={2}>
+                  {item.label || item.fileName}
+                </Text>
+                <Text style={styles.rpMeta}>
+                  {formatWhen(item.exportedAt || item.modifiedTime)}
+                </Text>
+                <Text style={styles.rpMeta}>
+                  Created by: {item.createdBy || "—"}
+                </Text>
+                <Text style={styles.rpMeta}>
+                  Version: {item.version ?? "—"}
+                </Text>
+                {countLine(item.counts) ? (
+                  <Text style={styles.rpMeta}>{countLine(item.counts)}</Text>
+                ) : null}
+                <Button
+                  label="RESTORE"
+                  variant="secondary"
+                  onPress={() => void beginRestorePointFlow(item)}
+                  disabled={working}
+                  testID={`restore-point-btn-${item.fileId}`}
+                />
+              </View>
+            ))
+          )}
+        </View>
 
         {token ? (
           <Pressable style={styles.linkBtn} onPress={signOutGoogle} disabled={working} testID="backup-google-signout">
@@ -350,15 +740,7 @@ export default function BackupScreen() {
         <View style={styles.overlay}>
           <View style={styles.overlayCard}>
             <ActivityIndicator size="large" color={colors.brandPrimary} />
-            <Text style={styles.overlayTitle}>
-              {busy === "backup"
-                ? "BACKING UP"
-                : busy === "restore" || busy === "validate"
-                  ? "RESTORING"
-                  : busy === "signin"
-                    ? "SIGNING IN"
-                    : "PLEASE WAIT"}
-            </Text>
+            <Text style={styles.overlayTitle}>{overlayTitle}</Text>
             <Text style={styles.overlayBody}>{progress}</Text>
           </View>
         </View>
@@ -391,6 +773,78 @@ export default function BackupScreen() {
             />
             <Button label="CANCEL" variant="secondary" onPress={() => setPickerOpen(false)} />
           </View>
+        </View>
+      </Modal>
+
+      <Modal visible={createOpen} transparent animationType="fade" onRequestClose={() => setCreateOpen(false)}>
+        <View style={styles.overlay}>
+          <View style={styles.overlayCard}>
+            <Text style={styles.overlayTitle}>CREATE RESTORE POINT</Text>
+            <Text style={styles.overlayBody}>Name this snapshot (required, max {LABEL_MAX} characters).</Text>
+            <TextInput
+              style={styles.input}
+              value={rpLabel}
+              onChangeText={(t) => setRpLabel(t.slice(0, LABEL_MAX))}
+              placeholder="e.g. Before rate update"
+              placeholderTextColor={colors.muted}
+              maxLength={LABEL_MAX}
+              editable={!working}
+              testID="restore-point-label"
+            />
+            <Text style={styles.cardMeta}>{rpLabel.length}/{LABEL_MAX}</Text>
+            <Button
+              label="CREATE"
+              onPress={() => void createRestorePoint()}
+              disabled={working || !rpLabel.trim()}
+              testID="restore-point-create-confirm"
+            />
+            <Button label="CANCEL" variant="secondary" onPress={() => setCreateOpen(false)} disabled={working} />
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={confirmOpen} transparent animationType="fade" onRequestClose={cancelConfirm}>
+        <View style={styles.overlay}>
+          <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: "center", padding: spacing.lg }}>
+            <View style={[styles.overlayCard, { maxWidth: 400 }]}>
+              <Text style={[styles.overlayTitle, { color: colors.error }]}>
+                RESTORE WILL REPLACE CURRENT SHOP DATA
+              </Text>
+              <Text style={styles.overlayBody}>
+                This permanently replaces live shop data with the selected Restore Point. A safety
+                backup of current data is uploaded to Drive first. If that fails, restore is aborted.
+              </Text>
+              <View style={styles.confirmBox}>
+                <Text style={styles.rpTitle}>{pendingRp?.label || pendingRp?.fileName}</Text>
+                <Text style={styles.rpMeta}>
+                  {formatWhen(pendingRp?.exportedAt || pendingRp?.modifiedTime)}
+                </Text>
+                <Text style={styles.rpMeta}>Shop: {session?.shop_name || "—"}</Text>
+                <Text style={styles.rpMeta}>Version: {pendingRp?.version ?? "—"}</Text>
+                {countLine(pendingRp?.counts) ? (
+                  <Text style={styles.rpMeta}>{countLine(pendingRp?.counts)}</Text>
+                ) : null}
+              </View>
+              <Text style={styles.overlayBody}>Type RESTORE to confirm</Text>
+              <TextInput
+                style={styles.input}
+                value={confirmPhrase}
+                onChangeText={setConfirmPhrase}
+                autoCapitalize="characters"
+                placeholder="RESTORE"
+                placeholderTextColor={colors.muted}
+                editable={!working}
+                testID="restore-point-confirm-phrase"
+              />
+              <Button
+                label="CONFIRM RESTORE"
+                onPress={() => void executeRestorePoint()}
+                disabled={working || confirmPhrase.trim().toUpperCase() !== "RESTORE"}
+                testID="restore-point-confirm"
+              />
+              <Button label="CANCEL" variant="secondary" onPress={cancelConfirm} disabled={working} />
+            </View>
+          </ScrollView>
         </View>
       </Modal>
     </SafeAreaView>
@@ -509,6 +963,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1.5,
     fontFamily: font.display,
     color: colors.onSurface,
+    textAlign: "center",
   },
   overlayBody: {
     fontSize: 13,
@@ -544,4 +999,43 @@ const styles = StyleSheet.create({
   },
   backupName: { fontSize: 13, fontWeight: "800", fontFamily: font.display, color: colors.onSurface },
   backupMeta: { fontSize: 11, color: colors.muted, fontFamily: font.mono, marginTop: 2 },
+  rpCard: {
+    borderWidth: 2,
+    borderColor: colors.borderStrong,
+    padding: spacing.md,
+    backgroundColor: colors.surfaceSecondary,
+    gap: 4,
+  },
+  rpTitle: {
+    fontSize: 15,
+    fontWeight: "900",
+    fontFamily: font.display,
+    color: colors.onSurface,
+  },
+  rpMeta: {
+    fontSize: 12,
+    color: colors.muted,
+    fontFamily: font.display,
+    fontWeight: "700",
+  },
+  input: {
+    width: "100%",
+    borderWidth: 2,
+    borderColor: colors.borderStrong,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+    fontFamily: font.display,
+    fontWeight: "700",
+    fontSize: 14,
+    color: colors.onSurface,
+    backgroundColor: colors.surface,
+  },
+  confirmBox: {
+    width: "100%",
+    borderWidth: 2,
+    borderColor: colors.error,
+    padding: spacing.md,
+    backgroundColor: "#FEF2F2",
+    gap: 4,
+  },
 });
