@@ -10,7 +10,10 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://lemon-ratebolo.onrender.com"
+        "EXPO_PUBLIC_BACKEND_URL": "https://lemon-ratebolo.onrender.com",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "419044268564-r7nkr44qhkq0j40n0bb9mge3ntt8b3ug.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "419044268564-8kg4gg3aai402k39977iuros5ff7sobp.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID": "419044268564-cimk39dnqs8nijpt97ns7fp039eclnef.apps.googleusercontent.com"
       }
     },
     "production": {
@@ -19,7 +22,10 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://lemon-ratebolo.onrender.com"
+        "EXPO_PUBLIC_BACKEND_URL": "https://lemon-ratebolo.onrender.com",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "419044268564-r7nkr44qhkq0j40n0bb9mge3ntt8b3ug.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "419044268564-8kg4gg3aai402k39977iuros5ff7sobp.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID": "419044268564-cimk39dnqs8nijpt97ns7fp039eclnef.apps.googleusercontent.com"
       }
     }
   },
