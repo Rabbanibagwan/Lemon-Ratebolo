@@ -12,6 +12,7 @@ export function Button({
   testID,
   style,
   small,
+  focusable = true,
 }: {
   label: string;
   onPress?: () => void;
@@ -21,6 +22,7 @@ export function Button({
   testID?: string;
   style?: ViewStyle;
   small?: boolean;
+  focusable?: boolean;
 }) {
   const isDisabled = !!disabled || !!loading;
   const bg =
@@ -41,6 +43,7 @@ export function Button({
   return (
     <Pressable
       testID={testID}
+      focusable={focusable}
       onPress={isDisabled ? undefined : onPress}
       style={({ pressed }) => [
         styles.btn,
