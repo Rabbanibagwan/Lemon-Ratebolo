@@ -97,14 +97,21 @@ export default function PattiDetail() {
     if (loading || autoActionRan || !p) return;
     if (autoPrint === "1") {
       setAutoActionRan(true);
+      const returnToManualEntry = () => {
+        if (fromScreen === "manual-entry") router.replace("/add-lot");
+      };
       if (!canUserPrintPatti(p, session)) {
         if (session?.role === "counter") {
           Alert.alert("Already printed", staffPrintBlockedMessage());
         }
+        returnToManualEntry();
         return;
       }
       // Small delay so the UI can render first.
-      setTimeout(() => { printThermal(); }, 250);
+      setTimeout(async () => {
+        await printThermal();
+        returnToManualEntry();
+      }, 250);
     } else if (autoShare === "1") {
       setAutoActionRan(true);
       if (!canUserSharePatti(session)) {

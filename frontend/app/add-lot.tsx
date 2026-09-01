@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert, Platform, Pressable,
   StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { KeyboardAwareScrollView, KeyboardStickyView } from "react-native-keyboard-controller";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import { api, apiErrorMessage, AuctionDay, Farmer, Lot, Patti, Vendor } from "@/src/api";
@@ -18,9 +18,16 @@ import { handleBagBillingError } from "@/src/utils/bag-billing";
 import { canUserPrintPatti } from "@/src/utils/patti-print";
 
 type LocalSale = { key: string; vendor_id: string | null; vendor_name: string; bags: string; rate: string };
+type FooterAction = "save" | "print";
 const newKey = () => `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 /** Android number-pad often hides the Next/Done key; numeric keeps it available. */
 const integerKeyboard = Platform.OS === "android" ? "numeric" : "number-pad";
+
+function focusTextInputSoon(focus: () => void) {
+  focus();
+  setTimeout(focus, 80);
+  setTimeout(focus, 250);
+}
 
 export default function AddLot() {
   const { id, day: dayId } = useLocalSearchParams<{ id?: string; day?: string }>();
@@ -48,6 +55,8 @@ export default function AddLot() {
 
   const [farmerPickerOpen, setFarmerPickerOpen] = useState(false);
   const [vendorPickerFor, setVendorPickerFor] = useState<string | null>(null);
+  const [footerAction, setFooterAction] = useState<FooterAction>("save");
+  const [footerKeysActive, setFooterKeysActive] = useState(false);
 
   // Refs for smart auto-advance
   const lotNoRef = useRef<TextInput | null>(null);
@@ -55,6 +64,27 @@ export default function AddLot() {
   const bhadaRef = useRef<TextInput | null>(null);
   const bagsRefs = useRef<Record<string, TextInput | null>>({});
   const rateRefs = useRef<Record<string, TextInput | null>>({});
+  const footerKeyRef = useRef<TextInput | null>(null);
+  const footerActionRef = useRef<FooterAction>("save");
+  footerActionRef.current = footerAction;
+
+  const deactivateFooterKeys = () => setFooterKeysActive(false);
+
+  const resetForNextPatti = useCallback(() => {
+    setLotSerial("");
+    setTotalBags("");
+    setFarmerId(null);
+    setBhada("");
+    setBhadaManual(false);
+    setSales([{ key: newKey(), vendor_id: null, vendor_name: "", bags: "", rate: "" }]);
+    setError(null);
+    setLinkedPatti(null);
+    setFarmerPickerOpen(false);
+    setVendorPickerFor(null);
+    setFooterAction("save");
+    setFooterKeysActive(false);
+    focusTextInputSoon(() => lotNoRef.current?.focus());
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -114,13 +144,20 @@ export default function AddLot() {
 
   const soldBags = useMemo(() => sales.reduce((s, x) => s + (Number(x.bags) || 0), 0), [sales]);
   const totalGross = useMemo(() => sales.reduce((s, x) => s + (Number(x.bags) || 0) * (Number(x.rate) || 0), 0), [sales]);
+  const parsedTotalBags = useMemo(() => parseInt(totalBags.trim(), 10), [totalBags]);
+
+  const maxBagsForSale = (key: string) => {
+    if (!isFinite(parsedTotalBags) || parsedTotalBags <= 0) return Number.POSITIVE_INFINITY;
+    const other = sales.reduce((n, x) => (x.key === key ? n : n + (Number(x.bags) || 0)), 0);
+    return Math.max(0, parsedTotalBags - other);
+  };
 
   const updateSale = (k: string, patch: Partial<LocalSale>) =>
     setSales((xs) => xs.map((s) => (s.key === k ? { ...s, ...patch } : s)));
   const addSale = () => {
+    deactivateFooterKeys();
     const nk = newKey();
     setSales((xs) => [...xs, { key: nk, vendor_id: null, vendor_name: "", bags: "", rate: "" }]);
-    // Focus the vendor picker of the new row after a tick
     setTimeout(() => setVendorPickerFor(nk), 100);
   };
   const removeSale = (k: string) =>
@@ -169,7 +206,13 @@ export default function AddLot() {
       if (effectiveMode !== "save" && pattiId) {
         // Navigate to patti detail with auto-print or auto-share query flag.
         const param = effectiveMode === "print" ? "autoPrint" : "autoShare";
-        router.replace({ pathname: "/patti/[id]", params: { id: pattiId, [param]: "1" } });
+        router.replace(
+          effectiveMode === "print" && !isEdit
+            ? { pathname: "/patti/[id]", params: { id: pattiId, [param]: "1", from: "manual-entry" } }
+            : { pathname: "/patti/[id]", params: { id: pattiId, [param]: "1" } },
+        );
+      } else if (!isEdit) {
+        resetForNextPatti();
       } else {
         router.back();
       }
@@ -199,6 +242,44 @@ export default function AddLot() {
     }
   };
 
+  const activateFooterKeys = (action: FooterAction = "save") => {
+    setFooterAction(action);
+    setFooterKeysActive(true);
+  };
+
+  const runFooterAction = (action: FooterAction) => {
+    if (saving) return;
+    if (action === "print" && !canStaffPrint) return;
+    save(action);
+  };
+
+  const handleFooterKeyPress = (key: string) => {
+    if (key === "ArrowLeft") {
+      setFooterAction("save");
+      return;
+    }
+    if (key === "ArrowRight") {
+      setFooterAction("print");
+      return;
+    }
+    if (key === "Enter") {
+      runFooterAction(footerActionRef.current);
+    }
+  };
+
+  useFocusEffect(
+    useCallback(() => {
+      if (isEdit) return;
+      focusTextInputSoon(() => lotNoRef.current?.focus());
+    }, [isEdit]),
+  );
+
+  useEffect(() => {
+    if (!footerKeysActive || saving) return;
+    const t = setTimeout(() => footerKeyRef.current?.focus(), 50);
+    return () => clearTimeout(t);
+  }, [footerKeysActive, saving, footerAction]);
+
   const deleteLot = () => {
     if (!isEdit || !id) return;
     Alert.alert("Delete this lot?", "This cannot be undone.", [
@@ -210,6 +291,69 @@ export default function AddLot() {
         },
       },
     ]);
+  };
+
+  const focusSaleBags = (key: string) => {
+    focusTextInputSoon(() => bagsRefs.current[key]?.focus());
+  };
+
+  const continueAfterFarmerLinked = () => {
+    const first = sales[0];
+    if (!first) return;
+    setTimeout(() => {
+      if (!first.vendor_id) setVendorPickerFor(first.key);
+      else focusSaleBags(first.key);
+    }, 280);
+  };
+
+  const continueAfterVendorLinked = (key: string) => {
+    setTimeout(() => focusSaleBags(key), 150);
+  };
+
+  const advanceAfterBagsEntry = (key: string) => {
+    const sale = sales.find((x) => x.key === key);
+    if (!sale) return;
+    const bags = Number(sale.bags) || 0;
+    if (bags <= 0) return;
+
+    if (isFinite(parsedTotalBags) && parsedTotalBags > 0) {
+      if (soldBags > parsedTotalBags) {
+        setError(`Sum of vendor bags (${soldBags}) cannot exceed total bags (${parsedTotalBags}).`);
+        return;
+      }
+      setError(null);
+      if (soldBags < parsedTotalBags) {
+        deactivateFooterKeys();
+        const idx = sales.findIndex((x) => x.key === key);
+        const next = sales[idx + 1];
+        if (next) {
+          if (!next.vendor_id) setVendorPickerFor(next.key);
+          else focusSaleBags(next.key);
+        } else {
+          addSale();
+        }
+        return;
+      }
+      const needingRate = sales.find(
+        (x) => x.vendor_id && Number(x.bags) > 0 && x.rate.trim() === "",
+      );
+      if (needingRate) {
+        focusTextInputSoon(() => rateRefs.current[needingRate.key]?.focus());
+        return;
+      }
+    }
+    rateRefs.current[key]?.focus();
+  };
+
+  const setSaleBags = (key: string, raw: string) => {
+    const digits = raw.replace(/[^0-9]/g, "");
+    if (!digits) {
+      updateSale(key, { bags: "" });
+      return;
+    }
+    const n = parseInt(digits, 10);
+    const max = maxBagsForSale(key);
+    updateSale(key, { bags: String(isFinite(max) ? Math.min(n, max) : n) });
   };
 
   return (
@@ -245,8 +389,10 @@ export default function AddLot() {
                 keyboardType={integerKeyboard}
                 testID="lot-serial"
                 inputRef={lotNoRef}
+                autoFocus={!isEdit}
                 returnKeyType="next"
                 blurOnSubmit={false}
+                onFocus={deactivateFooterKeys}
                 onSubmitEditing={() => totalBagsRef.current?.focus()}
               />
             </View>
@@ -261,6 +407,7 @@ export default function AddLot() {
                 inputRef={totalBagsRef}
                 returnKeyType="next"
                 blurOnSubmit={false}
+                onFocus={deactivateFooterKeys}
                 onSubmitEditing={() => bhadaRef.current?.focus()}
               />
             </View>
@@ -275,7 +422,11 @@ export default function AddLot() {
                 inputRef={bhadaRef}
                 returnKeyType="next"
                 blurOnSubmit={false}
-                onSubmitEditing={() => setFarmerPickerOpen(true)}
+                onFocus={deactivateFooterKeys}
+                onSubmitEditing={() => {
+                  deactivateFooterKeys();
+                  setFarmerPickerOpen(true);
+                }}
               />
             </View>
           </View>
@@ -307,7 +458,11 @@ export default function AddLot() {
           ) : null}
 
           <Text style={styles.label}>Farmer</Text>
-          <Pressable style={styles.pickBox} onPress={() => setFarmerPickerOpen(true)} testID="lot-farmer-pick">
+          <Pressable
+            style={styles.pickBox}
+            onPress={() => { deactivateFooterKeys(); setFarmerPickerOpen(true); }}
+            testID="lot-farmer-pick"
+          >
             <Text style={[styles.pickBoxText, !farmer && { color: colors.muted }]} numberOfLines={1}>
               {farmer?.name || "Tap to select farmer"}
             </Text>
@@ -335,7 +490,7 @@ export default function AddLot() {
               <Text style={styles.smallLabel}>Vendor</Text>
               <Pressable
                 style={styles.pickBox}
-                onPress={() => { setVendorPickerFor(s.key); }}
+                onPress={() => { deactivateFooterKeys(); setVendorPickerFor(s.key); }}
                 testID={`sale-vendor-${idx}`}
               >
                 <Text style={[styles.pickBoxText, !s.vendor_id && { color: colors.muted }]} numberOfLines={1}>
@@ -349,14 +504,15 @@ export default function AddLot() {
                   <Input
                     label="Bags"
                     value={s.bags}
-                    onChangeText={(v) => updateSale(s.key, { bags: v.replace(/[^0-9]/g, "") })}
+                    onChangeText={(v) => setSaleBags(s.key, v)}
                     keyboardType={integerKeyboard}
                     placeholder="0"
                     testID={`sale-bags-${idx}`}
                     inputRef={(r) => { bagsRefs.current[s.key] = r; }}
                     returnKeyType="next"
                     blurOnSubmit={false}
-                    onSubmitEditing={() => rateRefs.current[s.key]?.focus()}
+                    onFocus={deactivateFooterKeys}
+                    onSubmitEditing={() => advanceAfterBagsEntry(s.key)}
                   />
                 </View>
                 <View style={{ flex: 1.4 }}>
@@ -370,11 +526,20 @@ export default function AddLot() {
                     inputRef={(r) => { rateRefs.current[s.key] = r; }}
                     returnKeyType={idx < sales.length - 1 ? "next" : "done"}
                     blurOnSubmit={idx >= sales.length - 1}
+                    onFocus={deactivateFooterKeys}
                     onSubmitEditing={() => {
                       const next = sales[idx + 1];
-                      if (!next) return;
-                      if (!next.vendor_id) setVendorPickerFor(next.key);
-                      else bagsRefs.current[next.key]?.focus();
+                      if (next) {
+                        if (!next.vendor_id) setVendorPickerFor(next.key);
+                        else if (next.rate.trim() === "" && Number(next.bags) > 0) {
+                          rateRefs.current[next.key]?.focus();
+                        } else {
+                          bagsRefs.current[next.key]?.focus();
+                        }
+                        return;
+                      }
+                      rateRefs.current[s.key]?.blur();
+                      activateFooterKeys("save");
                     }}
                   />
                 </View>
@@ -397,11 +562,29 @@ export default function AddLot() {
 
       <KeyboardStickyView>
         <View style={styles.footer}>
+          {footerKeysActive ? (
+            <TextInput
+              ref={footerKeyRef}
+              style={styles.footerKeyTrap}
+              showSoftInputOnFocus={false}
+              caretHidden
+              accessible={false}
+              importantForAccessibility="no-hide-descendants"
+              onKeyPress={(e) => handleFooterKeyPress(e.nativeEvent.key)}
+              testID="add-lot-footer-key-trap"
+            />
+          ) : null}
           {error ? <Text style={styles.err}>{error}</Text> : null}
           <View style={{ flexDirection: "row", gap: spacing.sm }}>
             <Pressable
-              style={({ pressed }) => [styles.actionBtn, styles.actionSave, pressed && { opacity: 0.85 }, saving && { opacity: 0.5 }]}
-              onPress={() => save("save")}
+              style={({ pressed }) => [
+                styles.actionBtn,
+                styles.actionSave,
+                footerKeysActive && footerAction === "save" && styles.actionKeyboardFocus,
+                pressed && { opacity: 0.85 },
+                saving && { opacity: 0.5 },
+              ]}
+              onPress={() => { deactivateFooterKeys(); save("save"); }}
               disabled={saving}
               testID="save-lot"
             >
@@ -409,8 +592,14 @@ export default function AddLot() {
               <Text style={[styles.actionBtnText, { color: colors.onSurface }]}>SAVE</Text>
             </Pressable>
             <Pressable
-              style={({ pressed }) => [styles.actionBtn, styles.actionPrint, pressed && { opacity: 0.85 }, (saving || !canStaffPrint) && { opacity: 0.5 }]}
-              onPress={() => save("print")}
+              style={({ pressed }) => [
+                styles.actionBtn,
+                styles.actionPrint,
+                footerKeysActive && footerAction === "print" && styles.actionKeyboardFocus,
+                pressed && { opacity: 0.85 },
+                (saving || !canStaffPrint) && { opacity: 0.5 },
+              ]}
+              onPress={() => { deactivateFooterKeys(); save("print"); }}
               disabled={saving || !canStaffPrint}
               testID="save-and-print-lot"
             >
@@ -437,27 +626,19 @@ export default function AddLot() {
         kind="farmer"
         items={farmers}
         selectedId={farmerId}
-        onClose={() => setFarmerPickerOpen(false)}
+        onClose={() => { setFarmerPickerOpen(false); deactivateFooterKeys(); }}
         onSelect={(item) => {
           setFarmerId(item.id);
           setFarmerPickerOpen(false);
-          const first = sales[0];
-          if (!first) return;
-          setTimeout(() => {
-            if (!first.vendor_id) setVendorPickerFor(first.key);
-            else bagsRefs.current[first.key]?.focus();
-          }, 200);
+          deactivateFooterKeys();
+          continueAfterFarmerLinked();
         }}
         onCreated={(item) => {
           setFarmers((xs) => [...xs, item as Farmer].sort((a, b) => a.name.localeCompare(b.name)));
           setFarmerId(item.id);
           setFarmerPickerOpen(false);
-          const first = sales[0];
-          if (!first) return;
-          setTimeout(() => {
-            if (!first.vendor_id) setVendorPickerFor(first.key);
-            else bagsRefs.current[first.key]?.focus();
-          }, 200);
+          deactivateFooterKeys();
+          continueAfterFarmerLinked();
         }}
       />
       <PartyPicker
@@ -466,13 +647,14 @@ export default function AddLot() {
         items={vendors}
         selectedId={sales.find((s) => s.key === vendorPickerFor)?.vendor_id}
         initialQuery={sales.find((s) => s.key === vendorPickerFor)?.vendor_name || ""}
-        onClose={() => setVendorPickerFor(null)}
+        onClose={() => { setVendorPickerFor(null); deactivateFooterKeys(); }}
         onSelect={(item) => {
           if (vendorPickerFor) {
             const k = vendorPickerFor;
             updateSale(k, { vendor_id: item.id, vendor_name: item.name });
             setVendorPickerFor(null);
-            setTimeout(() => bagsRefs.current[k]?.focus(), 200);
+            deactivateFooterKeys();
+            continueAfterVendorLinked(k);
           }
         }}
         onCreated={(item) => {
@@ -481,7 +663,8 @@ export default function AddLot() {
             const k = vendorPickerFor;
             updateSale(k, { vendor_id: item.id, vendor_name: item.name });
             setVendorPickerFor(null);
-            setTimeout(() => bagsRefs.current[k]?.focus(), 200);
+            deactivateFooterKeys();
+            continueAfterVendorLinked(k);
           }
         }}
       />
@@ -564,6 +747,8 @@ const styles = StyleSheet.create({
   actionSave: { borderColor: colors.borderStrong, backgroundColor: colors.surface },
   actionPrint: { borderColor: colors.surfaceInverse, backgroundColor: colors.surfaceInverse },
   actionShare: { borderColor: colors.brand, backgroundColor: colors.brandPrimary },
+  actionKeyboardFocus: { borderWidth: 3, borderColor: colors.brand },
+  footerKeyTrap: { position: "absolute", width: 1, height: 1, opacity: 0, top: 0, left: 0 },
   actionBtnText: { fontFamily: font.display, fontWeight: "900", letterSpacing: 0.5, fontSize: 11 },
   err: {
     color: colors.error, backgroundColor: "#FEE2E2", borderWidth: 2, borderColor: colors.error,
