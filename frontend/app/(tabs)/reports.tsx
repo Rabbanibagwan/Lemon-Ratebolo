@@ -217,11 +217,15 @@ export default function Reports() {
   const exportDriver = (d: DriverSummary, action: "print" | "share") => {
     if (!isOwner) return;
     void runExport(async () => {
+      // Fresh settings at print/share time so selected paper width always applies.
+      const freshSettings = await api.get<Settings>("/settings").catch(() => settings);
+      if (freshSettings) setSettings(freshSettings);
+      const paperSettings = freshSettings || settings;
       if (action === "print") {
-        await thermalPrintDriverReport(d, workingDateISO, merchant, settings, auctionDrivers);
+        await thermalPrintDriverReport(d, workingDateISO, merchant, paperSettings, auctionDrivers);
         notify("Printed", "Driver report preview is open — use Print from that window.");
       } else {
-        const result = await shareDriverThermalReport(d, workingDateISO, merchant, settings, auctionDrivers);
+        const result = await shareDriverThermalReport(d, workingDateISO, merchant, paperSettings, auctionDrivers);
         if (result === "shared") notify("Shared", "Driver report PDF preview is open.");
         else if (result === "downloaded") {
           notify("Downloaded", "Driver report PDF downloaded.");

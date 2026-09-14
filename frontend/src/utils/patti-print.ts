@@ -184,7 +184,7 @@ export function renderThermalPattiHtml(
   const mobile = (profile.mobile || "").trim();
   return `
   <!doctype html><html><head><meta charset="utf-8"/>
-  <meta name="viewport" content="width=${m.widthPx}, initial-scale=1, maximum-scale=1"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
   <title>Patti #${p.patti_no}</title>
   <style>${thermalBaseCss(m)}</style></head><body>
   <div id="slip" class="patti">

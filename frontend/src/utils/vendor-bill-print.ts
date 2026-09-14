@@ -133,7 +133,7 @@ export function renderThermalVendorBillHtml(b: VendorBill, profile: ShopProfile,
     </div>`).join("");
   return `
   <!doctype html><html><head><meta charset="utf-8"/>
-  <meta name="viewport" content="width=${m.widthPx}, initial-scale=1, maximum-scale=1"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
   <title>${escapeHtml(b.bill_code)}</title>
   <style>${thermalBaseCss(m)}</style></head><body>
   <div id="slip" class="vendor">

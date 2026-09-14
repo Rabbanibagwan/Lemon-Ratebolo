@@ -70,12 +70,19 @@ export default function VendorBillDetail() {
     if (!b || !session) return;
     try {
       setSharing(true);
-      let pf = profile;
-      if (!pf?.bank_account_holder && !pf?.bank_account_number) {
-        pf = await api.get<ShopProfile>("/shop/profile").catch(() => pf);
-        if (pf) setProfile(pf);
-      }
-      const paperMm = clampPaperMm(settings?.thermal_paper_width_mm || 80);
+      // Fresh settings at print time so selected paper width (58/80/100) always applies.
+      const [freshProfile, freshSettings] = await Promise.all([
+        api.get<ShopProfile>("/shop/profile").catch(() => profile),
+        api.get("/settings").catch(() => settings),
+      ]);
+      const pf = freshProfile || profile;
+      if (freshProfile) setProfile(freshProfile);
+      if (freshSettings) setSettings(freshSettings);
+      const paperMm = clampPaperMm(
+        (freshSettings as any)?.thermal_paper_width_mm ||
+          settings?.thermal_paper_width_mm ||
+          80,
+      );
       await thermalPrintVendorBill(b, pf || { shop_name: session.shop_name } as any, paperMm);
     } catch (e) {
       console.warn("thermal print error", e);
