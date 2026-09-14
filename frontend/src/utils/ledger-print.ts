@@ -118,7 +118,7 @@ export function renderLedgerThermalHtml(d: LedgerDetail, paperMm: number): strin
       <td class="r">${fmt(r.balance)}</td>
     </tr>`).join("");
   return `<!doctype html><html><head><meta charset="utf-8"/>
-  <meta name="viewport" content="width=${m.widthPx}, initial-scale=1, maximum-scale=1"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
   <style>${thermalBaseCss(m)}
     table.led { width:100%; border-collapse:collapse; table-layout:fixed; }
     table.led th, table.led td {

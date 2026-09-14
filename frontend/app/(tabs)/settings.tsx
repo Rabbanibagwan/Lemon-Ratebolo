@@ -149,7 +149,7 @@ export default function SettingsScreen() {
               <View style={styles.paperRow}>
                 <Text style={styles.toggleLabel}>Printer Paper Size</Text>
                 <Text style={styles.toggleHint}>
-                  Current: {s?.thermal_paper_width_mm || 80} mm. Changes fonts, margins, columns & QR for Farmer Patti and Vendor Bill. Default 80 mm.
+                  Current: {s?.thermal_paper_width_mm || 80} mm. Changes fonts, margins, columns & QR for Farmer Patti, Vendor Bill, and Driver report print. Default 80 mm.
                 </Text>
                 <View style={styles.paperChoices}>
                   {[58, 80, 100].map((w) => (

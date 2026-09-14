@@ -430,9 +430,20 @@ export function renderDriverThermalHtml(
     )
     .join("");
   return `<!doctype html><html><head><meta charset="utf-8"/>
-  <meta name="viewport" content="width=${m.widthPx}, initial-scale=1, maximum-scale=1"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
   <title>Driver ${escHtml(d.driver_name)}</title>
   <style>${thermalBaseCss(m)}
+    html { background: #d4d4d4 !important; }
+    body {
+      width: ${m.w}mm !important;
+      max-width: min(${m.w}mm, 100%) !important;
+      margin: 0 auto !important;
+      background: #fff !important;
+    }
+    @media print {
+      html { background: #fff !important; }
+      body { width: ${m.w}mm !important; max-width: ${m.w}mm !important; margin: 0 !important; }
+    }
     #slip { padding: ${Math.max(1, m.padY - 1)}px 1px !important; }
     .drv-shop {
       font-size: ${headFs}px !important;

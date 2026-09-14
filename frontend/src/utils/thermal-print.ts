@@ -65,7 +65,7 @@ export function thermalMetrics(paperMm: number) {
 /** Shared thermal layout. Farmer Patti adds Times/roman overrides via thermalPattiCss(). */
 export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
   return `
-    /* Exact paper width; height follows content. High contrast for thermal darkness. */
+    /* Exact paper width for print; on screen the slip is centered so 58/80/100 mm look different. */
     @page { size: ${m.w}mm auto; margin: 0 !important; }
     * {
       box-sizing: border-box;
@@ -73,11 +73,19 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       print-color-adjust: exact !important;
       color-adjust: exact !important;
     }
-    html, body {
+    html {
       margin: 0 !important;
       padding: 0 !important;
+      min-height: 0 !important;
+      height: auto !important;
+      background: #d4d4d4 !important;
+      overflow-x: hidden !important;
+    }
+    body {
+      margin: 0 auto !important;
+      padding: 0 !important;
       width: ${m.w}mm !important;
-      max-width: ${m.w}mm !important;
+      max-width: min(${m.w}mm, 100%) !important;
       min-width: 0 !important;
       min-height: 0 !important;
       height: auto !important;
@@ -90,10 +98,11 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       overflow-x: hidden !important;
       overflow-y: visible !important;
       -webkit-text-stroke: 0.25px #000;
+      box-shadow: 0 0 0 1px #bbb;
     }
     #slip {
       display: block;
-      width: ${m.w}mm !important;
+      width: 100% !important;
       max-width: ${m.w}mm !important;
       min-width: 0 !important;
       padding: ${m.padY}px ${m.padX}px;
@@ -103,6 +112,19 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       color: #000 !important;
       overflow-x: hidden !important;
       box-sizing: border-box !important;
+    }
+    @media print {
+      html { background: #fff !important; }
+      body {
+        width: ${m.w}mm !important;
+        max-width: ${m.w}mm !important;
+        box-shadow: none !important;
+        margin: 0 !important;
+      }
+      #slip {
+        width: ${m.w}mm !important;
+        max-width: ${m.w}mm !important;
+      }
     }
     #slip, #slip * { color: #000 !important; }
     .wrap { word-break: break-word; overflow-wrap: anywhere; }
@@ -500,8 +522,10 @@ function waitForDocImages(doc: Document): Promise<void> {
 }
 
 /**
- * Keep the slip at the selected paper width and scale the whole page down when
- * the preview viewport is narrower (phones). Print uses @page mm — scale is screen-only.
+ * Lock the slip to the selected paper mm and show it centered on screen.
+ * Use device-width viewport (NOT paper px) so iPhone does not scale 58/80/100
+ * up to full-bleed — otherwise every width looks the same on mobile.
+ * Print still uses @page size in mm.
  */
 export function fitThermalDocumentToPaper(doc: Document, paperMm: number, viewportWidthPx?: number): void {
   const w = clampPaperMm(paperMm);
@@ -510,40 +534,8 @@ export function fitThermalDocumentToPaper(doc: Document, paperMm: number, viewpo
   const bodyEl = doc.body;
   const slip = doc.getElementById("slip");
 
-  if (htmlEl) {
-    htmlEl.style.width = `${w}mm`;
-    htmlEl.style.maxWidth = `${w}mm`;
-    htmlEl.style.minWidth = "0";
-    htmlEl.style.overflowX = "hidden";
-  }
-  if (bodyEl) {
-    bodyEl.style.width = `${w}mm`;
-    bodyEl.style.maxWidth = `${w}mm`;
-    bodyEl.style.minWidth = "0";
-    bodyEl.style.margin = "0 auto";
-    bodyEl.style.overflowX = "hidden";
-    bodyEl.style.background = "#fff";
-  }
-  if (slip instanceof HTMLElement) {
-    slip.style.width = `${w}mm`;
-    slip.style.maxWidth = `${w}mm`;
-    slip.style.minWidth = "0";
-    slip.style.boxSizing = "border-box";
-    slip.style.overflowX = "hidden";
-  }
-
-  // Screen preview only: shrink to fit when the host viewport is narrower than paper.
-  const hostW =
-    typeof viewportWidthPx === "number" && viewportWidthPx > 0
-      ? viewportWidthPx
-      : doc.defaultView?.innerWidth || widthPx;
-  const scale = Math.min(1, hostW / widthPx);
-  if (bodyEl) {
-    bodyEl.style.transformOrigin = "top center";
-    bodyEl.style.transform = scale < 0.999 ? `scale(${scale})` : "";
-  }
-
-  let tag = doc.getElementById("lemon-thermal-paper-meta");
+  // device-width: 80mm (~302px) stays ~302px on a 390px phone → visible grey margins.
+  let tag = doc.getElementById("lemon-thermal-paper-meta") as HTMLMetaElement | null;
   if (!tag) {
     tag = doc.createElement("meta");
     tag.id = "lemon-thermal-paper-meta";
@@ -552,8 +544,43 @@ export function fitThermalDocumentToPaper(doc: Document, paperMm: number, viewpo
   }
   tag.setAttribute(
     "content",
-    `width=${widthPx}, initial-scale=1, maximum-scale=1, user-scalable=no`,
+    "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no",
   );
+
+  if (htmlEl) {
+    htmlEl.style.width = "100%";
+    htmlEl.style.maxWidth = "100%";
+    htmlEl.style.minWidth = "0";
+    htmlEl.style.background = "#d4d4d4";
+    htmlEl.style.overflowX = "hidden";
+  }
+  if (bodyEl) {
+    bodyEl.style.width = `${w}mm`;
+    bodyEl.style.maxWidth = `min(${w}mm, 100%)`;
+    bodyEl.style.minWidth = "0";
+    bodyEl.style.margin = "0 auto";
+    bodyEl.style.overflowX = "hidden";
+    bodyEl.style.background = "#fff";
+    bodyEl.style.boxShadow = "0 0 0 1px #bbb";
+    bodyEl.style.transformOrigin = "top center";
+  }
+  if (slip instanceof HTMLElement) {
+    slip.style.width = "100%";
+    slip.style.maxWidth = `${w}mm`;
+    slip.style.minWidth = "0";
+    slip.style.boxSizing = "border-box";
+    slip.style.overflowX = "hidden";
+  }
+
+  // Only scale down when the host is narrower than the paper (e.g. 100 mm on a small phone).
+  const hostW =
+    typeof viewportWidthPx === "number" && viewportWidthPx > 0
+      ? viewportWidthPx
+      : doc.defaultView?.innerWidth || widthPx;
+  const scale = Math.min(1, hostW / widthPx);
+  if (bodyEl) {
+    bodyEl.style.transform = scale < 0.999 ? `scale(${scale})` : "";
+  }
 }
 
 function measureSlipHeightMm(doc: Document, paperMm: number): number {
@@ -615,26 +642,47 @@ export async function fillThermalPreviewAndPrint(
   const style = popup.document.createElement("style");
   style.textContent = `
     @page { size: ${w}mm ${heightMm}mm; margin: 0 !important; }
-    html, body {
-      width: ${w}mm !important;
-      max-width: ${w}mm !important;
-      min-width: 0 !important;
-      height: auto !important;
-      min-height: 0 !important;
-      margin: 0 auto !important;
-      background: #fff !important;
-      overflow-x: hidden !important;
-    }
-    #slip {
-      width: ${w}mm !important;
-      max-width: ${w}mm !important;
-      min-width: 0 !important;
-      overflow-x: hidden !important;
-      box-sizing: border-box !important;
-    }
+    /* Screen: full-bleed grey canvas + centered paper slip (58/80/100 look different). */
     @media screen {
-      html { background: #e5e5e5 !important; }
-      body { box-shadow: 0 0 0 1px #ccc; }
+      html {
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+        background: #d4d4d4 !important;
+        overflow-x: hidden !important;
+      }
+      body {
+        width: ${w}mm !important;
+        max-width: min(${w}mm, 100%) !important;
+        min-width: 0 !important;
+        height: auto !important;
+        min-height: 0 !important;
+        margin: 0 auto !important;
+        background: #fff !important;
+        overflow-x: hidden !important;
+        box-shadow: 0 0 0 1px #bbb;
+      }
+      #slip {
+        width: 100% !important;
+        max-width: ${w}mm !important;
+        min-width: 0 !important;
+        overflow-x: hidden !important;
+        box-sizing: border-box !important;
+      }
+    }
+    @media print {
+      html, body {
+        width: ${w}mm !important;
+        max-width: ${w}mm !important;
+        min-width: 0 !important;
+        margin: 0 !important;
+        background: #fff !important;
+        box-shadow: none !important;
+      }
+      #slip {
+        width: ${w}mm !important;
+        max-width: ${w}mm !important;
+      }
     }
   `;
   popup.document.head?.appendChild(style);
@@ -687,12 +735,13 @@ export function showInPageThermalPreview(
 
   const frameWrap = document.createElement("div");
   frameWrap.style.cssText =
-    "flex:1;min-height:0;background:#d4d4d4;border-radius:0 0 6px 6px;overflow:auto;display:flex;justify-content:center;";
+    "flex:1;min-height:0;background:#d4d4d4;border-radius:0 0 6px 6px;overflow:auto;display:block;";
 
   const frame = document.createElement("iframe");
   frame.title = title;
+  // Full-width iframe + device-width viewport inside → slip stays paper mm, grey sides show selected width.
   frame.style.cssText =
-    `width:min(100%, ${widthPx}px);max-width:100%;flex:1 1 auto;border:0;background:#fff;min-height:100%;`;
+    "width:100%;height:100%;border:0;background:#d4d4d4;min-height:100%;";
 
   overlay.appendChild(bar);
   frameWrap.appendChild(frame);
