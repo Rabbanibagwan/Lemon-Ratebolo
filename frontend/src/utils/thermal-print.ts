@@ -27,38 +27,38 @@ export function thermalMetrics(paperMm: number) {
   const padX = 0;
   const padY = w <= 58 ? 2 : 3;
   /** Shared side inset (~1.5–2.5 mm) for Farmer Patti + Vendor Bill (not edge-to-edge). */
-  const pattiPadX = w <= 58 ? 5 : w <= 80 ? 8 : 10;
-  /** QR display px — slightly larger, still under (widthPx - 2*pattiPadX). */
-  const qrPx = w <= 58 ? 108 : w <= 80 ? 140 : 168;
+  const pattiPadX = w <= 58 ? 4 : w <= 80 ? 6 : 8;
+  /** QR display px — stays under (widthPx - 2*pattiPadX) on every preset. */
+  const qrPx = w <= 58 ? 96 : w <= 80 ? 128 : 152;
   return {
     w,
     widthPx,
-    bodyFs: w <= 58 ? 10 : w <= 80 ? 12 : 14,
-    bigFs: w <= 58 ? 13 : w <= 80 ? 16 : 19,
-    hugeFs: w <= 58 ? 17 : w <= 80 ? 22 : 26,
-    rowFs: w <= 58 ? 10 : w <= 80 ? 12 : 13,
-    emphFs: w <= 58 ? 13 : w <= 80 ? 15 : 17,
+    bodyFs: w <= 58 ? 9 : w <= 80 ? 11 : 13,
+    bigFs: w <= 58 ? 12 : w <= 80 ? 15 : 18,
+    hugeFs: w <= 58 ? 15 : w <= 80 ? 20 : 24,
+    rowFs: w <= 58 ? 9 : w <= 80 ? 11 : 12,
+    emphFs: w <= 58 ? 11 : w <= 80 ? 14 : 16,
     /** Lot no. — one step above emph, still below bigFs (safe on 58 mm). */
-    lotFs: w <= 58 ? 14 : w <= 80 ? 16 : 18,
+    lotFs: w <= 58 ? 12 : w <= 80 ? 15 : 17,
     /** Hamali / Bhada / Stationery — slightly under body. */
-    deductFs: w <= 58 ? 9 : w <= 80 ? 11 : 13,
+    deductFs: w <= 58 ? 8 : w <= 80 ? 10 : 12,
     /** TOTAL DEDUCTION — one step above deductFs, still below bodyFs. */
-    deductTotalFs: w <= 58 ? 10 : w <= 80 ? 12 : 14,
+    deductTotalFs: w <= 58 ? 9 : w <= 80 ? 11 : 13,
     qrPx,
     /** @deprecated use padX / padY — kept so older callers still compile */
     padPx: padY,
     padX,
     padY,
     pattiPadX,
-    // Column shares (percent of slip) — avoid fixed px mins that overflow narrow rolls
-    lotPct: w <= 58 ? 20 : 18,
-    midPct: w <= 58 ? 48 : 50,
-    rightPct: w <= 58 ? 32 : 32,
-    farmerFs: w <= 58 ? 20 : w <= 80 ? 24 : 28,
+    // Column shares as flex fractions — minmax(0,…) so cells shrink inside paper width
+    lotPct: w <= 58 ? 18 : 16,
+    midPct: w <= 58 ? 46 : 48,
+    rightPct: w <= 58 ? 36 : 36,
+    farmerFs: w <= 58 ? 14 : w <= 80 ? 18 : 22,
     /** Vendor name — one step under farmerFs, still bold/readable on the same row. */
-    vendorFs: w <= 58 ? 16 : w <= 80 ? 18 : 22,
-    /** Merchant shop name — largest header signal (Preview shopName ~20–24px). */
-    shopFs: w <= 58 ? 18 : w <= 80 ? 24 : 28,
+    vendorFs: w <= 58 ? 12 : w <= 80 ? 15 : 18,
+    /** Merchant shop name — largest header signal, still fits 58 mm. */
+    shopFs: w <= 58 ? 14 : w <= 80 ? 20 : 24,
   };
 }
 
@@ -78,7 +78,7 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       padding: 0 !important;
       width: ${m.w}mm !important;
       max-width: ${m.w}mm !important;
-      min-width: ${m.w}mm !important;
+      min-width: 0 !important;
       min-height: 0 !important;
       height: auto !important;
       background: #fff !important;
@@ -87,19 +87,22 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       font-size: ${m.bodyFs}px;
       font-weight: 700;
       line-height: 1.25;
-      overflow: visible !important;
+      overflow-x: hidden !important;
+      overflow-y: visible !important;
       -webkit-text-stroke: 0.25px #000;
     }
     #slip {
       display: block;
       width: ${m.w}mm !important;
       max-width: ${m.w}mm !important;
-      min-width: ${m.w}mm !important;
+      min-width: 0 !important;
       padding: ${m.padY}px ${m.padX}px;
-      margin: 0 !important;
+      margin: 0 auto !important;
       height: auto !important;
       min-height: 0 !important;
       color: #000 !important;
+      overflow-x: hidden !important;
+      box-sizing: border-box !important;
     }
     #slip, #slip * { color: #000 !important; }
     .wrap { word-break: break-word; overflow-wrap: anywhere; }
@@ -127,10 +130,10 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       margin: 3px 0;
       height: 0;
     }
-    /* Three columns fill 100% of the slip — no leftover side gutters, no fixed-px overflow */
+    /* Three columns fill 100% of the slip — minmax(0,…) prevents wide content from blowing past paper mm */
     .row {
       display: grid;
-      grid-template-columns: ${m.lotPct}% ${m.midPct}% ${m.rightPct}%;
+      grid-template-columns: minmax(0, ${m.lotPct}fr) minmax(0, ${m.midPct}fr) minmax(0, ${m.rightPct}fr);
       column-gap: 2px;
       align-items: baseline;
       width: 100%;
@@ -138,25 +141,33 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       padding: 1px 0;
       font-size: ${m.rowFs}px;
       font-weight: 700 !important;
+      box-sizing: border-box;
     }
     .row .lot {
       min-width: 0;
+      max-width: 100%;
       font-weight: 900 !important;
       overflow-wrap: anywhere;
+      word-break: break-word;
     }
     .row .mid {
       min-width: 0;
+      max-width: 100%;
       text-align: center;
       font-weight: 700 !important;
       font-size: ${m.rowFs}px !important;
       overflow-wrap: anywhere;
+      word-break: break-word;
     }
     .row .right {
       min-width: 0;
+      max-width: 100%;
       text-align: right;
       font-weight: 700 !important;
       font-size: ${m.rowFs}px !important;
       overflow-wrap: anywhere;
+      word-break: break-word;
+      font-variant-numeric: tabular-nums;
     }
     #slip.patti .row .lot {
       font-size: ${m.lotFs}px !important;
@@ -180,10 +191,13 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       overflow-wrap: anywhere;
     }
     #slip.patti .kv.deduct > span:last-child {
-      flex: 0 0 auto;
+      flex: 0 1 auto;
+      max-width: 55%;
       text-align: right !important;
       font-weight: 400 !important;
-      white-space: nowrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      font-variant-numeric: tabular-nums;
     }
     /* Same family as deduct; one step larger; bold (still ≤ bodyFs). */
     #slip.patti .kv.deduct-total {
@@ -200,18 +214,23 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       overflow-wrap: anywhere;
     }
     #slip.patti .kv.deduct-total > span:last-child {
-      flex: 0 0 auto;
+      flex: 0 1 auto;
+      max-width: 55%;
       text-align: right !important;
       font-weight: 900 !important;
-      white-space: nowrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      font-variant-numeric: tabular-nums;
     }
     .th { font-size: ${m.rowFs}px; font-weight: 900 !important; text-transform: uppercase; }
     .kv {
       display: flex; justify-content: space-between; gap: 4px; padding: 1px 0;
       font-weight: 700 !important; width: 100%; max-width: 100%;
+      box-sizing: border-box; min-width: 0;
     }
-    .kv .k { text-transform: uppercase; flex-shrink: 0; font-weight: 800 !important; }
-    .kv .v { text-align: right; font-weight: 900 !important; min-width: 0; }
+    .kv > span { min-width: 0; max-width: 100%; }
+    .kv .k { text-transform: uppercase; flex: 0 1 auto; max-width: 42%; font-weight: 800 !important; overflow-wrap: anywhere; }
+    .kv .v { text-align: right; font-weight: 900 !important; flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
     .kv.farmer, .kv.vendor {
       flex-direction: row;
       flex-wrap: wrap;
@@ -313,8 +332,10 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
     #slip.patti .netbox .huge {
       letter-spacing: 0.06em;
       font-variant-numeric: lining-nums tabular-nums;
-      padding-left: 10px;
-      white-space: nowrap;
+      padding-left: 6px;
+      min-width: 0;
+      overflow-wrap: anywhere;
+      word-break: break-word;
       text-align: right;
     }
     /* Fixed labels: sentence case (override shared uppercase rules). Values keep user casing. */
@@ -436,16 +457,20 @@ export function injectThermalPageSize(html: string, paperMm: number, heightMm: n
     html, body {
       width: ${w}mm !important;
       max-width: ${w}mm !important;
-      min-width: ${w}mm !important;
+      min-width: 0 !important;
       height: auto !important;
       min-height: 0 !important;
-      overflow: visible !important;
+      overflow-x: hidden !important;
+      overflow-y: visible !important;
     }
     #slip {
       width: ${w}mm !important;
       max-width: ${w}mm !important;
+      min-width: 0 !important;
       height: auto !important;
       min-height: 0 !important;
+      overflow-x: hidden !important;
+      box-sizing: border-box !important;
     }
   `;
   let out = html.replace(/@page\s*\{[^}]*\}/g, `@page { size: ${w}mm ${h}mm; margin: 0 !important; }`);
@@ -474,24 +499,71 @@ function waitForDocImages(doc: Document): Promise<void> {
   ).then(() => undefined);
 }
 
-function measureSlipHeightMm(doc: Document, paperMm: number): number {
+/**
+ * Keep the slip at the selected paper width and scale the whole page down when
+ * the preview viewport is narrower (phones). Print uses @page mm — scale is screen-only.
+ */
+export function fitThermalDocumentToPaper(doc: Document, paperMm: number, viewportWidthPx?: number): void {
   const w = clampPaperMm(paperMm);
-  const slip = doc.getElementById("slip") || doc.body;
-  // Force layout at the exact paper width before measuring.
+  const widthPx = Math.round(w * MM_TO_CSS_PX);
   const htmlEl = doc.documentElement;
   const bodyEl = doc.body;
+  const slip = doc.getElementById("slip");
+
   if (htmlEl) {
     htmlEl.style.width = `${w}mm`;
     htmlEl.style.maxWidth = `${w}mm`;
+    htmlEl.style.minWidth = "0";
+    htmlEl.style.overflowX = "hidden";
   }
   if (bodyEl) {
     bodyEl.style.width = `${w}mm`;
     bodyEl.style.maxWidth = `${w}mm`;
+    bodyEl.style.minWidth = "0";
+    bodyEl.style.margin = "0 auto";
+    bodyEl.style.overflowX = "hidden";
+    bodyEl.style.background = "#fff";
   }
   if (slip instanceof HTMLElement) {
     slip.style.width = `${w}mm`;
     slip.style.maxWidth = `${w}mm`;
+    slip.style.minWidth = "0";
+    slip.style.boxSizing = "border-box";
+    slip.style.overflowX = "hidden";
   }
+
+  // Screen preview only: shrink to fit when the host viewport is narrower than paper.
+  const hostW =
+    typeof viewportWidthPx === "number" && viewportWidthPx > 0
+      ? viewportWidthPx
+      : doc.defaultView?.innerWidth || widthPx;
+  const scale = Math.min(1, hostW / widthPx);
+  if (bodyEl) {
+    bodyEl.style.transformOrigin = "top center";
+    bodyEl.style.transform = scale < 0.999 ? `scale(${scale})` : "";
+  }
+
+  let tag = doc.getElementById("lemon-thermal-paper-meta");
+  if (!tag) {
+    tag = doc.createElement("meta");
+    tag.id = "lemon-thermal-paper-meta";
+    tag.setAttribute("name", "viewport");
+    doc.head?.appendChild(tag);
+  }
+  tag.setAttribute(
+    "content",
+    `width=${widthPx}, initial-scale=1, maximum-scale=1, user-scalable=no`,
+  );
+}
+
+function measureSlipHeightMm(doc: Document, paperMm: number): number {
+  const w = clampPaperMm(paperMm);
+  fitThermalDocumentToPaper(doc, w);
+  // Measure unscaled layout height (ignore screen fit transform).
+  const bodyEl = doc.body;
+  const prevTransform = bodyEl?.style.transform || "";
+  if (bodyEl) bodyEl.style.transform = "";
+  const slip = doc.getElementById("slip") || doc.body;
   const heightPx = Math.ceil(
     Math.max(
       slip.scrollHeight || 0,
@@ -499,6 +571,7 @@ function measureSlipHeightMm(doc: Document, paperMm: number): number {
       slip.getBoundingClientRect?.().height || 0,
     ),
   );
+  if (bodyEl) bodyEl.style.transform = prevTransform;
   // CSS px → mm; +2 mm tear margin only (no long blank tail).
   return Math.max(28, Math.ceil(heightPx / MM_TO_CSS_PX) + 2);
 }
@@ -545,22 +618,42 @@ export async function fillThermalPreviewAndPrint(
     html, body {
       width: ${w}mm !important;
       max-width: ${w}mm !important;
+      min-width: 0 !important;
       height: auto !important;
       min-height: 0 !important;
       margin: 0 auto !important;
       background: #fff !important;
+      overflow-x: hidden !important;
+    }
+    #slip {
+      width: ${w}mm !important;
+      max-width: ${w}mm !important;
+      min-width: 0 !important;
+      overflow-x: hidden !important;
+      box-sizing: border-box !important;
+    }
+    @media screen {
+      html { background: #e5e5e5 !important; }
+      body { box-shadow: 0 0 0 1px #ccc; }
     }
   `;
   popup.document.head?.appendChild(style);
+  fitThermalDocumentToPaper(popup.document, w, popup.innerWidth || undefined);
   popup.focus();
   await new Promise((r) => setTimeout(r, 80));
   popup.print();
 }
 
 /** Browser-safe fallback when popups are blocked: full-screen HTML preview + Print. */
-export function showInPageThermalPreview(html: string, title: string = "Print preview"): void {
+export function showInPageThermalPreview(
+  html: string,
+  title: string = "Print preview",
+  paperMm: number = 80,
+): void {
   if (typeof document === "undefined") return;
   document.getElementById("lemon-thermal-preview-overlay")?.remove();
+  const w = clampPaperMm(paperMm);
+  const widthPx = Math.round(w * MM_TO_CSS_PX);
 
   const overlay = document.createElement("div");
   overlay.id = "lemon-thermal-preview-overlay";
@@ -573,7 +666,7 @@ export function showInPageThermalPreview(html: string, title: string = "Print pr
   bar.style.cssText =
     "display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;background:#111;color:#fff;font-family:system-ui,sans-serif;border-radius:6px 6px 0 0;";
   const label = document.createElement("div");
-  label.textContent = title;
+  label.textContent = `${title} · ${w} mm`;
   label.style.cssText = "font-weight:700;font-size:13px;";
   const actions = document.createElement("div");
   actions.style.cssText = "display:flex;gap:8px;";
@@ -592,13 +685,18 @@ export function showInPageThermalPreview(html: string, title: string = "Print pr
   bar.appendChild(label);
   bar.appendChild(actions);
 
+  const frameWrap = document.createElement("div");
+  frameWrap.style.cssText =
+    "flex:1;min-height:0;background:#d4d4d4;border-radius:0 0 6px 6px;overflow:auto;display:flex;justify-content:center;";
+
   const frame = document.createElement("iframe");
   frame.title = title;
   frame.style.cssText =
-    "flex:1;width:100%;border:0;background:#fff;border-radius:0 0 6px 6px;min-height:0;";
+    `width:min(100%, ${widthPx}px);max-width:100%;flex:1 1 auto;border:0;background:#fff;min-height:100%;`;
 
   overlay.appendChild(bar);
-  overlay.appendChild(frame);
+  frameWrap.appendChild(frame);
+  overlay.appendChild(frameWrap);
   document.body.appendChild(overlay);
 
   const idoc = frame.contentDocument || frame.contentWindow?.document;
@@ -606,6 +704,15 @@ export function showInPageThermalPreview(html: string, title: string = "Print pr
     idoc.open();
     idoc.write(html);
     idoc.close();
+    const applyFit = () => {
+      const hostW = Math.max(120, frame.clientWidth || frameWrap.clientWidth || widthPx);
+      fitThermalDocumentToPaper(idoc, w, hostW);
+    };
+    // Fit after layout; retry once for late QR image sizing.
+    requestAnimationFrame(() => {
+      applyFit();
+      setTimeout(applyFit, 200);
+    });
   }
 
   const close = () => {
@@ -621,6 +728,13 @@ export function showInPageThermalPreview(html: string, title: string = "Print pr
   });
   printBtn.onclick = () => {
     try {
+      const idoc2 = frame.contentDocument;
+      if (idoc2) {
+        // Print at true paper size — clear screen-only scale.
+        const body = idoc2.body;
+        if (body) body.style.transform = "";
+        fitThermalDocumentToPaper(idoc2, w, widthPx);
+      }
       frame.contentWindow?.focus();
       frame.contentWindow?.print();
     } catch {
@@ -726,7 +840,7 @@ export async function printThermalHtmlOnly(html: string, paperMm: number): Promi
       await fillThermalPreviewAndPrint(preview, html, w);
       return;
     }
-    showInPageThermalPreview(html, "Print preview");
+    showInPageThermalPreview(html, "Print preview", w);
     return;
   }
 
@@ -760,7 +874,7 @@ async function printViaPopup(html: string, w: number): Promise<void> {
   // Kept for compatibility; prefer openThermalPreviewWindow + fillThermalPreviewAndPrint.
   const popup = openThermalPreviewWindow("Print preview");
   if (!popup) {
-    showInPageThermalPreview(html, "Print preview");
+    showInPageThermalPreview(html, "Print preview", w);
     return;
   }
   await fillThermalPreviewAndPrint(popup, html, w);

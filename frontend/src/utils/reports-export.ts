@@ -559,7 +559,7 @@ export async function thermalPrintDriverReport(
       return;
     }
     // Popup blocked (Cursor/embedded browser, strict blockers): visible in-page preview.
-    showInPageThermalPreview(html, `Driver ${d.driver_name || "report"} — Print`);
+    showInPageThermalPreview(html, `Driver ${d.driver_name || "report"} — Print`, mm);
     return;
   }
 
