@@ -10,42 +10,85 @@ import { KeyboardFormScroll } from "@/src/components/KeyboardForm";
 import { Button, Input } from "@/src/components/ui";
 import { colors, font, spacing } from "@/src/theme";
 
+type NumKey =
+  | "payment_factor"
+  | "hamali_per_bag"
+  | "stationery_flat"
+  | "default_bhada_per_bag"
+  | "vendor_factor"
+  | "vendor_margin_per_bag"
+  | "commission_per_bag";
+
+/** Keep in-progress decimals like "1." / "1.0" so the keyboard "." works. */
+function sanitizeDecimalInput(raw: string): string {
+  const v = raw.replace(/,/g, ".").replace(/[^0-9.]/g, "");
+  const i = v.indexOf(".");
+  if (i === -1) return v;
+  return v.slice(0, i + 1) + v.slice(i + 1).replace(/\./g, "");
+}
+
 export default function SettingsScreen() {
   const { session, logout } = useAuth();
   const router = useRouter();
   const isOwner = session?.role === "owner";
   const [s, setS] = useState<SettingsT | null>(null);
+  const [drafts, setDrafts] = useState<Partial<Record<NumKey, string>>>({});
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
-    try { setS(await api.get<SettingsT>("/settings")); } catch { /* silent */ }
+    try {
+      setS(await api.get<SettingsT>("/settings"));
+      setDrafts({});
+    } catch { /* silent */ }
   }, []);
 
   useEffect(() => { load(); }, [load]);
 
-  const set = (k: keyof SettingsT, v: string) => {
+  const numValue = (k: NumKey, fallback?: number): string => {
+    if (drafts[k] !== undefined) return drafts[k] as string;
+    if (!s) return "";
+    const n = s[k];
+    if (typeof n === "number" && Number.isFinite(n)) return String(n);
+    if (fallback !== undefined) return String(fallback);
+    return "";
+  };
+
+  const setNum = (k: NumKey, raw: string) => {
     if (!s) return;
-    const num = v === "" ? 0 : Number(v);
-    setS({ ...s, [k]: isFinite(num) ? num : 0 });
+    const v = sanitizeDecimalInput(raw);
+    setDrafts((d) => ({ ...d, [k]: v }));
+    // Incomplete decimals ("", ".", "1.") stay in draft only — Number("1.") would drop the "."
+    if (v === "" || v === "." || v.endsWith(".")) return;
+    const num = Number(v);
+    if (Number.isFinite(num)) setS({ ...s, [k]: num });
   };
 
   const save = async () => {
     if (!s) return;
     setError(null); setMsg(null);
-    if (s.payment_factor <= 0 || s.payment_factor > 1) { setError("Farmer factor must be between 0 and 1"); return; }
-    if (!s.vendor_factor || s.vendor_factor <= 0) { setError("Vendor factor must be greater than 0"); return; }
-    if (s.hamali_per_bag < 0 || s.stationery_flat < 0 || s.default_bhada_per_bag < 0) {
+    // Commit any trailing-dot drafts before validate/save
+    const next: SettingsT = { ...s };
+    (Object.keys(drafts) as NumKey[]).forEach((k) => {
+      const v = drafts[k];
+      if (v === undefined || v === "" || v === ".") return;
+      const num = Number(v.endsWith(".") ? v.slice(0, -1) : v);
+      if (Number.isFinite(num)) (next as any)[k] = num;
+    });
+    if (next.payment_factor <= 0 || next.payment_factor > 1) { setError("Farmer factor must be between 0 and 1"); return; }
+    if (!next.vendor_factor || next.vendor_factor <= 0) { setError("Vendor factor must be greater than 0"); return; }
+    if (next.hamali_per_bag < 0 || next.stationery_flat < 0 || next.default_bhada_per_bag < 0) {
       setError("Rates cannot be negative"); return;
     }
-    if ((s.vendor_margin_per_bag ?? 0) < 0 || (s.commission_per_bag ?? 0) < 0) {
+    if ((next.vendor_margin_per_bag ?? 0) < 0 || (next.commission_per_bag ?? 0) < 0) {
       setError("Vendor rates cannot be negative"); return;
     }
     try {
       setSaving(true);
-      const d = await api.put<SettingsT>("/settings", s);
+      const d = await api.put<SettingsT>("/settings", next);
       setS(d);
+      setDrafts({});
       setMsg("Saved");
     } catch (e: any) {
       setError(e?.detail || "Failed to save");
@@ -75,31 +118,31 @@ export default function SettingsScreen() {
               <Text style={styles.section}>Farmer Patti defaults</Text>
               <Input
                 label="Farmer Commission Factor (0–1)"
-                value={s ? String(s.payment_factor) : ""}
-                onChangeText={(v) => set("payment_factor", v)}
+                value={numValue("payment_factor")}
+                onChangeText={(v) => setNum("payment_factor", v)}
                 keyboardType="decimal-pad"
                 hint="Used only for Farmer Patti. Independent of Vendor Factor."
                 testID="settings-factor"
               />
               <Input
                 label="Hamali per bag (₹)"
-                value={s ? String(s.hamali_per_bag) : ""}
-                onChangeText={(v) => set("hamali_per_bag", v)}
+                value={numValue("hamali_per_bag")}
+                onChangeText={(v) => setNum("hamali_per_bag", v)}
                 keyboardType="decimal-pad"
                 testID="settings-hamali"
               />
               <Input
                 label="Stationery per Patti (₹) — flat"
-                value={s ? String(s.stationery_flat) : ""}
-                onChangeText={(v) => set("stationery_flat", v)}
+                value={numValue("stationery_flat")}
+                onChangeText={(v) => setNum("stationery_flat", v)}
                 keyboardType="decimal-pad"
                 hint="Fixed charge per bill, not per bag."
                 testID="settings-stationery"
               />
               <Input
                 label="Default Bhada per bag (₹)"
-                value={s ? String(s.default_bhada_per_bag) : ""}
-                onChangeText={(v) => set("default_bhada_per_bag", v)}
+                value={numValue("default_bhada_per_bag")}
+                onChangeText={(v) => setNum("default_bhada_per_bag", v)}
                 keyboardType="decimal-pad"
                 hint="Used only if no driver range applies for a lot."
                 testID="settings-bhada"
@@ -108,24 +151,24 @@ export default function SettingsScreen() {
               <Text style={[styles.section, { marginTop: spacing.lg }]}>Vendor Bill defaults</Text>
               <Input
                 label="Vendor Commission Factor"
-                value={s ? String(s.vendor_factor ?? 1) : ""}
-                onChangeText={(v) => set("vendor_factor", v)}
+                value={numValue("vendor_factor", 1)}
+                onChangeText={(v) => setNum("vendor_factor", v)}
                 keyboardType="decimal-pad"
                 hint="Default 1. Editable (e.g. 1.06). Used only for Vendor Bill. Never affects Farmer Patti."
                 testID="settings-vendor-factor"
               />
               <Input
                 label="Vendor Margin / bag (₹)"
-                value={s ? String(s.vendor_margin_per_bag ?? 30) : ""}
-                onChangeText={(v) => set("vendor_margin_per_bag", v)}
+                value={numValue("vendor_margin_per_bag", 30)}
+                onChangeText={(v) => setNum("vendor_margin_per_bag", v)}
                 keyboardType="decimal-pad"
                 hint="Vendor rate = auction × factor + margin. Snapshot on each bill."
                 testID="settings-vendor-margin"
               />
               <Input
                 label="Vendor Commission / bag (₹)"
-                value={s ? String(s.commission_per_bag ?? 10) : ""}
-                onChangeText={(v) => set("commission_per_bag", v)}
+                value={numValue("commission_per_bag", 10)}
+                onChangeText={(v) => setNum("commission_per_bag", v)}
                 keyboardType="decimal-pad"
                 hint="Added as bags × commission on the Vendor Bill total."
                 testID="settings-vendor-commission"
