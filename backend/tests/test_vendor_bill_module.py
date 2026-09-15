@@ -214,7 +214,7 @@ class TestVendorBillCRUD:
         pytest.bill_id = b["id"]
 
     def test_create_vendor_bill_with_factor(self, base_url, shop, seed):
-        """vendor_rate = auction × vendor_factor + margin (defaults 1.06 / 30)."""
+        """vendor_rate = auction × vendor_factor + margin (explicit factor 1.06 in this test)."""
         H = shop["headers"]
         body = {
             "vendor_id": seed["v2"]["id"],
