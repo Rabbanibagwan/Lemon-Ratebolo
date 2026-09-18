@@ -68,7 +68,8 @@ function printProminentName(b: EscPosBuilder, label: string, name: string): void
 }
 
 /**
- * ESC/POS Farmer Patti — presentation mirrors Preview `renderThermalPattiHtml`.
+ * ESC/POS Farmer Patti — presentation mirrors Preview `renderThermalPattiHtml`
+ * and the on-screen App Preview card (patti/[id].tsx).
  * Amounts/fields are unchanged; only size/alignment/emphasis differ for hardware.
  * STATUS is never printed.
  */
@@ -80,27 +81,27 @@ export function encodeFarmerPattiEscPos(
   detailed: boolean = false,
 ): string {
   const b = new EscPosBuilder(paperMm);
-  const date = new Date(p.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
-  shopHead(b, profile);
+  const date = new Date(p.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" });
+  // Match App Preview: shop name UPPERCASE.
+  const shop = (profile?.shop_name || "").trim().toUpperCase();
+  b.init().align("center").bold(true).size("big").line(shop || "LEMON MANDI").size("normal").bold(false);
+  const addr = [profile?.address, profile?.village, profile?.taluk, profile?.district, profile?.state].filter(Boolean).join(", ");
+  if (addr) b.align("center").bold(false).size("normal").wrapped(slipText(addr));
+  if (profile?.mobile) b.align("center").bold(false).size("normal").line(`Mobile: ${slipText(profile.mobile)}`);
 
   b.align("left").hr();
-  // Patti number clearly visible (Preview Patti / Bill · No.).
-  b.bold(true).kv("Patti / Bill", `No. ${p.patti_no}`).bold(false);
+  // PATTI / BILL + number box equivalent.
+  b.bold(true).kv("PATTI / BILL", `NO. ${p.patti_no}`).bold(false);
   b.hr();
 
-  // Same line as Date/Driver: label left, name right (not a two-line block).
-  // Labels are system sentence-case; farmer/driver names keep user casing via slipText.
-  b.size("normal").bold(true).kv("Farmer", slipText(p.farmer_name || "-")).bold(false);
-  b.kv("Date", date);
+  b.size("normal").bold(true).kv("FARMER", slipText(p.farmer_name || "-")).bold(false);
+  b.kv("DATE", date);
   if (p.driver_name) {
     const drv = p.driver_place ? `${p.driver_name} - ${p.driver_place}` : p.driver_name;
-    // Prefer value width so driver names are not clipped on narrow paper.
-    b.kvPreferValue("Driver", slipText(drv));
+    b.kvPreferValue("DRIVER", slipText(drv));
   }
 
-  // Full paper width 3-col table (Preview Lot | Bags x Rate | Amount).
-  // Lot cell bold only — mid/amount stay normal so 58 mm stays readable.
-  b.hr().bold(true).itemRow("Lot", "Bags x Rate", "Amount").bold(false);
+  b.hr().bold(true).itemRow("LOT", "BAGS x RATE", "AMOUNT").bold(false);
   for (const lot of p.lots) {
     lot.sales.forEach((s, i) => {
       const lotNo = i === 0 ? String(lot.lot_no || `${lot.lot_serial_no}/${lot.total_bags}`) : "";
@@ -112,7 +113,6 @@ export function encodeFarmerPattiEscPos(
   const hamaliLabel = detailed
     ? `Hamali (${p.total_bags} x ${rupees(p.hamali_per_bag)})`
     : "Hamali";
-  // Deductions: same base size; only Total deduction bold (ESC/POS has no smaller font).
   b.hr()
     .kv("Gross total", rupees(p.farmer_gross))
     .bold(false)
@@ -123,17 +123,17 @@ export function encodeFarmerPattiEscPos(
     .kv("Total deduction", `- ${rupees(p.deductions_total)}`)
     .bold(false);
 
-  // Preview .netbox — strong box + tall text; slight amount padding for readability.
-  b.emphasizedTotalBox("Net payable", `  ${rupees(p.net_payable)}`);
+  // Preview NET PAYABLE black highlight — reverse/tall boxed total.
+  b.emphasizedTotalBox("NET PAYABLE", `  ${rupees(p.net_payable)}`);
 
-  // Receiver: bold + readable (Preview Receiver is bold wrap, not farmer-sized). Never print STATUS.
-  b.bold(true).size("normal").kv("Receiver", slipText(p.receiver_name || "-")).bold(false);
+  b.bold(true).size("normal").kv("RECEIVER", slipText(p.receiver_name || "-")).bold(false);
 
   const token = (qrToken || p.qr_token || "").trim();
   if (token) {
-    // Slightly larger modules; still fits 58/80/100 printable width.
     b.align("center").feed(1).qr(token, paperMm <= 58 ? 4 : paperMm <= 80 ? 5 : 6);
-    b.size("normal").bold(false).line("Scan at counter").align("left");
+    b.size("normal").bold(true).line("SCAN AT COUNTER").bold(false);
+    b.size("normal").wrapped("Scan to open this Patti and enter/update the receiver name.");
+    b.align("left");
   }
   b.cut();
   return b.toBase64();
