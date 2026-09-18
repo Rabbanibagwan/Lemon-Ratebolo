@@ -215,6 +215,16 @@ export default function SettingsScreen() {
               <Ionicons name="log-out-outline" size={18} color={colors.error} />
               <Text style={styles.logoutText}>LOGOUT</Text>
             </Pressable>
+            {isOwner ? (
+              <Pressable
+                onPress={() => router.push("/delete-account" as any)}
+                style={[styles.logout, { marginTop: spacing.sm }]}
+                testID="settings-delete-account"
+              >
+                <Ionicons name="trash-outline" size={18} color={colors.error} />
+                <Text style={styles.logoutText}>DELETE ACCOUNT</Text>
+              </Pressable>
+            ) : null}
           </View>
         </KeyboardFormScroll>
     </SafeAreaView>

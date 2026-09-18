@@ -91,6 +91,11 @@ export async function getStoredGoogleToken(): Promise<string | null> {
 
 export async function clearGoogleSession(): Promise<void> {
   await secureDel(TOKEN_KEY);
+  try {
+    await AsyncStorage.removeItem(META_KEY);
+  } catch {
+    /* ignore */
+  }
 }
 
 export async function loadLocalBackupStatus(): Promise<LocalBackupStatus> {

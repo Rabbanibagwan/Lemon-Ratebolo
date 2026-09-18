@@ -4060,8 +4060,10 @@ async def create_ledger_txn(body: LedgerTxnIn, user=Depends(owner_only)):
 
 # ---------- Register + CORS ----------
 from backup import register_backup_routes  # noqa: E402
+from account_deletion import register_delete_account_routes  # noqa: E402
 
 register_backup_routes(api, db, current_user, owner_only)
+register_delete_account_routes(api, db, owner_only)
 
 app.include_router(api)
 
