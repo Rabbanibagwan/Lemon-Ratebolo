@@ -20,6 +20,7 @@ import {
 export default function CashBookScreen() {
   const router = useRouter();
   const { session } = useAuth();
+  const isOwner = session?.role === "owner";
   const { workingDate, workingDateISO, displayDate, setWorkingDate } = useWorkingDate();
   const [entries, setEntries] = useState<CashBookEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -36,6 +37,7 @@ export default function CashBookScreen() {
   const shopName = session?.shop_name || "LEMON MANDI";
 
   const load = useCallback(async () => {
+    if (!isOwner) return;
     try {
       setLoading(true);
       setEntries(await loadCashBookEntries());
@@ -44,9 +46,34 @@ export default function CashBookScreen() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isOwner]);
 
-  useFocusEffect(useCallback(() => { load(); }, [load]));
+  useFocusEffect(
+    useCallback(() => {
+      if (!isOwner) return;
+      load();
+    }, [isOwner, load]),
+  );
+
+  if (!isOwner) {
+    return (
+      <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
+        <View style={styles.header}>
+          <Pressable onPress={() => router.back()} hitSlop={12} testID="cash-book-back">
+            <Ionicons name="chevron-back" size={24} color={colors.onSurface} />
+          </Pressable>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.headerTitle}>CASH BOOK</Text>
+          </View>
+        </View>
+        <View style={styles.denied}>
+          <Text style={styles.deniedText} testID="cash-book-owner-only">
+            Cash Book is available only to the Owner.
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   const openEntryActions = (entry: CashBookEntry) => {
     setSelected(entry);
@@ -469,4 +496,6 @@ const styles = StyleSheet.create({
   modalBtnDanger: { color: "#B91C1C" },
   modalDeleteFull: { backgroundColor: "#B91C1C", borderColor: "#7F1D1D", marginBottom: spacing.sm },
   actionErr: { color: "#B91C1C", fontFamily: font.display, fontWeight: "700", marginBottom: spacing.sm },
+  denied: { padding: spacing.lg, paddingTop: spacing.xl },
+  deniedText: { color: colors.onSurface, fontFamily: font.display, fontWeight: "700", fontSize: 15, lineHeight: 22 },
 });

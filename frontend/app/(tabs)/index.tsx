@@ -145,22 +145,26 @@ export default function Home() {
           </>
         )}
 
-        {/* Cash Book — option/card only; full CREDIT/DEBIT UI lives on /cash-book */}
-        <Text style={[styles.sectionLabel, { marginTop: spacing.xl }]}>Cash Book</Text>
-        <Pressable
-          style={({ pressed }) => [styles.cashBookCard, pressed && { backgroundColor: colors.surfaceSecondary }]}
-          onPress={() => router.push("/cash-book")}
-          testID="home-cash-book"
-        >
-          <View style={styles.cashBookIconBox}>
-            <Ionicons name="wallet-outline" size={28} color={colors.onSurface} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.cashBookTitle}>CASH BOOK</Text>
-            <Text style={styles.cashBookDesc}>Credit & debit entries by selected date</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={22} color={colors.muted} />
-        </Pressable>
+        {/* Cash Book — owner only; full CREDIT/DEBIT UI lives on /cash-book */}
+        {isOwner ? (
+          <>
+            <Text style={[styles.sectionLabel, { marginTop: spacing.xl }]}>Cash Book</Text>
+            <Pressable
+              style={({ pressed }) => [styles.cashBookCard, pressed && { backgroundColor: colors.surfaceSecondary }]}
+              onPress={() => router.push("/cash-book")}
+              testID="home-cash-book"
+            >
+              <View style={styles.cashBookIconBox}>
+                <Ionicons name="wallet-outline" size={28} color={colors.onSurface} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.cashBookTitle}>CASH BOOK</Text>
+                <Text style={styles.cashBookDesc}>Credit & debit entries by selected date</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={22} color={colors.muted} />
+            </Pressable>
+          </>
+        ) : null}
 
         <Text style={[styles.sectionLabel, { marginTop: spacing.xl }]}>Quick Actions</Text>
         <View style={styles.quickRow}>

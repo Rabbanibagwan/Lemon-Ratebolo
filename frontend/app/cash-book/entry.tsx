@@ -7,6 +7,7 @@ import { Ionicons } from "@expo/vector-icons";
 
 import { DatePickerModal } from "@/src/components/DatePickerModal";
 import { Button, Input } from "@/src/components/ui";
+import { useAuth } from "@/src/context/AuthContext";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
 import { colors, font, spacing } from "@/src/theme";
 import { formatDisplayDate, parseISODate, toISODate } from "@/src/utils/date";
@@ -20,6 +21,8 @@ import {
 
 export default function CashBookEntryScreen() {
   const router = useRouter();
+  const { session } = useAuth();
+  const isOwner = session?.role === "owner";
   const params = useLocalSearchParams<{ side?: string; id?: string }>();
   const sideParam = (routeParam(params.side) || "CREDIT").toUpperCase();
   const editId = routeParam(params.id) || "";
@@ -37,7 +40,7 @@ export default function CashBookEntryScreen() {
   const [loadingEdit, setLoadingEdit] = useState(isEdit);
 
   useEffect(() => {
-    if (!isEdit) return;
+    if (!isOwner || !isEdit) return;
     let cancelled = false;
     (async () => {
       try {
@@ -59,7 +62,7 @@ export default function CashBookEntryScreen() {
       }
     })();
     return () => { cancelled = true; };
-  }, [isEdit, editId]);
+  }, [isOwner, isEdit, editId]);
 
   const entryDate = useMemo(() => parseISODate(entryDateISO), [entryDateISO]);
   const entryDisplay = useMemo(
@@ -68,6 +71,7 @@ export default function CashBookEntryScreen() {
   );
 
   const save = async () => {
+    if (!isOwner) return;
     setError(null);
     const n = Number(amount);
     if (!(n > 0)) {
@@ -107,6 +111,24 @@ export default function CashBookEntryScreen() {
       setSaving(false);
     }
   };
+
+  if (!isOwner) {
+    return (
+      <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
+        <View style={styles.header}>
+          <Pressable onPress={() => router.back()} hitSlop={12} testID="cash-book-entry-back">
+            <Ionicons name="chevron-back" size={24} color={colors.onSurface} />
+          </Pressable>
+          <Text style={styles.headerTitle}>CASH BOOK</Text>
+        </View>
+        <View style={styles.denied}>
+          <Text style={styles.deniedText} testID="cash-book-entry-owner-only">
+            Cash Book is available only to the Owner.
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
@@ -209,4 +231,6 @@ const styles = StyleSheet.create({
   dateVal: { fontSize: 16, fontFamily: font.mono, fontWeight: "700", color: colors.onSurface },
   hint: { fontSize: 11, color: colors.muted, fontFamily: font.display, marginTop: 6, marginBottom: spacing.md },
   err: { color: "#B91C1C", fontFamily: font.display, fontWeight: "700", marginBottom: spacing.sm },
+  denied: { padding: spacing.lg, paddingTop: spacing.xl },
+  deniedText: { color: colors.onSurface, fontFamily: font.display, fontWeight: "700", fontSize: 15, lineHeight: 22 },
 });
