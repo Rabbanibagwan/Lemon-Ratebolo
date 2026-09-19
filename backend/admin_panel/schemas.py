@@ -46,11 +46,13 @@ class MerchantListItem(BaseModel):
     district: Optional[str] = None
     state: Optional[str] = None
     created_at: Optional[datetime] = None
-    # Optional day activity when date filter applied
+    # Directory fields (NOT operational-date scoped)
     farmer_pattis: Optional[int] = None
     farmer_bags: Optional[int] = None
     vendor_bills: Optional[int] = None
-    purchased_bags: Optional[int] = None
+    purchased_bags: Optional[int] = None  # lifetime PAID bag purchases
+    wallet_purchased_total: Optional[int] = None
+    wallet_free_allocated: Optional[int] = None
 
 
 class MerchantListOut(BaseModel):

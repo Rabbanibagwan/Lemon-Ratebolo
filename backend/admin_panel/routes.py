@@ -105,11 +105,15 @@ def register_admin_routes(api: APIRouter, db) -> None:
         q: Optional[str] = None,
         page: int = Query(1, ge=1),
         page_size: int = Query(50, ge=1, le=200),
+        # Accepted for API compatibility with older admin clients, but intentionally
+        # ignored: the Merchants directory is shops-collection based and must NOT
+        # filter (or N+1 day-metric) by operational business date.
         date: Optional[str] = None,
         date_from: Optional[str] = Query(default=None, alias="from"),
         date_to: Optional[str] = Query(default=None, alias="to"),
         active: Optional[bool] = None,
     ):
+        _ = (date, date_from, date_to)  # unused — directory is not date-scoped
         page, page_size, offset = _page_args(page, page_size)
         match: Dict[str, Any] = {}
         if active is not None:
@@ -129,32 +133,38 @@ def register_admin_routes(api: APIRouter, db) -> None:
             .limit(page_size)
         )
         items: List[MerchantListItem] = []
-        day_metrics = None
-        if date or date_from or date_to:
-            d_from, d_to = resolve_date_range(date, date_from, date_to)
-            day_metrics = True
         async for shop in cur:
-            row = MerchantListItem(
-                shop_id=shop["id"],
-                shop_name=shop.get("shop_name"),
-                username=shop.get("username"),
-                active=shop.get("active"),
-                owner_name=shop.get("owner_name"),
-                mobile=shop.get("mobile"),
-                village=shop.get("village"),
-                district=shop.get("district"),
-                state=shop.get("state"),
-                created_at=shop.get("created_at"),
+            # Lifetime purchased bags (PAID) — not date-scoped
+            lifetime_purchased = 0
+            purch = await db.bag_purchases.aggregate(
+                [
+                    {"$match": {"shop_id": shop["id"], "status": "PAID"}},
+                    {"$group": {"_id": None, "bags": {"$sum": {"$ifNull": ["$bags", 0]}}}},
+                ]
+            ).to_list(1)
+            if purch:
+                lifetime_purchased = int(purch[0].get("bags") or 0)
+
+            wallet = await db.merchant_bag_wallets.find_one(
+                {"shop_id": shop["id"]}, {"_id": 0}
             )
-            if day_metrics:
-                dash = await queries.build_dashboard(
-                    db, date_from=d_from, date_to=d_to, shop_id=shop["id"]
+            items.append(
+                MerchantListItem(
+                    shop_id=shop["id"],
+                    shop_name=shop.get("shop_name"),
+                    username=shop.get("username"),
+                    active=shop.get("active"),
+                    owner_name=shop.get("owner_name"),
+                    mobile=shop.get("mobile"),
+                    village=shop.get("village"),
+                    district=shop.get("district"),
+                    state=shop.get("state"),
+                    created_at=shop.get("created_at"),
+                    purchased_bags=lifetime_purchased,
+                    wallet_purchased_total=int((wallet or {}).get("purchased_total") or 0),
+                    wallet_free_allocated=int((wallet or {}).get("free_allocated") or 0),
                 )
-                row.farmer_pattis = dash["farmer_pattis"]
-                row.farmer_bags = dash["farmer_bags"]
-                row.vendor_bills = dash["vendor_bills"]
-                row.purchased_bags = dash["purchased_bags"]
-            items.append(row)
+            )
         return MerchantListOut(items=items, page=page, page_size=page_size, total_count=total)
 
     @api.get("/admin/merchants/{shop_id}", response_model=MerchantDetailOut)

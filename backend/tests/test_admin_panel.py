@@ -412,3 +412,77 @@ class TestAdminAuthRoutes:
         body = r.json()
         assert body["farmer_pattis"] == 1
         assert body["farmer_bags"] == 2
+
+
+class TestMerchantsDirectoryNotDateFiltered:
+    """GET /api/admin/merchants lists shops; operational date must not hide idle shops."""
+
+    def test_shop_with_no_activity_on_date_still_listed(self):
+        db = FakeDB()
+        admin = _seed_admin(db)
+        db._store["shops"] = [
+            {"id": "s-active", "shop_name": "Busy Mandi", "username": "busy", "active": True},
+            {"id": "s-idle", "shop_name": "Idle Mandi", "username": "idle", "active": True},
+        ]
+        db._store["farmers"] = []
+        db._store["vendors"] = []
+        db._store["pattis"] = [
+            {
+                "id": "p1",
+                "shop_id": "s-active",
+                "date": "2026-09-19",
+                "total_bags": 5,
+                "farmer_id": "f1",
+                "deleted": False,
+            }
+        ]
+        db._store["vendor_bills"] = []
+        db._store["bag_purchases"] = [
+            {"id": "bp1", "shop_id": "s-idle", "status": "PAID", "bags": 40},
+        ]
+        db._store["merchant_bag_wallets"] = [
+            {"shop_id": "s-idle", "purchased_total": 40, "free_allocated": 10},
+            {"shop_id": "s-active", "purchased_total": 0, "free_allocated": 25},
+        ]
+        token = make_admin_token(admin)
+        client = _app(db)
+
+        # Without date
+        r0 = client.get(
+            "/api/admin/merchants?page=1&page_size=50",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r0.status_code == 200, r0.text
+        assert r0.json()["total_count"] == 2
+
+        # With operational date that only has activity for s-active — idle shop must remain
+        r = client.get(
+            "/api/admin/merchants?page=1&page_size=50&date=2026-09-19",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["total_count"] == 2
+        ids = {m["shop_id"] for m in body["items"]}
+        assert ids == {"s-active", "s-idle"}
+
+        idle = next(m for m in body["items"] if m["shop_id"] == "s-idle")
+        assert idle["purchased_bags"] == 40  # lifetime, not day-scoped
+        assert idle["wallet_purchased_total"] == 40
+        assert idle["wallet_free_allocated"] == 10
+
+        # Search / active filters still work
+        rq = client.get(
+            "/api/admin/merchants?q=Idle&page=1&page_size=50&date=2026-09-19",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert rq.status_code == 200
+        assert rq.json()["total_count"] == 1
+        assert rq.json()["items"][0]["shop_id"] == "s-idle"
+
+        ra = client.get(
+            "/api/admin/merchants?active=true&page=1&page_size=50&date=2026-09-19",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert ra.status_code == 200
+        assert ra.json()["total_count"] == 2
