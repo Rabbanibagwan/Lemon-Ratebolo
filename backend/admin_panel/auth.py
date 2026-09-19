@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional
 
 import jwt
 from fastapi import APIRouter, Depends, Header, HTTPException
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from passlib.context import CryptContext
 from pydantic import BaseModel, Field
 
@@ -18,7 +18,18 @@ from admin_panel.audit import write_admin_audit
 logger = logging.getLogger(__name__)
 
 pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_admin = OAuth2PasswordBearer(tokenUrl="/api/admin/auth/login", auto_error=False)
+
+# HTTP Bearer (not OAuth2 password flow): Swagger Authorize accepts a pasted
+# access_token from POST /api/admin/auth/login JSON — it must NOT POST
+# application/x-www-form-urlencoded to the JSON login endpoint (that yields 422).
+admin_bearer = HTTPBearer(
+    auto_error=False,
+    scheme_name="PlatformAdminBearer",
+    description=(
+        "Paste the access_token returned by POST /api/admin/auth/login "
+        "(JSON body: {\"username\", \"password\"})."
+    ),
+)
 
 ADMIN_JWT_ALG = "HS256"
 ADMIN_JWT_TTL_HOURS = int(os.environ.get("PLATFORM_ADMIN_JWT_TTL_HOURS", "12"))
@@ -163,9 +174,10 @@ async def require_platform_admin(
 
 def register_auth_routes(api: APIRouter, db) -> None:
     async def admin_dep(
-        token: Optional[str] = Depends(oauth2_admin),
+        creds: Optional[HTTPAuthorizationCredentials] = Depends(admin_bearer),
         x_admin_key: Optional[str] = Header(default=None, alias="X-Admin-Key"),
     ):
+        token = creds.credentials if creds else None
         return await require_platform_admin(db, token=token, x_admin_key=x_admin_key)
 
     @api.post("/admin/auth/login", response_model=AdminTokenOut)
