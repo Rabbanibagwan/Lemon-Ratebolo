@@ -73,12 +73,20 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       print-color-adjust: exact !important;
       color-adjust: exact !important;
     }
-    html, body {
+    html {
       margin: 0 !important;
       padding: 0 !important;
+      min-height: 0 !important;
+      height: auto !important;
+      background: #d4d4d4 !important;
+      overflow-x: hidden !important;
+    }
+    body {
+      margin: 0 auto !important;
+      padding: 0 !important;
       width: ${m.w}mm !important;
-      max-width: ${m.w}mm !important;
-      min-width: ${m.w}mm !important;
+      max-width: min(${m.w}mm, 100%) !important;
+      min-width: 0 !important;
       min-height: 0 !important;
       height: auto !important;
       background: #fff !important;
@@ -87,19 +95,36 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       font-size: ${m.bodyFs}px;
       font-weight: 700;
       line-height: 1.25;
-      overflow: visible !important;
+      overflow-x: hidden !important;
+      overflow-y: visible !important;
       -webkit-text-stroke: 0.25px #000;
+      box-shadow: 0 0 0 1px #bbb;
     }
     #slip {
       display: block;
-      width: ${m.w}mm !important;
+      width: 100% !important;
       max-width: ${m.w}mm !important;
-      min-width: ${m.w}mm !important;
+      min-width: 0 !important;
       padding: ${m.padY}px ${m.padX}px;
-      margin: 0 !important;
+      margin: 0 auto !important;
       height: auto !important;
       min-height: 0 !important;
       color: #000 !important;
+      overflow-x: hidden !important;
+      box-sizing: border-box !important;
+    }
+    @media print {
+      html { background: #fff !important; }
+      body {
+        width: ${m.w}mm !important;
+        max-width: ${m.w}mm !important;
+        box-shadow: none !important;
+        margin: 0 !important;
+      }
+      #slip {
+        width: ${m.w}mm !important;
+        max-width: ${m.w}mm !important;
+      }
     }
     #slip, #slip * { color: #000 !important; }
     .wrap { word-break: break-word; overflow-wrap: anywhere; }
@@ -127,10 +152,10 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       margin: 3px 0;
       height: 0;
     }
-    /* Three columns fill 100% of the slip — no leftover side gutters, no fixed-px overflow */
+    /* Three columns fill 100% of the slip — minmax(0,…) prevents clipping past paper mm */
     .row {
       display: grid;
-      grid-template-columns: ${m.lotPct}% ${m.midPct}% ${m.rightPct}%;
+      grid-template-columns: minmax(0, ${m.lotPct}fr) minmax(0, ${m.midPct}fr) minmax(0, ${m.rightPct}fr);
       column-gap: 2px;
       align-items: baseline;
       width: 100%;
@@ -138,25 +163,33 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       padding: 1px 0;
       font-size: ${m.rowFs}px;
       font-weight: 700 !important;
+      box-sizing: border-box;
     }
     .row .lot {
       min-width: 0;
+      max-width: 100%;
       font-weight: 900 !important;
       overflow-wrap: anywhere;
+      word-break: break-word;
     }
     .row .mid {
       min-width: 0;
+      max-width: 100%;
       text-align: center;
       font-weight: 700 !important;
       font-size: ${m.rowFs}px !important;
       overflow-wrap: anywhere;
+      word-break: break-word;
     }
     .row .right {
       min-width: 0;
+      max-width: 100%;
       text-align: right;
       font-weight: 700 !important;
       font-size: ${m.rowFs}px !important;
       overflow-wrap: anywhere;
+      word-break: break-word;
+      font-variant-numeric: tabular-nums;
     }
     #slip.patti .row .lot {
       font-size: ${m.lotFs}px !important;
@@ -293,12 +326,58 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       padding-left: ${m.pattiPadX}px !important;
       padding-right: ${m.pattiPadX}px !important;
       box-sizing: border-box !important;
+      border: 2px solid #000 !important;
+    }
+    /* Preview header: shop + PATTI/BILL left, NO. box right */
+    #slip.patti .patti-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 6px;
+      width: 100%;
+    }
+    #slip.patti .patti-head-main {
+      flex: 1;
+      min-width: 0;
+      text-align: left;
+    }
+    #slip.patti .patti-head-main .shop {
+      text-align: left !important;
+      margin: 0 0 2px 0;
+    }
+    #slip.patti .patti-head-main .addr {
+      text-align: left !important;
+    }
+    #slip.patti .kind {
+      font-size: ${Math.max(8, m.bodyFs - 2)}px !important;
+      letter-spacing: 1.5px;
+      font-weight: 800 !important;
+      margin-top: 2px;
+      text-transform: uppercase !important;
+    }
+    #slip.patti .numBox {
+      flex: 0 0 auto;
+      border: 2px solid #000 !important;
+      padding: 3px 8px;
+      text-align: right;
+      min-width: ${m.w <= 58 ? 36 : 44}px;
+    }
+    #slip.patti .numLabel {
+      font-size: ${Math.max(7, m.bodyFs - 3)}px !important;
+      letter-spacing: 1px;
+      font-weight: 800 !important;
+      line-height: 1.1;
+    }
+    #slip.patti .num {
+      font-size: ${m.bigFs}px !important;
+      font-weight: 900 !important;
+      line-height: 1.1;
     }
     #slip.patti .netbox {
-      /* Outline only — no black fill (Vendor Bill keeps filled TOTAL). */
+      /* White fill + black bold text; same border/size/padding as before */
       background: #fff !important;
-      padding: 12px 12px;
-      gap: 14px;
+      padding: 10px 10px;
+      gap: 10px;
     }
     #slip.patti .netbox,
     #slip.patti .netbox * {
@@ -306,24 +385,64 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       -webkit-text-stroke: 0 !important;
     }
     #slip.patti .netbox .bold {
-      letter-spacing: 0.1em;
+      letter-spacing: 0.12em;
       flex-shrink: 0;
-      text-transform: none !important;
+      text-transform: uppercase !important;
+      font-weight: 900 !important;
+      color: #000 !important;
     }
     #slip.patti .netbox .huge {
-      letter-spacing: 0.06em;
+      letter-spacing: 0.04em;
       font-variant-numeric: lining-nums tabular-nums;
-      padding-left: 10px;
+      padding-left: 8px;
       white-space: nowrap;
       text-align: right;
+      font-weight: 900 !important;
+      color: #000 !important;
     }
-    /* Fixed labels: sentence case (override shared uppercase rules). Values keep user casing. */
+    /* QR row matches App Preview: code left, SCAN AT COUNTER + hint right */
+    #slip.patti .qrbox {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 2px solid #000 !important;
+      padding: 8px;
+      margin-top: 8px;
+      width: 100%;
+      max-width: 100%;
+      box-sizing: border-box;
+    }
+    #slip.patti .qrbox img.qr {
+      width: ${Math.min(m.qrPx, m.w <= 58 ? 72 : 96)}px !important;
+      height: ${Math.min(m.qrPx, m.w <= 58 ? 72 : 96)}px !important;
+      margin: 0 !important;
+      flex: 0 0 auto;
+    }
+    #slip.patti .qrtext {
+      flex: 1;
+      min-width: 0;
+    }
+    #slip.patti .qrLbl {
+      font-size: ${Math.max(8, m.bodyFs - 1)}px !important;
+      letter-spacing: 1px;
+      font-weight: 900 !important;
+      text-transform: uppercase !important;
+      line-height: 1.2;
+    }
+    #slip.patti .qrHint {
+      font-size: ${Math.max(7, m.bodyFs - 2)}px !important;
+      font-weight: 400 !important;
+      -webkit-text-stroke: 0 !important;
+      line-height: 1.25;
+      margin-top: 2px;
+    }
+    /* Fixed labels: uppercase like App Preview. Values keep user casing. */
     #slip.patti .kv .k,
     #slip.patti .th,
     #slip.patti .th .lot,
     #slip.patti .th .mid,
     #slip.patti .th .right {
-      text-transform: none !important;
+      text-transform: uppercase !important;
     }
     /* Patti number slightly larger than body, still bold. */
     #slip.patti .patti-no {
@@ -337,12 +456,6 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       image-rendering: pixelated;
       -webkit-print-color-adjust: exact !important;
       print-color-adjust: exact !important;
-    }
-    #slip.patti img.qr {
-      width: ${m.qrPx}px !important;
-      height: ${m.qrPx}px !important;
-      max-width: calc(100% - 2px) !important;
-      margin: 10px auto 4px !important;
     }
     /* Vendor Bill only: Times + printable side margins + same-row vendor name. */
     #slip.vendor,
