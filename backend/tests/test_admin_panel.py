@@ -412,3 +412,57 @@ class TestAdminAuthRoutes:
         body = r.json()
         assert body["farmer_pattis"] == 1
         assert body["farmer_bags"] == 2
+
+    def test_login_rejects_oauth_form_body_still_json_only(self):
+        """Swagger OAuth password flow posts form data; login must remain JSON-only (422)."""
+        db = FakeDB()
+        _seed_admin(db)
+        client = _app(db)
+        r = client.post(
+            "/api/admin/auth/login",
+            data={"username": "admin1", "password": "adminpass1", "grant_type": "password"},
+        )
+        assert r.status_code == 422
+
+    def test_openapi_admin_security_is_http_bearer_not_oauth_password(self):
+        """Swagger Authorize must use HTTP Bearer (paste token), not OAuth password→login."""
+        db = FakeDB()
+        _seed_admin(db)
+        client = _app(db)
+        spec = client.get("/openapi.json").json()
+        schemes = spec["components"]["securitySchemes"]
+        assert "PlatformAdminBearer" in schemes
+        bearer = schemes["PlatformAdminBearer"]
+        assert bearer["type"] == "http"
+        assert bearer["scheme"] == "bearer"
+        for scheme in schemes.values():
+            if scheme.get("type") != "oauth2":
+                continue
+            token_url = ((scheme.get("flows") or {}).get("password") or {}).get("tokenUrl")
+            assert token_url != "/api/admin/auth/login", scheme
+
+    def test_merchants_with_bearer_after_json_login(self):
+        db = FakeDB()
+        _seed_admin(db)
+        db._store["shops"] = [
+            {"id": "s1", "shop_name": "A", "username": "a", "active": True},
+        ]
+        db._store["farmers"] = []
+        db._store["vendors"] = []
+        db._store["pattis"] = []
+        db._store["vendor_bills"] = []
+        db._store["bag_purchases"] = []
+        client = _app(db)
+        login = client.post(
+            "/api/admin/auth/login",
+            json={"username": "admin1", "password": "adminpass1"},
+        )
+        assert login.status_code == 200, login.text
+        token = login.json()["access_token"]
+        assert token
+        r = client.get(
+            "/api/admin/merchants",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["total_count"] == 1

@@ -6,9 +6,9 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPAuthorizationCredentials
 
-from admin_panel.auth import require_platform_admin
+from admin_panel.auth import admin_bearer, require_platform_admin
 from admin_panel.dates import ist_range_utc_window, resolve_date_range
 from admin_panel import queries
 from admin_panel.schemas import (
@@ -30,8 +30,6 @@ from admin_panel.schemas import (
     VendorBillListOut,
 )
 
-oauth2_admin = OAuth2PasswordBearer(tokenUrl="/api/admin/auth/login", auto_error=False)
-
 
 def _page_args(page: int, page_size: int) -> tuple[int, int, int]:
     page = max(1, page)
@@ -51,9 +49,10 @@ async def _shop_name_map(db, shop_ids: List[str]) -> Dict[str, str]:
 
 def register_admin_routes(api: APIRouter, db) -> None:
     async def admin_dep(
-        token: Optional[str] = Depends(oauth2_admin),
+        creds: Optional[HTTPAuthorizationCredentials] = Depends(admin_bearer),
         x_admin_key: Optional[str] = Header(default=None, alias="X-Admin-Key"),
     ):
+        token = creds.credentials if creds else None
         return await require_platform_admin(db, token=token, x_admin_key=x_admin_key)
 
     # ----- Dashboard -----
