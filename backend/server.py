@@ -308,7 +308,7 @@ class Settings(BaseModel):
     detailed_print_format: bool = Field(default=False)  # if true, print formulas next to deductions
     thermal_paper_width_mm: int = Field(default=80, ge=40, le=120)  # 58 / 80 / 100 mm typically
     # Vendor billing defaults (never affect Farmer Patti)
-    vendor_factor: float = Field(default=1.06, gt=0)  # e.g. 1.06 / 1.07 / 1.08 — independent of payment_factor
+    vendor_factor: float = Field(default=1.0, gt=0)  # default 1; editable e.g. 1.06 / 1.07 — independent of payment_factor
     vendor_margin_per_bag: float = Field(default=30.0, ge=0)
     commission_per_bag: float = Field(default=10.0, ge=0)
     vendor_hamali_default: float = Field(default=0.0, ge=0)
@@ -624,7 +624,7 @@ async def signup(body: SignupBody):
     await db.settings.insert_one({
         "shop_id": shop_id, "payment_factor": 0.90, "hamali_per_bag": 10.0,
         "stationery_flat": 5.0, "default_bhada_per_bag": 0.0,
-        "vendor_factor": 1.06, "vendor_margin_per_bag": 30.0, "commission_per_bag": 10.0,
+        "vendor_factor": 1.0, "vendor_margin_per_bag": 30.0, "commission_per_bag": 10.0,
         "vendor_hamali_default": 0.0, "updated_at": now,
     })
     # One-time free bag wallet from Admin settings (never re-granted on reinstall/login).
@@ -680,7 +680,7 @@ class VendorBillIn(BaseModel):
     vendor_id: str
     date: Optional[str] = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     lines: List[VendorBillLineIn] = Field(min_length=1)
-    vendor_factor: float = Field(default=1.06, gt=0)  # snapshotted; independent of farmer payment_factor
+    vendor_factor: float = Field(default=1.0, gt=0)  # default 1; snapshotted; independent of farmer payment_factor
     margin_per_bag: float = Field(ge=0)
     commission_per_bag: float = Field(ge=0)
     hamali: float = Field(ge=0)  # per-bill absolute amount entered by biller
@@ -709,7 +709,7 @@ class VendorBillOut(BaseModel):
     lines: List[VendorBillLineOut]
     total_bags: int
     goods_total: float
-    vendor_factor: float = 1.06
+    vendor_factor: float = 1.0
     margin_per_bag: float
     commission_per_bag: float
     commission_total: float
@@ -1245,7 +1245,7 @@ async def _sync_vendor_bills_for_lot(
         if sale is None:
             sale = next((s for s in sales_docs if s.get("vendor_id") == vendor_id), None)
 
-        factor = float(bill.get("vendor_factor") or 1.06)
+        factor = float(bill.get("vendor_factor") or 1.0)
         margin = float(bill.get("margin_per_bag") or 0)
         commission_per_bag = float(bill.get("commission_per_bag") or 0)
         lines_out: List[dict] = []
@@ -3024,7 +3024,7 @@ async def pending_vendor_bills(user=Depends(current_user), date: Optional[str] =
     must be visible regardless of which working date is selected.
     Amounts use the same vendor-bill formula as create_vendor_bill (settings defaults)."""
     settings_doc = await db.settings.find_one({"shop_id": user["shop_id"]}, {"_id": 0}) or {}
-    factor = float(settings_doc.get("vendor_factor", 1.06))
+    factor = float(settings_doc.get("vendor_factor", 1.0))
     margin = float(settings_doc.get("vendor_margin_per_bag", 30.0))
     commission_per_bag = float(settings_doc.get("commission_per_bag", 10.0))
     hamali_default = float(settings_doc.get("vendor_hamali_default", 0.0))
