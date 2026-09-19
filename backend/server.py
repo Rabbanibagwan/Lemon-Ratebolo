@@ -72,6 +72,14 @@ async def lifespan(app: FastAPI):
             "MongoDB connection failed. Check MONGO_URL, Atlas network access, and TLS."
         ) from e
 
+    # Platform admin panel indexes + optional bootstrap admin
+    try:
+        from admin_panel import startup_admin_panel
+
+        await startup_admin_panel(db)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Startup: admin panel init skipped/failed: %s", e)
+
     # Startup: ensure indexes
     await db.shops.create_index("username", unique=True)
     await db.shops.create_index("id", unique=True)
@@ -4061,9 +4069,11 @@ async def create_ledger_txn(body: LedgerTxnIn, user=Depends(owner_only)):
 # ---------- Register + CORS ----------
 from backup import register_backup_routes  # noqa: E402
 from account_deletion import register_delete_account_routes  # noqa: E402
+from admin_panel import register_platform_admin  # noqa: E402
 
 register_backup_routes(api, db, current_user, owner_only)
 register_delete_account_routes(api, db, owner_only)
+register_platform_admin(api, db)
 
 app.include_router(api)
 

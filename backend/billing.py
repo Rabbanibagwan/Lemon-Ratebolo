@@ -93,9 +93,17 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
     def _admin_key() -> str:
         return (os.environ.get("ADMIN_API_KEY") or os.environ.get("BILLING_ADMIN_KEY") or "lemon-admin-dev").strip()
 
-    async def admin_auth(x_admin_key: Optional[str] = Header(default=None, alias="X-Admin-Key")) -> None:
-        if not x_admin_key or x_admin_key.strip() != _admin_key():
-            raise HTTPException(401, "Invalid admin key")
+    async def admin_auth(
+        authorization: Optional[str] = Header(default=None),
+        x_admin_key: Optional[str] = Header(default=None, alias="X-Admin-Key"),
+    ) -> dict:
+        """Dual auth during migration: Admin JWT Bearer OR legacy X-Admin-Key."""
+        from admin_panel.auth import require_platform_admin
+
+        token = None
+        if authorization and authorization.lower().startswith("bearer "):
+            token = authorization.split(" ", 1)[1].strip()
+        return await require_platform_admin(db, token=token, x_admin_key=x_admin_key)
 
     async def get_platform_settings() -> dict:
         doc = await db.platform_billing_settings.find_one({"id": "default"}, {"_id": 0})
@@ -544,7 +552,7 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
     globals()["get_platform_settings"] = get_platform_settings
 
     @api.get("/admin/billing/settings", response_model=PlatformBillingSettingsOut)
-    async def admin_get_billing_settings(_: None = Depends(admin_auth)):
+    async def admin_get_billing_settings(admin: dict = Depends(admin_auth)):
         s = await get_platform_settings()
         return PlatformBillingSettingsOut(
             price_per_bag=float(s.get("price_per_bag") or 0),
@@ -556,7 +564,10 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
         )
 
     @api.put("/admin/billing/settings", response_model=PlatformBillingSettingsOut)
-    async def admin_put_billing_settings(payload: PlatformBillingSettingsIn, _: None = Depends(admin_auth)):
+    async def admin_put_billing_settings(
+        payload: PlatformBillingSettingsIn,
+        admin: dict = Depends(admin_auth),
+    ):
         now = _utc_now()
         await db.platform_billing_settings.update_one(
             {"id": "default"},
@@ -570,14 +581,45 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
             }},
             upsert=True,
         )
-        return await admin_get_billing_settings()
+        try:
+            from admin_panel.audit import write_admin_audit
+
+            await write_admin_audit(
+                db,
+                admin_user_id=admin.get("id"),
+                admin_username=admin.get("username"),
+                action="BILLING_SETTINGS_UPDATE",
+                resource_type="platform_billing_settings",
+                resource_id="default",
+                metadata={
+                    "price_per_bag": float(payload.price_per_bag),
+                    "new_merchant_free_bags": int(payload.new_merchant_free_bags),
+                    "gst_percent": float(payload.gst_percent),
+                },
+            )
+        except Exception:
+            pass
+        return await admin_get_billing_settings(admin)
 
     @api.get("/admin/billing/merchants")
-    async def admin_list_merchants(_: None = Depends(admin_auth), limit: int = Query(200, ge=1, le=2000)):
+    async def admin_list_merchants(
+        admin: dict = Depends(admin_auth),
+        limit: int = Query(200, ge=1, le=2000),
+        page: int = Query(1, ge=1),
+        page_size: Optional[int] = Query(default=None, ge=1, le=200),
+    ):
         settings = await get_platform_settings()
         price = float(settings.get("price_per_bag") or 0)
+        # Prefer page/page_size when provided; keep legacy limit for scripts.
+        if page_size is not None:
+            skip = (page - 1) * page_size
+            take = page_size
+        else:
+            skip = 0
+            take = limit
         out = []
-        async for shop in db.shops.find({}, {"_id": 0, "password_hash": 0}).limit(limit):
+        cursor = db.shops.find({}, {"_id": 0, "password_hash": 0}).skip(skip).limit(take)
+        async for shop in cursor:
             w = await ensure_wallet(shop["id"])
             view = await _wallet_view(w, price)
             purchases = await db.bag_purchases.aggregate([
