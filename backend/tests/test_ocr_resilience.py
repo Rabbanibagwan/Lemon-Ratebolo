@@ -524,8 +524,8 @@ def test_high_demand_503_rotates_to_valid_fallback():
     assert all(m not in OBSOLETE_GEMINI_MODELS for m in calls)
 
 
-def test_model_candidates_skips_obsolete_and_demotes_25_without_list():
-    """Obsolete models never appear; without ListModels, demote unverified 2.5-* behind 3.5."""
+def test_model_candidates_current_chain_keeps_25_primary_without_list():
+    """Without ListModels, keep gemini-2.5-flash primary; never include obsolete models."""
     with patch.dict(
         "os.environ",
         {
@@ -541,9 +541,8 @@ def test_model_candidates_skips_obsolete_and_demotes_25_without_list():
         assert obsolete not in models
     for obsolete in OBSOLETE_GEMINI_MODELS:
         assert obsolete not in models
-    assert models[0] == "gemini-3.5-flash-lite"
-    assert "gemini-2.5-flash" in models
-    assert models.index("gemini-3.5-flash-lite") < models.index("gemini-2.5-flash")
+    assert models[0] == "gemini-2.5-flash"
+    assert models[:3] == ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.5-flash-lite"]
 
 
 def test_model_candidates_skips_obsolete_env_fallback():
@@ -567,6 +566,8 @@ def test_model_candidates_skips_obsolete_env_fallback():
     assert "gemini-2.0-flash" not in models
     assert "gemini-1.5-flash" not in models
     assert models[0] == DEFAULT_PRIMARY_MODEL
+    assert DEFAULT_FALLBACK_MODEL in models
+    assert DEFAULT_FALLBACK_MODEL_2 in models
 
 
 def test_model_candidates_filters_via_list_models():
@@ -600,7 +601,7 @@ def test_runtime_404_cache_skips_model_on_next_candidates():
         with _patch_list_models(None):
             models = model_candidates()
     assert "gemini-2.5-flash" not in models
-    assert models[0] == DEFAULT_PRIMARY_MODEL
+    assert models[0] == DEFAULT_FALLBACK_MODEL
 
 
 def test_high_demand_payload_message():

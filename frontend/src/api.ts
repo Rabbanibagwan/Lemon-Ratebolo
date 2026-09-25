@@ -282,6 +282,40 @@ export type BagPurchase = {
   status: "PENDING" | "PAID" | string;
   created_at: string;
   paid_at?: string | null;
+  invoice_number?: string | null;
+  payment_ref?: string | null;
+};
+
+export type BagInvoiceBillingTo = {
+  shop_id?: string;
+  shop_name?: string;
+  owner_name?: string;
+  username?: string;
+  mobile?: string;
+  email?: string;
+  address?: string;
+  gst_number?: string;
+  pan_number?: string;
+};
+
+export type BagInvoice = {
+  purchase_id: string;
+  invoice_number: string;
+  invoice_date: string;
+  status: string;
+  billing_to: BagInvoiceBillingTo;
+  seller: { name: string; description?: string };
+  service_hsn_code: string;
+  bags: number;
+  price_per_bag: number;
+  base_amount: number;
+  gst_percent: number;
+  gst_amount: number;
+  total_amount: number;
+  line_description: string;
+  payment_ref?: string | null;
+  paid_at?: string | null;
+  created_at: string;
 };
 
 export type BagUsageRow = {

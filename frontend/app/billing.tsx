@@ -229,8 +229,22 @@ export default function BillingScreen() {
                       {money(p.price_per_bag)}/bag · Base {money(p.base_amount)}
                       {p.gst_amount > 0 ? ` · GST ${money(p.gst_amount)}` : ""} · Total {money(p.total_amount)}
                     </Text>
+                    {p.status === "PAID" && p.invoice_number ? (
+                      <Text style={styles.histSub}>Invoice {p.invoice_number}</Text>
+                    ) : null}
                   </View>
-                  <Text style={[styles.status, p.status === "PAID" && styles.statusPaid]}>{p.status}</Text>
+                  <View style={styles.histActions}>
+                    <Text style={[styles.status, p.status === "PAID" && styles.statusPaid]}>{p.status}</Text>
+                    {p.status === "PAID" ? (
+                      <Pressable
+                        onPress={() => router.push({ pathname: "/billing-invoice", params: { id: p.id } })}
+                        style={styles.invoiceBtn}
+                        testID={`purchase-invoice-${p.id}`}
+                      >
+                        <Text style={styles.invoiceBtnText}>INVOICE</Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
                 </View>
               ))
             )}
@@ -240,6 +254,23 @@ export default function BillingScreen() {
         {tab === "usage" ? (
           <View style={styles.card}>
             <Text style={styles.cardLabel}>BAG USAGE</Text>
+            {wallet ? (
+              <View style={styles.usageSummary} testID="usage-free-paid-summary">
+                <View style={styles.usageBlock} testID="usage-free-block">
+                  <Text style={styles.usageBlockTitle}>FREE BAGS</Text>
+                  <Text style={styles.usageBlockLine}>
+                    Used {wallet.free_used.toLocaleString()} | Remaining {wallet.free_remaining.toLocaleString()}
+                  </Text>
+                </View>
+                <View style={styles.usageBlock} testID="usage-paid-block">
+                  <Text style={styles.usageBlockTitle}>PAID BAGS</Text>
+                  <Text style={styles.usageBlockLine}>
+                    Used {wallet.purchased_used.toLocaleString()} | Remaining {wallet.purchased_remaining.toLocaleString()}
+                  </Text>
+                </View>
+              </View>
+            ) : null}
+            <Text style={[styles.cardLabel, { marginTop: spacing.sm }]}>USAGE HISTORY</Text>
             {usage.length === 0 ? (
               <Text style={styles.hint}>No usage yet.</Text>
             ) : (
@@ -329,6 +360,29 @@ const styles = StyleSheet.create({
   },
   histTitle: { fontSize: 14, fontWeight: "800", fontFamily: font.display, color: colors.onSurface },
   histSub: { fontSize: 12, color: colors.muted, fontFamily: font.mono, marginTop: 2 },
+  histActions: { alignItems: "flex-end", gap: 6 },
+  invoiceBtn: {
+    borderWidth: 2,
+    borderColor: colors.borderStrong,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  invoiceBtnText: { fontSize: 11, fontWeight: "900", letterSpacing: 1, fontFamily: font.display, color: colors.onSurface },
+  usageSummary: { gap: spacing.sm, marginBottom: spacing.sm },
+  usageBlock: {
+    borderWidth: 2,
+    borderColor: colors.borderStrong,
+    padding: spacing.sm,
+    gap: 4,
+  },
+  usageBlockTitle: {
+    fontSize: 11,
+    letterSpacing: 1.4,
+    fontWeight: "900",
+    fontFamily: font.display,
+    color: colors.muted,
+  },
+  usageBlockLine: { fontSize: 15, fontWeight: "800", fontFamily: font.mono, color: colors.onSurface },
   status: { fontSize: 11, fontWeight: "800", fontFamily: font.display, color: colors.muted },
   statusPaid: { color: "#15803D" },
 });

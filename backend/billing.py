@@ -28,13 +28,15 @@ def _round2(n: float) -> float:
 
 _DEFAULT_PRICE = 0.25
 _DEFAULT_FREE = 1000
-_DEFAULT_GST = 0.0
+_DEFAULT_GST = 18.0
+_DEFAULT_SERVICE_HSN = "998399"  # Other information technology services (configurable)
 
 
 class PlatformBillingSettingsIn(BaseModel):
     price_per_bag: float = Field(ge=0, le=1000)
     new_merchant_free_bags: int = Field(ge=0, le=10_000_000)
-    gst_percent: float = Field(default=0, ge=0, le=100)
+    gst_percent: float = Field(default=18.0, ge=0, le=100)
+    service_hsn_code: str = Field(default=_DEFAULT_SERVICE_HSN, min_length=4, max_length=16)
     allow_test_payments: bool = True
     billing_active: bool = True
 
@@ -43,6 +45,7 @@ class PlatformBillingSettingsOut(BaseModel):
     price_per_bag: float
     new_merchant_free_bags: int
     gst_percent: float
+    service_hsn_code: str
     allow_test_payments: bool
     billing_active: bool
     updated_at: Optional[datetime] = None
@@ -76,6 +79,29 @@ class PurchaseOut(BaseModel):
     status: str
     created_at: datetime
     paid_at: Optional[datetime] = None
+    invoice_number: Optional[str] = None
+    payment_ref: Optional[str] = None
+
+
+class BagInvoiceOut(BaseModel):
+    """Tax invoice for a PAID bag purchase — built from real purchase + shop data."""
+    purchase_id: str
+    invoice_number: str
+    invoice_date: datetime
+    status: str
+    billing_to: dict
+    seller: dict
+    service_hsn_code: str
+    bags: int
+    price_per_bag: float
+    base_amount: float
+    gst_percent: float
+    gst_amount: float
+    total_amount: float
+    line_description: str
+    payment_ref: Optional[str] = None
+    paid_at: Optional[datetime] = None
+    created_at: datetime
 
 
 def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
@@ -114,6 +140,7 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
                 "price_per_bag": _DEFAULT_PRICE,
                 "new_merchant_free_bags": _DEFAULT_FREE,
                 "gst_percent": _DEFAULT_GST,
+                "service_hsn_code": _DEFAULT_SERVICE_HSN,
                 "allow_test_payments": True,
                 "billing_active": True,
                 "updated_at": now,
@@ -122,7 +149,92 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
                 {"id": "default"}, {"$setOnInsert": doc}, upsert=True,
             )
             doc = await db.platform_billing_settings.find_one({"id": "default"}, {"_id": 0}) or doc
+        # Backfill configurable HSN if missing on older settings docs.
+        if not (doc.get("service_hsn_code") or "").strip():
+            await db.platform_billing_settings.update_one(
+                {"id": "default"},
+                {"$set": {"service_hsn_code": _DEFAULT_SERVICE_HSN}},
+            )
+            doc["service_hsn_code"] = _DEFAULT_SERVICE_HSN
         return doc
+
+    def _invoice_number_for(purchase: dict) -> str:
+        existing = (purchase.get("invoice_number") or "").strip()
+        if existing:
+            return existing
+        paid = purchase.get("paid_at") or purchase.get("created_at") or _utc_now()
+        if isinstance(paid, str):
+            try:
+                paid = datetime.fromisoformat(paid.replace("Z", "+00:00"))
+            except Exception:
+                paid = _utc_now()
+        if not isinstance(paid, datetime):
+            paid = _utc_now()
+        if paid.tzinfo is None:
+            paid = paid.replace(tzinfo=timezone.utc)
+        short = str(purchase.get("id") or _uid()).replace("-", "")[:8].upper()
+        return f"INV-{paid.strftime('%Y%m%d')}-{short}"
+
+    async def _build_bag_invoice(purchase: dict, shop: dict, settings: dict) -> dict:
+        inv_no = _invoice_number_for(purchase)
+        # Persist invoice_number once for PAID purchases so admin/merchant share the same number.
+        if purchase.get("status") == "PAID" and not (purchase.get("invoice_number") or "").strip():
+            await db.bag_purchases.update_one(
+                {"id": purchase["id"]},
+                {"$set": {"invoice_number": inv_no}},
+            )
+            purchase["invoice_number"] = inv_no
+
+        addr_parts = [
+            shop.get("address"),
+            shop.get("village"),
+            shop.get("taluk"),
+            shop.get("district"),
+            shop.get("state"),
+        ]
+        address = ", ".join(str(p).strip() for p in addr_parts if p and str(p).strip())
+        billing_to = {
+            "shop_id": shop.get("id") or purchase.get("shop_id"),
+            "shop_name": shop.get("shop_name") or "",
+            "owner_name": shop.get("owner_name") or "",
+            "username": shop.get("username") or "",
+            "mobile": shop.get("mobile") or "",
+            "email": shop.get("email") or "",
+            "address": address,
+            "gst_number": shop.get("gst_number") or "",
+            "pan_number": shop.get("pan_number") or "",
+        }
+        seller = {
+            "name": "Lemon Mandi",
+            "description": "Prepaid bag balance platform",
+        }
+        bags = int(purchase.get("bags") or 0)
+        price = float(purchase.get("price_per_bag") or 0)
+        base = float(purchase.get("base_amount") if purchase.get("base_amount") is not None else _round2(bags * price))
+        gst_pct = float(purchase.get("gst_percent") if purchase.get("gst_percent") is not None else float(settings.get("gst_percent") or _DEFAULT_GST))
+        gst_amt = float(purchase.get("gst_amount") if purchase.get("gst_amount") is not None else _round2(base * gst_pct / 100.0))
+        total = float(purchase.get("total_amount") if purchase.get("total_amount") is not None else _round2(base + gst_amt))
+        hsn = (settings.get("service_hsn_code") or _DEFAULT_SERVICE_HSN).strip() or _DEFAULT_SERVICE_HSN
+        inv_date = purchase.get("paid_at") or purchase.get("created_at") or _utc_now()
+        return {
+            "purchase_id": purchase["id"],
+            "invoice_number": inv_no,
+            "invoice_date": inv_date,
+            "status": purchase.get("status") or "",
+            "billing_to": billing_to,
+            "seller": seller,
+            "service_hsn_code": hsn,
+            "bags": bags,
+            "price_per_bag": price,
+            "base_amount": base,
+            "gst_percent": gst_pct,
+            "gst_amount": gst_amt,
+            "total_amount": total,
+            "line_description": f"Prepaid bag balance — {bags} bags",
+            "payment_ref": purchase.get("payment_ref"),
+            "paid_at": purchase.get("paid_at"),
+            "created_at": purchase.get("created_at") or inv_date,
+        }
 
     async def _active_patti_bags_used(shop_id: str) -> int:
         """Authoritative used bags = sum(total_bags) on non-deleted Pattis for this shop."""
@@ -557,7 +669,8 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
         return PlatformBillingSettingsOut(
             price_per_bag=float(s.get("price_per_bag") or 0),
             new_merchant_free_bags=int(s.get("new_merchant_free_bags") or 0),
-            gst_percent=float(s.get("gst_percent") or 0),
+            gst_percent=float(s.get("gst_percent") if s.get("gst_percent") is not None else _DEFAULT_GST),
+            service_hsn_code=(s.get("service_hsn_code") or _DEFAULT_SERVICE_HSN).strip() or _DEFAULT_SERVICE_HSN,
             allow_test_payments=bool(s.get("allow_test_payments", True)),
             billing_active=bool(s.get("billing_active", True)),
             updated_at=s.get("updated_at"),
@@ -569,12 +682,14 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
         admin: dict = Depends(admin_auth),
     ):
         now = _utc_now()
+        hsn = (payload.service_hsn_code or _DEFAULT_SERVICE_HSN).strip() or _DEFAULT_SERVICE_HSN
         await db.platform_billing_settings.update_one(
             {"id": "default"},
             {"$set": {
                 "price_per_bag": float(payload.price_per_bag),
                 "new_merchant_free_bags": int(payload.new_merchant_free_bags),
                 "gst_percent": float(payload.gst_percent),
+                "service_hsn_code": hsn,
                 "allow_test_payments": bool(payload.allow_test_payments),
                 "billing_active": bool(payload.billing_active),
                 "updated_at": now,
@@ -595,6 +710,7 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
                     "price_per_bag": float(payload.price_per_bag),
                     "new_merchant_free_bags": int(payload.new_merchant_free_bags),
                     "gst_percent": float(payload.gst_percent),
+                    "service_hsn_code": hsn,
                 },
             )
         except Exception:
@@ -648,7 +764,8 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
         s = await get_platform_settings()
         return {
             "price_per_bag": float(s.get("price_per_bag") or 0),
-            "gst_percent": float(s.get("gst_percent") or 0),
+            "gst_percent": float(s.get("gst_percent") if s.get("gst_percent") is not None else _DEFAULT_GST),
+            "service_hsn_code": (s.get("service_hsn_code") or _DEFAULT_SERVICE_HSN).strip() or _DEFAULT_SERVICE_HSN,
             "new_merchant_free_bags": int(s.get("new_merchant_free_bags") or 0),
         }
 
@@ -656,7 +773,7 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
     async def create_purchase(payload: PurchaseCreateIn, user=Depends(owner_only)):
         settings = await get_platform_settings()
         price = float(settings.get("price_per_bag") or 0)
-        gst_pct = float(settings.get("gst_percent") or 0)
+        gst_pct = float(settings.get("gst_percent") if settings.get("gst_percent") is not None else _DEFAULT_GST)
         bags = int(payload.bags)
         base = _round2(bags * price)
         gst = _round2(base * gst_pct / 100.0)
@@ -675,6 +792,7 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
             "created_at": now,
             "paid_at": None,
             "payment_ref": None,
+            "invoice_number": None,
         }
         await db.bag_purchases.insert_one(doc)
         doc.pop("_id", None)
@@ -691,11 +809,12 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
         if not purchase:
             raise HTTPException(404, "Purchase not found")
         if purchase.get("status") == "PAID":
-            return PurchaseOut(**purchase)
+            return PurchaseOut(**{**purchase, "invoice_number": purchase.get("invoice_number") or _invoice_number_for(purchase)})
         if purchase.get("status") != "PENDING":
             raise HTTPException(400, f"Cannot confirm purchase in status {purchase.get('status')}")
 
         now = _utc_now()
+        inv_no = _invoice_number_for({**purchase, "paid_at": now})
         for _ in range(8):
             w = await ensure_wallet(user["shop_id"])
             ver = int(w.get("version") or 0)
@@ -715,6 +834,7 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
                     "paid_at": now,
                     "payment_ref": f"TEST-{purchase_id[:8]}",
                     "payment_provider": "TEST",
+                    "invoice_number": inv_no,
                 }},
                 return_document=True,
                 projection={"_id": 0},
@@ -734,7 +854,27 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
         cur = db.bag_purchases.find(
             {"shop_id": user["shop_id"]}, {"_id": 0},
         ).sort("created_at", -1).limit(limit)
-        return [PurchaseOut(**d) async for d in cur]
+        out = []
+        async for d in cur:
+            if d.get("status") == "PAID" and not (d.get("invoice_number") or "").strip():
+                d["invoice_number"] = _invoice_number_for(d)
+            out.append(PurchaseOut(**d))
+        return out
+
+    @api.get("/billing/purchases/{purchase_id}/invoice", response_model=BagInvoiceOut)
+    async def get_purchase_invoice(purchase_id: str, user=Depends(owner_only)):
+        purchase = await db.bag_purchases.find_one(
+            {"id": purchase_id, "shop_id": user["shop_id"]}, {"_id": 0},
+        )
+        if not purchase:
+            raise HTTPException(404, "Purchase not found")
+        if purchase.get("status") != "PAID":
+            raise HTTPException(400, "Invoice is available only for paid purchases")
+        shop = await db.shops.find_one({"id": user["shop_id"]}, {"_id": 0, "password_hash": 0})
+        if not shop:
+            raise HTTPException(404, "Shop not found")
+        settings = await get_platform_settings()
+        return BagInvoiceOut(**(await _build_bag_invoice(purchase, shop, settings)))
 
     @api.get("/billing/usage")
     async def list_usage(user=Depends(owner_only), limit: int = Query(200, ge=1, le=1000)):

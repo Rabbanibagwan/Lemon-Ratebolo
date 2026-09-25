@@ -152,9 +152,11 @@ class PurchaseListItem(BaseModel):
     bags: int
     price_per_bag: float
     base_amount: float
+    gst_percent: float = 0
     gst_amount: float
     total_amount: float
     status: str
+    invoice_number: Optional[str] = None
     created_at: Optional[datetime] = None
     paid_at: Optional[datetime] = None
     event_at: Optional[datetime] = None
