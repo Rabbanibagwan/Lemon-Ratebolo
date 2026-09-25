@@ -361,6 +361,17 @@ def register_admin_routes(api: APIRouter, db) -> None:
         items = []
         for d in docs:
             d.pop("_id", None)
+            inv = (d.get("invoice_number") or "").strip() or None
+            if not inv and d.get("status") == "PAID":
+                paid = d.get("paid_at") or d.get("created_at")
+                short = str(d.get("id") or "").replace("-", "")[:8].upper()
+                day = ""
+                try:
+                    if paid is not None:
+                        day = paid.strftime("%Y%m%d") if hasattr(paid, "strftime") else str(paid)[:10].replace("-", "")
+                except Exception:
+                    day = ""
+                inv = f"INV-{day or 'NA'}-{short}" if short else None
             items.append(
                 PurchaseListItem(
                     id=d["id"],
@@ -369,9 +380,11 @@ def register_admin_routes(api: APIRouter, db) -> None:
                     bags=int(d.get("bags") or 0),
                     price_per_bag=float(d.get("price_per_bag") or 0),
                     base_amount=float(d.get("base_amount") or 0),
+                    gst_percent=float(d.get("gst_percent") or 0),
                     gst_amount=float(d.get("gst_amount") or 0),
                     total_amount=float(d.get("total_amount") or 0),
                     status=d.get("status") or "",
+                    invoice_number=inv,
                     created_at=d.get("created_at"),
                     paid_at=d.get("paid_at"),
                     event_at=d.get("_event_at"),
@@ -384,7 +397,47 @@ def register_admin_routes(api: APIRouter, db) -> None:
         d = await db.bag_purchases.find_one({"id": purchase_id}, {"_id": 0})
         if not d:
             raise HTTPException(404, "Purchase not found")
-        return d
+        shop = await db.shops.find_one({"id": d.get("shop_id")}, {"_id": 0, "password_hash": 0}) or {}
+        settings = await db.platform_billing_settings.find_one({"id": "default"}, {"_id": 0}) or {}
+        hsn = (settings.get("service_hsn_code") or "998399").strip() or "998399"
+        inv = (d.get("invoice_number") or "").strip()
+        if not inv and d.get("status") == "PAID":
+            paid = d.get("paid_at") or d.get("created_at")
+            short = str(d.get("id") or "").replace("-", "")[:8].upper()
+            day = ""
+            try:
+                if paid is not None:
+                    day = paid.strftime("%Y%m%d") if hasattr(paid, "strftime") else str(paid)[:10].replace("-", "")
+            except Exception:
+                day = ""
+            inv = f"INV-{day or 'NA'}-{short}"
+            await db.bag_purchases.update_one({"id": purchase_id}, {"$set": {"invoice_number": inv}})
+            d["invoice_number"] = inv
+        addr_parts = [shop.get("address"), shop.get("village"), shop.get("taluk"), shop.get("district"), shop.get("state")]
+        address = ", ".join(str(p).strip() for p in addr_parts if p and str(p).strip())
+        return {
+            **d,
+            "service_hsn_code": hsn,
+            "invoice_number": d.get("invoice_number") or inv,
+            "billing_to": {
+                "shop_id": shop.get("id") or d.get("shop_id"),
+                "shop_name": shop.get("shop_name") or "",
+                "owner_name": shop.get("owner_name") or "",
+                "username": shop.get("username") or "",
+                "mobile": shop.get("mobile") or "",
+                "email": shop.get("email") or "",
+                "address": address,
+                "gst_number": shop.get("gst_number") or "",
+            },
+            "calculation": {
+                "bags": int(d.get("bags") or 0),
+                "price_per_bag": float(d.get("price_per_bag") or 0),
+                "base_amount": float(d.get("base_amount") or 0),
+                "gst_percent": float(d.get("gst_percent") or 0),
+                "gst_amount": float(d.get("gst_amount") or 0),
+                "total_amount": float(d.get("total_amount") or 0),
+            },
+        }
 
     # ----- Reports -----
     @api.get("/admin/reports/merchant-wise", response_model=ReportMerchantDailyOut)

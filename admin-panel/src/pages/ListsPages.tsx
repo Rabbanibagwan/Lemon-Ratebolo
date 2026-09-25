@@ -63,11 +63,64 @@ export function VendorBillsPage() {
 }
 
 export function PurchasesPage() {
+  const nav = useNavigate();
   const s = useList("/admin/purchases");
+  const [detail, setDetail] = useState<any | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
+
+  async function openInvoice(id: string) {
+    setDetailError(null);
+    try {
+      setDetail(await api(`/admin/purchases/${id}`));
+    } catch (err) {
+      const e = err as ApiError;
+      if (e.status === 401) { setToken(null); nav("/login"); return; }
+      setDetailError(e.detail);
+    }
+  }
+
   return (
-    <ListShell title="Purchases" s={s} columns={[
-      ["event_at", "Event At"], ["shop_name", "Shop"], ["bags", "Bags"], ["total_amount", "Amount"], ["status", "Status"],
-    ]} />
+    <>
+      <ListShell
+        title="Purchases"
+        s={s}
+        columns={[
+          ["event_at", "Event At"],
+          ["shop_name", "Shop"],
+          ["invoice_number", "Invoice"],
+          ["bags", "Bags"],
+          ["total_amount", "Amount"],
+          ["status", "Status"],
+        ]}
+        onRowClick={(row) => row?.id && openInvoice(String(row.id))}
+      />
+      {detailError ? <div style={{ padding: 12 }}><ErrorBanner message={detailError} /></div> : null}
+      {detail ? (
+        <div style={modalOverlay} onClick={() => setDetail(null)}>
+          <div style={modalCard} onClick={(e) => e.stopPropagation()} data-testid="admin-purchase-invoice">
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
+              <strong>Bag Balance Invoice</strong>
+              <button onClick={() => setDetail(null)} style={{ border: "2px solid #111", padding: "4px 10px", fontWeight: 700 }}>Close</button>
+            </div>
+            <div style={{ fontSize: 13, lineHeight: 1.5 }}>
+              <div><b>Invoice:</b> {detail.invoice_number || "—"}</div>
+              <div><b>Status:</b> {detail.status}</div>
+              <div style={{ marginTop: 8 }}><b>Billing To</b></div>
+              <div>{detail.billing_to?.shop_name || "—"} {detail.billing_to?.username ? `(@${detail.billing_to.username})` : ""}</div>
+              {detail.billing_to?.owner_name ? <div>Owner: {detail.billing_to.owner_name}</div> : null}
+              {detail.billing_to?.address ? <div>{detail.billing_to.address}</div> : null}
+              {detail.billing_to?.mobile ? <div>{detail.billing_to.mobile}</div> : null}
+              {detail.billing_to?.gst_number ? <div>GSTIN: {detail.billing_to.gst_number}</div> : null}
+              <div style={{ marginTop: 8 }}><b>Service HSN:</b> {detail.service_hsn_code || "—"}</div>
+              <div><b>Bags × Price:</b> {detail.calculation?.bags ?? detail.bags} × ₹{detail.calculation?.price_per_bag ?? detail.price_per_bag} = ₹{detail.calculation?.base_amount ?? detail.base_amount}</div>
+              <div><b>GST ({detail.calculation?.gst_percent ?? detail.gst_percent}%):</b> ₹{detail.calculation?.gst_amount ?? detail.gst_amount}</div>
+              <div><b>Total Amount:</b> ₹{detail.calculation?.total_amount ?? detail.total_amount}</div>
+              <div style={{ marginTop: 8, color: "#666" }}>Purchase ID: {detail.id} · Shop: {detail.shop_id}</div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -189,6 +242,14 @@ export function SettingsPage() {
               />
             </label>
           ))}
+          <label style={{ fontWeight: 700, fontSize: 12 }}>
+            service_hsn_code
+            <input
+              style={{ display: "block", width: "100%", border: "2px solid #111", padding: 8, marginTop: 4 }}
+              value={form.service_hsn_code ?? "998399"}
+              onChange={(e) => setForm({ ...form, service_hsn_code: e.target.value })}
+            />
+          </label>
           <label style={{ fontWeight: 700 }}>
             <input type="checkbox" checked={!!form.allow_test_payments} onChange={(e) => setForm({ ...form, allow_test_payments: e.target.checked })} /> Allow test payments
           </label>
@@ -244,7 +305,19 @@ export function AuditPage() {
   );
 }
 
-function ListShell({ title, s, columns, hideSearch }: { title: string; s: ReturnType<typeof useList>; columns: [string, string][]; hideSearch?: boolean }) {
+function ListShell({
+  title,
+  s,
+  columns,
+  hideSearch,
+  onRowClick,
+}: {
+  title: string;
+  s: ReturnType<typeof useList>;
+  columns: [string, string][];
+  hideSearch?: boolean;
+  onRowClick?: (row: any) => void;
+}) {
   return (
     <Shell title={title} actions={
       <>
@@ -261,7 +334,11 @@ function ListShell({ title, s, columns, hideSearch }: { title: string; s: Return
           </thead>
           <tbody>
             {s.items.map((row, i) => (
-              <tr key={row.id || row.shop_id || i}>
+              <tr
+                key={row.id || row.shop_id || i}
+                onClick={onRowClick ? () => onRowClick(row) : undefined}
+                style={onRowClick ? { cursor: "pointer" } : undefined}
+              >
                 {columns.map(([key]) => <td key={key} style={td}>{formatCell(row[key])}</td>)}
               </tr>
             ))}
@@ -286,3 +363,21 @@ function formatCell(v: unknown) {
 const table: React.CSSProperties = { width: "100%", borderCollapse: "collapse", background: "#fff", border: "2px solid #111" };
 const th: React.CSSProperties = { textAlign: "left", borderBottom: "2px solid #111", padding: 8, fontSize: 12 };
 const td: React.CSSProperties = { borderBottom: "1px solid #ddd", padding: 8, fontSize: 13 };
+const modalOverlay: React.CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(0,0,0,0.35)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 16,
+  zIndex: 50,
+};
+const modalCard: React.CSSProperties = {
+  background: "#fff",
+  border: "2px solid #111",
+  padding: 16,
+  width: "min(520px, 100%)",
+  maxHeight: "80vh",
+  overflow: "auto",
+};
