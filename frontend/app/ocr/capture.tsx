@@ -263,7 +263,7 @@ export default function OcrCapture() {
 
     if (code === "OCR_RATE_LIMIT" || cls === "rate_limit") {
       return {
-        message: "OCR service is temporarily busy. Retrying automatically...",
+        message: "OCR service is temporarily rate-limited. Retrying automatically...",
         retryable: true,
         uiState: "TEMPORARILY_UNAVAILABLE",
       };
@@ -286,13 +286,39 @@ export default function OcrCapture() {
       return { message: OCR_CONFIG_MSG, retryable: false, uiState: "FAILED" };
     }
     if (
+      detailObj?.high_demand === true ||
+      /high demand|experiencing high demand/i.test(combinedUpstream)
+    ) {
+      return {
+        message:
+          (typeof detailObj?.message === "string" && detailObj.message) ||
+          "OCR model is busy due to high demand. Retrying with a backup model...",
+        retryable: true,
+        uiState: "TEMPORARILY_UNAVAILABLE",
+      };
+    }
+    if (
       upstreamStatus === 429 ||
       /resource_exhausted|quota|rate limit|too many requests|exceeded your current quota/i.test(combinedUpstream)
     ) {
       return {
-        message: "OCR service is temporarily busy. Please try again in a moment.",
+        message: "OCR service is temporarily rate-limited. Retrying automatically...",
         retryable: true,
         uiState: "TEMPORARILY_UNAVAILABLE",
+      };
+    }
+    if (code === "OCR_TIMEOUT" || cls === "timeout") {
+      return {
+        message: "OCR request timed out. Please try again.",
+        retryable: true,
+        uiState: "TEMPORARILY_UNAVAILABLE",
+      };
+    }
+    if (code === "OCR_MALFORMED" || cls === "malformed" || upstreamStatus === 400) {
+      return {
+        message: "OCR request was rejected. Please check the image and try again.",
+        retryable: false,
+        uiState: "FAILED",
       };
     }
     if (

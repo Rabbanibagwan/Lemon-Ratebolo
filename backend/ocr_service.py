@@ -52,10 +52,10 @@ USER_MESSAGES: Dict[OcrErrorClass, str] = {
     ),
     OcrErrorClass.BILLING: "OCR billing/quota configuration requires attention.",
     OcrErrorClass.AUTH: "OCR service configuration error. Please contact administrator.",
-    OcrErrorClass.TIMEOUT: "OCR is taking longer than usual. Please try again.",
+    OcrErrorClass.TIMEOUT: "OCR request timed out. Please try again.",
     OcrErrorClass.TEMP_UNAVAILABLE: "OCR service is temporarily unavailable. Retrying...",
-    OcrErrorClass.MALFORMED: "OCR could not read this image. Please try a clearer photo.",
-    OcrErrorClass.NETWORK: "Unable to reach OCR service. Please check connectivity and try again.",
+    OcrErrorClass.MALFORMED: "OCR request was rejected. Please check the image and try again.",
+    OcrErrorClass.NETWORK: "Unable to reach OCR server. Please check the connection.",
     OcrErrorClass.OTHER: "OCR provider error. Please try again shortly.",
 }
 
@@ -229,12 +229,14 @@ def classify_provider_error(
             snippet,
         )
 
-    if status_code in (503, 502, 504) or "unavailable" in low or "overloaded" in low:
+    if status_code in (503, 502, 504) or "unavailable" in low or "overloaded" in low or "high demand" in low:
+        # High-demand 503s are transient — short retry then switch model.
+        default_ra = 2.0 if "high demand" in low else 5.0
         return ClassifiedOcrError(
             OcrErrorClass.TEMP_UNAVAILABLE,
             status_code,
             True,
-            retry_after or 5.0,
+            retry_after or default_ra,
             provider,
             model,
             USER_MESSAGES[OcrErrorClass.TEMP_UNAVAILABLE],
@@ -284,16 +286,21 @@ class OcrServiceError(RuntimeError):
             OcrErrorClass.NETWORK: "OCR_NETWORK",
             OcrErrorClass.OTHER: "OCR_UPSTREAM",
         }
+        # Prefer a clearer user message for Gemini high-demand 503.
+        message = c.message
+        if is_high_demand_503(c):
+            message = "OCR model is busy due to high demand. Retrying with a backup model..."
         return {
             "code": code_map.get(c.error_class, "OCR_UPSTREAM"),
             "class": c.error_class.value,
-            "message": c.message,
+            "message": message,
             "retryable": c.retryable,
             "retry_after_seconds": c.retry_after_seconds,
             "provider": c.provider,
             "model": c.model,
             "status_code": c.http_status,
             "upstream_body": c.upstream_snippet[:300],
+            "high_demand": is_high_demand_503(c),
         }
 
 
@@ -461,6 +468,40 @@ def primary_model() -> str:
 
 def fallback_model() -> str:
     return (os.environ.get("GEMINI_OCR_FALLBACK_MODEL") or "gemini-2.0-flash").strip()
+
+
+def model_candidates() -> List[str]:
+    """Ordered unique Gemini models for OCR.
+
+    Production has been observed returning HTTP 503 UNAVAILABLE ("high demand")
+    for gemini-3.6-flash. Always append known-stable multimodal flash models so a
+    flaky primary does not block OCR permanently.
+    """
+    preferred = [
+        primary_model(),
+        fallback_model(),
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+    ]
+    # Extra models from env (comma-separated), if set.
+    extra = (os.environ.get("GEMINI_OCR_MODEL_CHAIN") or "").strip()
+    if extra:
+        preferred.extend(x.strip() for x in extra.split(",") if x.strip())
+    out: List[str] = []
+    seen = set()
+    for m in preferred:
+        if m and m not in seen:
+            seen.add(m)
+            out.append(m)
+    return out
+
+
+def is_high_demand_503(classified: ClassifiedOcrError) -> bool:
+    snip = (classified.upstream_snippet or "").lower()
+    return classified.error_class == OcrErrorClass.TEMP_UNAVAILABLE and (
+        "high demand" in snip or "overloaded" in snip or "unavailable" in snip
+    )
 
 
 def optimize_ocr_image_b64(image_b64: str, mime_type: str) -> Tuple[str, str]:
@@ -691,11 +732,10 @@ async def extract_with_resilience(
 
     img_b64, mime = await asyncio.to_thread(optimize_ocr_image_b64, image_b64, mime_type or "image/jpeg")
     sem = await _get_sem()
-    primary = primary_model()
-    secondary = fallback_model()
-    models_to_try = [primary] if primary == secondary else [primary, secondary]
+    models_to_try = model_candidates()
 
     last_err: Optional[OcrServiceError] = None
+    # Per-model attempts: fewer for high-demand 503 so we rotate models faster.
     max_attempts = max(1, int(os.environ.get("OCR_MAX_RETRIES", "3")))
     t_start = time.time()
 
@@ -704,8 +744,16 @@ async def extract_with_resilience(
             job.state = OcrJobState.PROCESSING
             _set_job(job)
 
+        logger.info(
+            "OCR_START shop=%s models=%s max_attempts_per_model=%s",
+            shop_id,
+            ",".join(models_to_try),
+            max_attempts,
+        )
+
         for model in models_to_try:
-            for attempt in range(max_attempts):
+            model_attempts = max_attempts
+            for attempt in range(model_attempts):
                 if job:
                     job.attempt = attempt + 1
                     job.state = OcrJobState.PROCESSING if attempt == 0 else OcrJobState.RETRYING
@@ -718,7 +766,7 @@ async def extract_with_resilience(
                         shop_id,
                         model,
                         attempt + 1,
-                        max_attempts,
+                        model_attempts,
                     )
                     text, used_model = await asyncio.to_thread(
                         call_gemini_vision,
@@ -731,12 +779,19 @@ async def extract_with_resilience(
                     )
                     latency = (time.time() - t_start) * 1000
                     METRICS.record_success("gemini", latency)
+                    logger.info(
+                        "OCR_SUCCESS shop=%s provider=gemini model=%s latency_ms=%.0f",
+                        shop_id,
+                        used_model,
+                        latency,
+                    )
                     return OcrExtractResult(rows_raw_text=text, model=used_model, provider="gemini")
                 except OcrServiceError as e:
                     last_err = e
                     METRICS.record_failure(e.classified.error_class.value)
                     logger.warning(
-                        "OCR_ATTEMPT_FAIL shop=%s provider=%s model=%s class=%s status=%s retryable=%s attempt=%s",
+                        "OCR_ATTEMPT_FAIL shop=%s provider=%s model=%s class=%s status=%s "
+                        "retryable=%s attempt=%s provider_msg=%s",
                         shop_id,
                         e.classified.provider,
                         e.classified.model,
@@ -744,10 +799,21 @@ async def extract_with_resilience(
                         e.classified.http_status,
                         e.classified.retryable,
                         attempt + 1,
+                        (e.classified.upstream_snippet or "")[:240],
                     )
                     if e.classified.error_class in (OcrErrorClass.AUTH, OcrErrorClass.MALFORMED, OcrErrorClass.BILLING):
                         raise
-                    if e.classified.retryable and attempt < max_attempts - 1:
+                    # High-demand 503: one short retry on same model, then rotate.
+                    if is_high_demand_503(e.classified):
+                        if attempt == 0 and model_attempts > 1:
+                            METRICS.record_retry()
+                            if job:
+                                job.state = OcrJobState.RETRYING
+                                _set_job(job)
+                            await _sleep_backoff(0, e.classified.retry_after_seconds or 1.5)
+                            continue
+                        break
+                    if e.classified.retryable and attempt < model_attempts - 1:
                         METRICS.record_retry()
                         if job:
                             job.state = OcrJobState.RETRYING

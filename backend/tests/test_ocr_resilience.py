@@ -312,6 +312,73 @@ def test_call_gemini_vision_classifies_503(monkeypatch):
     assert ei.value.classified.error_class == OcrErrorClass.TEMP_UNAVAILABLE
 
 
-def test_double_submit_guard_logic_is_client_side():
-    """Documented contract: one in-flight extract per capture screen (frontend inFlightRef)."""
-    assert True
+def test_high_demand_503_rotates_models():
+    """Production failure: gemini-3.6-flash 503 high demand → switch to next model."""
+    calls: list[str] = []
+
+    def fake_gemini(image_b64, mime_type, hint, api_key, system_prompt, model=None):
+        calls.append(model or "")
+        if model == "gemini-3.6-flash":
+            raise OcrServiceError(
+                classify_provider_error(
+                    status_code=503,
+                    body='{"error":{"code":503,"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.","status":"UNAVAILABLE"}}',
+                    provider="gemini",
+                    model=model,
+                )
+            )
+        return json.dumps({"rows": [{"lot_serial_no": 1, "total_bags": 1, "farmer_name": "X", "vendor_name": "Y", "bags": 1, "rate_per_bag": 10}]}), model or "ok"
+
+    async def _run():
+        with patch.dict(
+            "os.environ",
+            {
+                "GEMINI_API_KEY": "k",
+                "GEMINI_OCR_MODEL": "gemini-3.6-flash",
+                "GEMINI_OCR_FALLBACK_MODEL": "gemini-2.5-flash",
+                "OCR_MAX_RETRIES": "2",
+                "OCR_MAX_CONCURRENT": "1",
+            },
+        ):
+            import ocr_service as mod
+
+            mod._gemini_sem = asyncio.Semaphore(1)
+            with patch("ocr_service.call_gemini_vision", side_effect=fake_gemini):
+                with patch("ocr_service._sleep_backoff", new=lambda *a, **k: asyncio.sleep(0)):
+                    return await extract_with_resilience(
+                        image_b64="a" * 200,
+                        mime_type="image/jpeg",
+                        hint=None,
+                        system_prompt="sys",
+                        parse_diary_text=lambda t: [],
+                        shop_id="shop1",
+                    )
+
+    result = asyncio.run(_run())
+    assert result.model == "gemini-2.5-flash"
+    assert "gemini-3.6-flash" in calls
+    assert "gemini-2.5-flash" in calls
+
+
+def test_model_candidates_include_stable_chain():
+    with patch.dict("os.environ", {"GEMINI_OCR_MODEL": "gemini-3.6-flash", "GEMINI_OCR_FALLBACK_MODEL": "gemini-2.0-flash"}, clear=False):
+        from ocr_service import model_candidates
+
+        models = model_candidates()
+    assert models[0] == "gemini-3.6-flash"
+    assert "gemini-2.5-flash" in models
+    assert "gemini-2.0-flash" in models
+
+
+def test_high_demand_payload_message():
+    c = classify_provider_error(
+        status_code=503,
+        body='{"error":{"message":"This model is currently experiencing high demand.","status":"UNAVAILABLE"}}',
+        provider="gemini",
+        model="gemini-3.6-flash",
+    )
+    err = OcrServiceError(c)
+    p = err.http_payload()
+    assert p["high_demand"] is True
+    assert "high demand" in p["message"].lower()
+    assert p["code"] == "OCR_TEMP_UNAVAILABLE"
