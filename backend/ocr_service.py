@@ -37,6 +37,7 @@ class OcrErrorClass(str, Enum):
     AUTH = "auth"  # invalid / missing key
     TIMEOUT = "timeout"
     TEMP_UNAVAILABLE = "temp_unavailable"  # 503 / overloaded
+    MODEL_UNAVAILABLE = "model_unavailable"  # 404 model not found / shutdown
     MALFORMED = "malformed"
     NETWORK = "network"
     OTHER = "other"
@@ -54,6 +55,9 @@ USER_MESSAGES: Dict[OcrErrorClass, str] = {
     OcrErrorClass.AUTH: "OCR service configuration error. Please contact administrator.",
     OcrErrorClass.TIMEOUT: "OCR request timed out. Please try again.",
     OcrErrorClass.TEMP_UNAVAILABLE: "OCR service is temporarily unavailable. Retrying...",
+    OcrErrorClass.MODEL_UNAVAILABLE: (
+        "OCR model is not available for this project. Please check server model configuration."
+    ),
     OcrErrorClass.MALFORMED: "OCR request was rejected. Please check the image and try again.",
     OcrErrorClass.NETWORK: "Unable to reach OCR server. Please check the connection.",
     OcrErrorClass.OTHER: "OCR provider error. Please try again shortly.",
@@ -242,7 +246,9 @@ def classify_provider_error(
             snippet,
         )
 
-    if status_code in (503, 502, 504) or "unavailable" in low or "overloaded" in low or "high demand" in low:
+    if status_code in (503, 502, 504) or "high demand" in low or "overloaded" in low or (
+        status_code != 404 and "unavailable" in low and "not found" not in low
+    ):
         # High-demand 503s are transient — short retry then switch model.
         default_ra = 2.0 if "high demand" in low else 5.0
         return ClassifiedOcrError(
@@ -253,6 +259,22 @@ def classify_provider_error(
             provider,
             model,
             USER_MESSAGES[OcrErrorClass.TEMP_UNAVAILABLE],
+            snippet,
+        )
+
+    # Permanent: model shutdown / not found / not supported for generateContent
+    if status_code == 404 or "not_found" in low or (
+        ("not found" in low or "is not found" in low or "not supported for generatecontent" in low)
+        and ("model" in low or (model or "").lower() in low)
+    ):
+        return ClassifiedOcrError(
+            OcrErrorClass.MODEL_UNAVAILABLE,
+            status_code or 404,
+            False,
+            None,
+            provider,
+            model,
+            USER_MESSAGES[OcrErrorClass.MODEL_UNAVAILABLE],
             snippet,
         )
 
@@ -295,6 +317,7 @@ class OcrServiceError(RuntimeError):
             OcrErrorClass.AUTH: "OCR_AUTH",
             OcrErrorClass.TIMEOUT: "OCR_TIMEOUT",
             OcrErrorClass.TEMP_UNAVAILABLE: "OCR_TEMP_UNAVAILABLE",
+            OcrErrorClass.MODEL_UNAVAILABLE: "OCR_MODEL_UNAVAILABLE",
             OcrErrorClass.MALFORMED: "OCR_MALFORMED",
             OcrErrorClass.NETWORK: "OCR_NETWORK",
             OcrErrorClass.OTHER: "OCR_UPSTREAM",
@@ -475,61 +498,145 @@ def vision_api_key() -> Optional[str]:
     return key.strip() if key and key.strip() else None
 
 
+# Shutdown / retired models — never call these (404 NOT_FOUND in production).
+OBSOLETE_GEMINI_MODELS = frozenset(
+    {
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-001",
+        "gemini-2.0-flash-lite",
+        "gemini-1.5-flash",
+        "gemini-1.5-flash-001",
+        "gemini-1.5-flash-8b",
+        "gemini-1.5-pro",
+        "gemini-1.5-pro-001",
+    }
+)
+
+# Capacity-flaky models: demote from primary when configured.
+FLAKY_CAPACITY_MODELS = frozenset(
+    {
+        "gemini-3.6-flash",
+        "gemini-3.6-flash-preview",
+        "gemini-3.0-flash",
+    }
+)
+
+# Current multimodal OCR chain (image-capable).
+DEFAULT_PRIMARY_MODEL = "gemini-2.5-flash"
+DEFAULT_FALLBACK_MODEL = "gemini-2.5-flash-lite"
+DEFAULT_FALLBACK_MODEL_2 = "gemini-3.5-flash-lite"
+
+_available_models_cache: Optional[Tuple[float, set]] = None
+_AVAILABLE_MODELS_TTL_SEC = 300.0
+
+
 def primary_model() -> str:
-    return (os.environ.get("GEMINI_OCR_MODEL") or "gemini-2.5-flash").strip()
+    return (os.environ.get("GEMINI_OCR_MODEL") or DEFAULT_PRIMARY_MODEL).strip()
 
 
 def fallback_model() -> str:
-    return (os.environ.get("GEMINI_OCR_FALLBACK_MODEL") or "gemini-2.0-flash").strip()
+    return (os.environ.get("GEMINI_OCR_FALLBACK_MODEL") or DEFAULT_FALLBACK_MODEL).strip()
 
 
-def model_candidates() -> List[str]:
-    """Ordered unique Gemini models for OCR.
+def fallback_model_2() -> str:
+    return (os.environ.get("GEMINI_OCR_FALLBACK_MODEL_2") or DEFAULT_FALLBACK_MODEL_2).strip()
 
-    Production has been observed returning HTTP 503 UNAVAILABLE ("high demand")
-    for gemini-3.6-flash. Prefer known-stable multimodal flash models first when
-    the configured primary is a known flaky capacity model.
+
+def list_available_gemini_models(api_key: str) -> Optional[set]:
+    """Return set of model ids supporting generateContent, or None if listing fails."""
+    global _available_models_cache
+    now = time.time()
+    if _available_models_cache and (now - _available_models_cache[0]) < _AVAILABLE_MODELS_TTL_SEC:
+        return set(_available_models_cache[1])
+    import requests as _requests
+
+    key = (api_key or "").strip()
+    if not key:
+        return None
+    url = "https://generativelanguage.googleapis.com/v1beta/models"
+    try:
+        resp = _requests.get(url, params={"key": key, "pageSize": 200}, timeout=20)
+        if resp.status_code >= 400:
+            logger.warning("OCR_LIST_MODELS_FAIL status=%s body=%s", resp.status_code, _safe_snippet(resp.text or "", 200))
+            return None
+        names: set = set()
+        for m in (resp.json() or {}).get("models") or []:
+            if not isinstance(m, dict):
+                continue
+            name = (m.get("name") or "").replace("models/", "").strip()
+            methods = m.get("supportedGenerationMethods") or m.get("supported_generation_methods") or []
+            if name and ("generateContent" in methods or "generateContent" in str(methods)):
+                names.add(name)
+        _available_models_cache = (now, set(names))
+        return names
+    except Exception as e:
+        logger.warning("OCR_LIST_MODELS_ERROR err=%s", type(e).__name__)
+        return None
+
+
+def model_candidates(api_key: Optional[str] = None) -> List[str]:
+    """Ordered unique Gemini models for OCR — current multimodal chain only.
+
+    Never includes shutdown models (gemini-2.0-flash / gemini-1.5-flash).
+    When ListModels succeeds, filters to models that exist for this API key.
     """
-    # Models observed returning frequent high-demand 503s in Lemon Mandi production.
-    flaky = {"gemini-3.6-flash", "gemini-3.6-flash-preview", "gemini-3.0-flash"}
-    stable = [
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-    ]
     configured = primary_model()
-    fallback = fallback_model()
+    fb1 = fallback_model()
+    fb2 = fallback_model_2()
 
     preferred: List[str] = []
-    if configured in flaky:
-        # Demote flaky primary: try stable models first, keep configured as last resort.
-        preferred.extend(stable)
-        if fallback and fallback not in preferred:
-            preferred.insert(0 if fallback not in flaky else len(preferred), fallback)
-        preferred.append(configured)
+    if configured in FLAKY_CAPACITY_MODELS:
+        preferred.extend([DEFAULT_PRIMARY_MODEL, fb1, fb2, configured])
     else:
-        preferred.append(configured)
-        if fallback:
-            preferred.append(fallback)
-        preferred.extend(stable)
+        preferred.extend([configured, fb1, fb2])
 
-    # Extra models from env (comma-separated), if set.
+    # Optional extra chain from env (still filtered for obsolete).
     extra = (os.environ.get("GEMINI_OCR_MODEL_CHAIN") or "").strip()
     if extra:
         preferred.extend(x.strip() for x in extra.split(",") if x.strip())
 
+    # Ensure defaults are present as safety net.
+    for m in (DEFAULT_PRIMARY_MODEL, DEFAULT_FALLBACK_MODEL, DEFAULT_FALLBACK_MODEL_2):
+        preferred.append(m)
+
     out: List[str] = []
     seen = set()
     for m in preferred:
-        if m and m not in seen:
-            # Avoid trying flaky models before stables have been attempted
-            seen.add(m)
-            out.append(m)
-    # Ensure flaky configured model is always last among candidates (not first).
-    for bad in list(out):
-        if bad in flaky and out.index(bad) == 0 and len(out) > 1:
-            out.remove(bad)
-            out.append(bad)
+        if not m or m in seen:
+            continue
+        if m in OBSOLETE_GEMINI_MODELS:
+            logger.warning("OCR_SKIP_OBSOLETE_MODEL model=%s", m)
+            continue
+        seen.add(m)
+        out.append(m)
+
+    # Demote flaky capacity models away from position 0.
+    if out and out[0] in FLAKY_CAPACITY_MODELS and len(out) > 1:
+        bad = out.pop(0)
+        out.append(bad)
+
+    available = list_available_gemini_models(api_key) if api_key else None
+    if available:
+        def _is_listed(name: str) -> bool:
+            if name in available:
+                return True
+            # ListModels may return versioned ids (e.g. gemini-2.5-flash-001).
+            return any(a == name or a.startswith(name + "-") for a in available)
+
+        filtered = [m for m in out if _is_listed(m)]
+        if filtered:
+            out = filtered
+            logger.info(
+                "OCR_MODEL_CHAIN_FILTERED chain=%s available_count=%s",
+                ",".join(out),
+                len(available),
+            )
+        else:
+            logger.warning(
+                "OCR_MODEL_CHAIN_UNVERIFIED no overlap with ListModels; keeping configured chain=%s",
+                ",".join(out),
+            )
+
     return out
 
 
@@ -768,7 +875,7 @@ async def extract_with_resilience(
 
     img_b64, mime = await asyncio.to_thread(optimize_ocr_image_b64, image_b64, mime_type or "image/jpeg")
     sem = await _get_sem()
-    models_to_try = model_candidates()
+    models_to_try = model_candidates(api_key=api_key)
 
     last_err: Optional[OcrServiceError] = None
     # Per-model attempts: fewer for high-demand 503 so we rotate models faster.
@@ -839,6 +946,14 @@ async def extract_with_resilience(
                     )
                     if e.classified.error_class in (OcrErrorClass.AUTH, OcrErrorClass.MALFORMED, OcrErrorClass.BILLING):
                         raise
+                    # 404 model-not-found is permanent for this model — never retry it.
+                    if e.classified.error_class == OcrErrorClass.MODEL_UNAVAILABLE:
+                        logger.warning(
+                            "OCR_MODEL_UNAVAILABLE_SKIP shop=%s model=%s — rotating to next candidate",
+                            shop_id,
+                            model,
+                        )
+                        break
                     # Project-level quota: stop burning remaining Gemini models; try Vision fallback.
                     if e.classified.error_class == OcrErrorClass.DAILY_QUOTA:
                         last_err = e
@@ -935,7 +1050,7 @@ async def extract_with_resilience(
             True,
             None,
             "gemini",
-            primary,
+            primary_model(),
             USER_MESSAGES[OcrErrorClass.OTHER],
             "unknown",
         )
