@@ -363,8 +363,8 @@ export default function NewVendorBill() {
 
           <Text style={styles.section}>Totals</Text>
           <SummaryRow label="Bags" value={String(totals.bags)} />
-          <SummaryRow label={`Goods (×${totals.factorN} + ₹${totals.marginN}/bag)`} value={money(totals.goods)} />
-          <SummaryRow label={`Commission (${totals.bags} × ₹${totals.commN})`} value={money(totals.commTotal)} />
+          <SummaryRow label="Lemon" value={money(totals.goods)} />
+          <SummaryRow label="Commission" value={money(totals.commTotal)} />
           <SummaryRow label="Hamali" value={money(totals.hamaliN)} />
           {totals.cessN > 0 ? <SummaryRow label="Cess / Other" value={money(totals.cessN)} /> : null}
           <SummaryRow label="GRAND TOTAL" value={money(totals.grand)} strong />
