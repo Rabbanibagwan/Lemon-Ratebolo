@@ -219,7 +219,7 @@ export default function Reports() {
     void runExport(async () => {
       if (action === "print") {
         await thermalPrintDriverReport(d, workingDateISO, merchant, settings, auctionDrivers);
-        notify("Printed", "Driver report preview is open — use Print from that window.");
+        notify("Printed", "Driver report sent to the connected thermal printer.");
       } else {
         const result = await shareDriverThermalReport(d, workingDateISO, merchant, settings, auctionDrivers);
         if (result === "shared") notify("Shared", "Driver report PDF preview is open.");
