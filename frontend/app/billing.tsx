@@ -16,6 +16,10 @@ import { api, apiErrorMessage, BagPurchase, BagUsageRow, BagWallet } from "@/src
 import { useAuth } from "@/src/context/AuthContext";
 import { Button, Input } from "@/src/components/ui";
 import { colors, font, money, spacing } from "@/src/theme";
+import {
+  PurchaseInvoice,
+  sharePurchaseInvoicePdf,
+} from "@/src/utils/purchase-invoice";
 
 function fmtDate(iso?: string | null): string {
   if (!iso) return "—";
@@ -42,6 +46,7 @@ export default function BillingScreen() {
   const [qty, setQty] = useState("1000");
   const [buying, setBuying] = useState(false);
   const [tab, setTab] = useState<"buy" | "purchases" | "usage">("buy");
+  const [invoiceBusyId, setInvoiceBusyId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!isOwner) return;
@@ -109,6 +114,25 @@ export default function BillingScreen() {
       Alert.alert("Purchase failed", apiErrorMessage(e, "Could not complete purchase"));
     } finally {
       setBuying(false);
+    }
+  };
+
+  const openInvoice = async (p: BagPurchase) => {
+    if (p.status !== "PAID") {
+      Alert.alert("Invoice unavailable", "Invoice is available after the purchase is paid.");
+      return;
+    }
+    try {
+      setInvoiceBusyId(p.id);
+      const inv = await api.get<PurchaseInvoice>(`/billing/purchases/${p.id}/invoice`);
+      const result = await sharePurchaseInvoicePdf(inv);
+      if (result === "downloaded") {
+        Alert.alert("Invoice ready", `${inv.invoice_no} downloaded.`);
+      }
+    } catch (e) {
+      Alert.alert("Invoice failed", apiErrorMessage(e, "Could not generate invoice PDF"));
+    } finally {
+      setInvoiceBusyId(null);
     }
   };
 
@@ -229,8 +253,31 @@ export default function BillingScreen() {
                       {money(p.price_per_bag)}/bag · Base {money(p.base_amount)}
                       {p.gst_amount > 0 ? ` · GST ${money(p.gst_amount)}` : ""} · Total {money(p.total_amount)}
                     </Text>
+                    {p.invoice_no ? (
+                      <Text style={styles.histSub} testID={`purchase-invoice-no-${p.id}`}>
+                        Invoice {p.invoice_no}
+                      </Text>
+                    ) : null}
+                    <View style={styles.histActions}>
+                      <Text style={[styles.status, p.status === "PAID" && styles.statusPaid]}>{p.status}</Text>
+                      {p.status === "PAID" ? (
+                        <Pressable
+                          onPress={() => openInvoice(p)}
+                          disabled={invoiceBusyId === p.id}
+                          style={({ pressed }) => [
+                            styles.invoiceBtn,
+                            (pressed || invoiceBusyId === p.id) && { opacity: 0.7 },
+                          ]}
+                          testID={`purchase-invoice-${p.id}`}
+                        >
+                          <Ionicons name="document-text-outline" size={14} color={colors.onSurfaceInverse} />
+                          <Text style={styles.invoiceBtnText}>
+                            {invoiceBusyId === p.id ? "…" : "INVOICE"}
+                          </Text>
+                        </Pressable>
+                      ) : null}
+                    </View>
                   </View>
-                  <Text style={[styles.status, p.status === "PAID" && styles.statusPaid]}>{p.status}</Text>
                 </View>
               ))
             )}
@@ -329,6 +376,29 @@ const styles = StyleSheet.create({
   },
   histTitle: { fontSize: 14, fontWeight: "800", fontFamily: font.display, color: colors.onSurface },
   histSub: { fontSize: 12, color: colors.muted, fontFamily: font.mono, marginTop: 2 },
+  histActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginTop: 8,
+  },
+  invoiceBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: colors.surfaceInverse,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 2,
+    borderColor: colors.surfaceInverse,
+  },
+  invoiceBtnText: {
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 1,
+    fontFamily: font.display,
+    color: colors.onSurfaceInverse,
+  },
   status: { fontSize: 11, fontWeight: "800", fontFamily: font.display, color: colors.muted },
   statusPaid: { color: "#15803D" },
 });

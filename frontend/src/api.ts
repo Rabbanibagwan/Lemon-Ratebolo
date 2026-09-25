@@ -282,6 +282,7 @@ export type BagPurchase = {
   status: "PENDING" | "PAID" | string;
   created_at: string;
   paid_at?: string | null;
+  invoice_no?: string | null;
 };
 
 export type BagUsageRow = {

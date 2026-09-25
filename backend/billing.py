@@ -28,15 +28,28 @@ def _round2(n: float) -> float:
 
 _DEFAULT_PRICE = 0.25
 _DEFAULT_FREE = 1000
-_DEFAULT_GST = 0.0
+# Default GST % for NEW platform billing settings only (configurable in Admin → Settings).
+_DEFAULT_GST = 18.0
+_DEFAULT_HSN_SAC = "998599"
+_DEFAULT_INVOICE_PREFIX = "INV"
+_DEFAULT_INVOICE_ITEM = "Prepaid Mandi Bags"
+_DEFAULT_SELLER_NAME = "Lemon Mandi"
 
 
 class PlatformBillingSettingsIn(BaseModel):
-    price_per_bag: float = Field(ge=0, le=1000)
+    price_per_bag: float = Field(ge=0, le=100_000)
     new_merchant_free_bags: int = Field(ge=0, le=10_000_000)
-    gst_percent: float = Field(default=0, ge=0, le=100)
+    gst_percent: float = Field(default=_DEFAULT_GST, ge=0, le=100)
     allow_test_payments: bool = True
     billing_active: bool = True
+    # Purchase invoice configuration (platform → merchant bag sales). Not hard-coded in app UI.
+    hsn_sac_code: str = Field(default=_DEFAULT_HSN_SAC, max_length=32)
+    invoice_prefix: str = Field(default=_DEFAULT_INVOICE_PREFIX, max_length=24)
+    invoice_item_description: str = Field(default=_DEFAULT_INVOICE_ITEM, max_length=200)
+    seller_name: str = Field(default=_DEFAULT_SELLER_NAME, max_length=200)
+    seller_address: str = Field(default="", max_length=500)
+    seller_phone: str = Field(default="", max_length=40)
+    seller_gstin: str = Field(default="", max_length=32)
 
 
 class PlatformBillingSettingsOut(BaseModel):
@@ -45,6 +58,13 @@ class PlatformBillingSettingsOut(BaseModel):
     gst_percent: float
     allow_test_payments: bool
     billing_active: bool
+    hsn_sac_code: str = _DEFAULT_HSN_SAC
+    invoice_prefix: str = _DEFAULT_INVOICE_PREFIX
+    invoice_item_description: str = _DEFAULT_INVOICE_ITEM
+    seller_name: str = _DEFAULT_SELLER_NAME
+    seller_address: str = ""
+    seller_phone: str = ""
+    seller_gstin: str = ""
     updated_at: Optional[datetime] = None
 
 
@@ -76,6 +96,42 @@ class PurchaseOut(BaseModel):
     status: str
     created_at: datetime
     paid_at: Optional[datetime] = None
+    invoice_no: Optional[str] = None
+
+
+class InvoicePartyOut(BaseModel):
+    name: str
+    address: str = ""
+    phone: str = ""
+    gstin: str = ""
+
+
+class PurchaseInvoiceItemOut(BaseModel):
+    description: str
+    hsn_sac_code: str
+    bags: int
+    price_per_bag: float
+    amount: float
+
+
+class PurchaseInvoiceOut(BaseModel):
+    """Purchase invoice linked 1:1 to a bag_purchases row (no duplicate purchase)."""
+    purchase_id: str
+    shop_id: str
+    invoice_no: str
+    invoice_date: datetime
+    status: str
+    seller: InvoicePartyOut
+    bill_to: InvoicePartyOut
+    item: PurchaseInvoiceItemOut
+    subtotal: float
+    gst_percent: float
+    gst_amount: float
+    total_amount: float
+    bags: int
+    price_per_bag: float
+    paid_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
 
 
 def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
@@ -86,6 +142,10 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
         await db.merchant_bag_wallets.create_index("shop_id", unique=True)
         await db.bag_purchases.create_index([("shop_id", 1), ("created_at", -1)])
         await db.bag_purchases.create_index("id", unique=True)
+        # Sparse unique: only PAID invoices that have been numbered.
+        await db.bag_purchases.create_index(
+            "invoice_no", unique=True, sparse=True, name="bag_purchases_invoice_no_unique",
+        )
         await db.bag_usage.create_index([("shop_id", 1), ("at", -1)])
         await db.bag_usage.create_index([("shop_id", 1), ("patti_id", 1), ("status", 1)])
         await db.bag_usage.create_index("id", unique=True)
@@ -116,13 +176,189 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
                 "gst_percent": _DEFAULT_GST,
                 "allow_test_payments": True,
                 "billing_active": True,
+                "hsn_sac_code": _DEFAULT_HSN_SAC,
+                "invoice_prefix": _DEFAULT_INVOICE_PREFIX,
+                "invoice_item_description": _DEFAULT_INVOICE_ITEM,
+                "seller_name": _DEFAULT_SELLER_NAME,
+                "seller_address": "",
+                "seller_phone": "",
+                "seller_gstin": "",
                 "updated_at": now,
             }
             await db.platform_billing_settings.update_one(
                 {"id": "default"}, {"$setOnInsert": doc}, upsert=True,
             )
             doc = await db.platform_billing_settings.find_one({"id": "default"}, {"_id": 0}) or doc
+        # Fill missing invoice config keys without overwriting an existing gst_percent.
+        patch = {}
+        if "hsn_sac_code" not in doc:
+            patch["hsn_sac_code"] = _DEFAULT_HSN_SAC
+        if "invoice_prefix" not in doc:
+            patch["invoice_prefix"] = _DEFAULT_INVOICE_PREFIX
+        if "invoice_item_description" not in doc:
+            patch["invoice_item_description"] = _DEFAULT_INVOICE_ITEM
+        if "seller_name" not in doc:
+            patch["seller_name"] = _DEFAULT_SELLER_NAME
+        for k in ("seller_address", "seller_phone", "seller_gstin"):
+            if k not in doc:
+                patch[k] = ""
+        if patch:
+            await db.platform_billing_settings.update_one({"id": "default"}, {"$set": patch})
+            doc.update(patch)
         return doc
+
+    def _settings_out(s: dict) -> PlatformBillingSettingsOut:
+        return PlatformBillingSettingsOut(
+            price_per_bag=float(s.get("price_per_bag") or 0),
+            new_merchant_free_bags=int(s.get("new_merchant_free_bags") or 0),
+            gst_percent=float(s.get("gst_percent") if s.get("gst_percent") is not None else _DEFAULT_GST),
+            allow_test_payments=bool(s.get("allow_test_payments", True)),
+            billing_active=bool(s.get("billing_active", True)),
+            hsn_sac_code=str(s.get("hsn_sac_code") or _DEFAULT_HSN_SAC),
+            invoice_prefix=str(s.get("invoice_prefix") or _DEFAULT_INVOICE_PREFIX),
+            invoice_item_description=str(s.get("invoice_item_description") or _DEFAULT_INVOICE_ITEM),
+            seller_name=str(s.get("seller_name") or _DEFAULT_SELLER_NAME),
+            seller_address=str(s.get("seller_address") or ""),
+            seller_phone=str(s.get("seller_phone") or ""),
+            seller_gstin=str(s.get("seller_gstin") or ""),
+            updated_at=s.get("updated_at"),
+        )
+
+    def _shop_address(shop: dict) -> str:
+        return ", ".join(
+            str(x).strip()
+            for x in [
+                shop.get("address"),
+                shop.get("village"),
+                shop.get("taluk"),
+                shop.get("district"),
+                shop.get("state"),
+            ]
+            if x and str(x).strip()
+        )
+
+    def _invoice_year(purchase: dict) -> int:
+        dt = purchase.get("paid_at") or purchase.get("created_at") or _utc_now()
+        if isinstance(dt, str):
+            try:
+                dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+            except Exception:
+                dt = _utc_now()
+        if getattr(dt, "tzinfo", None) is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.astimezone(timezone.utc).year)
+
+    async def _allocate_invoice_no(purchase: dict, settings: dict) -> str:
+        year = _invoice_year(purchase)
+        prefix = (str(settings.get("invoice_prefix") or _DEFAULT_INVOICE_PREFIX).strip() or _DEFAULT_INVOICE_PREFIX)
+        # Sanitize prefix for display codes.
+        prefix = "".join(ch for ch in prefix.upper() if ch.isalnum() or ch in ("-", "_"))[:24] or _DEFAULT_INVOICE_PREFIX
+        c = await db.counters.find_one_and_update(
+            {"id": f"purchase_invoice_{year}"},
+            {
+                "$inc": {"seq": 1},
+                "$setOnInsert": {
+                    "id": f"purchase_invoice_{year}",
+                    "kind": "purchase_invoice",
+                    "year": year,
+                },
+            },
+            upsert=True,
+            return_document=True,
+        )
+        seq = int(c.get("seq") or 1)
+        return f"{prefix}-{year}-{seq:06d}"
+
+    async def _ensure_purchase_invoice_fields(purchase: dict) -> dict:
+        """Idempotently attach invoice_no + snapshotted invoice fields to a PAID purchase."""
+        if purchase.get("invoice_no"):
+            return purchase
+        if (purchase.get("status") or "") != "PAID":
+            raise HTTPException(400, "Invoice is available only for paid purchases")
+
+        settings = await get_platform_settings()
+        invoice_no = await _allocate_invoice_no(purchase, settings)
+        now = _utc_now()
+        snap = {
+            "invoice_no": invoice_no,
+            "invoice_issued_at": now,
+            "invoice_hsn_sac_code": str(settings.get("hsn_sac_code") or _DEFAULT_HSN_SAC).strip() or _DEFAULT_HSN_SAC,
+            "invoice_item_description": (
+                str(settings.get("invoice_item_description") or _DEFAULT_INVOICE_ITEM).strip()
+                or _DEFAULT_INVOICE_ITEM
+            ),
+            "invoice_seller_name": str(settings.get("seller_name") or _DEFAULT_SELLER_NAME).strip() or _DEFAULT_SELLER_NAME,
+            "invoice_seller_address": str(settings.get("seller_address") or "").strip(),
+            "invoice_seller_phone": str(settings.get("seller_phone") or "").strip(),
+            "invoice_seller_gstin": str(settings.get("seller_gstin") or "").strip(),
+        }
+        # Only win the race if invoice_no is still unset.
+        updated = await db.bag_purchases.find_one_and_update(
+            {
+                "id": purchase["id"],
+                "shop_id": purchase["shop_id"],
+                "status": "PAID",
+                "$or": [
+                    {"invoice_no": {"$exists": False}},
+                    {"invoice_no": None},
+                    {"invoice_no": ""},
+                ],
+            },
+            {"$set": snap},
+            return_document=True,
+            projection={"_id": 0},
+        )
+        if updated and updated.get("invoice_no"):
+            return updated
+        # Another request assigned the number — return authoritative row.
+        again = await db.bag_purchases.find_one({"id": purchase["id"]}, {"_id": 0})
+        if again and again.get("invoice_no"):
+            return again
+        raise HTTPException(409, "Could not issue invoice number — retry")
+
+    async def _build_purchase_invoice(purchase: dict) -> PurchaseInvoiceOut:
+        purchase = await _ensure_purchase_invoice_fields(purchase)
+        shop = await db.shops.find_one(
+            {"id": purchase["shop_id"]},
+            {"_id": 0, "password_hash": 0},
+        ) or {}
+        invoice_date = purchase.get("invoice_issued_at") or purchase.get("paid_at") or purchase.get("created_at") or _utc_now()
+        hsn = str(purchase.get("invoice_hsn_sac_code") or _DEFAULT_HSN_SAC)
+        desc = str(purchase.get("invoice_item_description") or _DEFAULT_INVOICE_ITEM)
+        return PurchaseInvoiceOut(
+            purchase_id=purchase["id"],
+            shop_id=purchase["shop_id"],
+            invoice_no=str(purchase["invoice_no"]),
+            invoice_date=invoice_date,
+            status=str(purchase.get("status") or ""),
+            seller=InvoicePartyOut(
+                name=str(purchase.get("invoice_seller_name") or _DEFAULT_SELLER_NAME),
+                address=str(purchase.get("invoice_seller_address") or ""),
+                phone=str(purchase.get("invoice_seller_phone") or ""),
+                gstin=str(purchase.get("invoice_seller_gstin") or ""),
+            ),
+            bill_to=InvoicePartyOut(
+                name=str(shop.get("shop_name") or shop.get("username") or "Merchant"),
+                address=_shop_address(shop),
+                phone=str(shop.get("mobile") or ""),
+                gstin=str(shop.get("gst_number") or ""),
+            ),
+            item=PurchaseInvoiceItemOut(
+                description=desc,
+                hsn_sac_code=hsn,
+                bags=int(purchase.get("bags") or 0),
+                price_per_bag=float(purchase.get("price_per_bag") or 0),
+                amount=float(purchase.get("base_amount") or 0),
+            ),
+            subtotal=float(purchase.get("base_amount") or 0),
+            gst_percent=float(purchase.get("gst_percent") or 0),
+            gst_amount=float(purchase.get("gst_amount") or 0),
+            total_amount=float(purchase.get("total_amount") or 0),
+            bags=int(purchase.get("bags") or 0),
+            price_per_bag=float(purchase.get("price_per_bag") or 0),
+            paid_at=purchase.get("paid_at"),
+            created_at=purchase.get("created_at"),
+        )
 
     async def _active_patti_bags_used(shop_id: str) -> int:
         """Authoritative used bags = sum(total_bags) on non-deleted Pattis for this shop."""
@@ -554,14 +790,7 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
     @api.get("/admin/billing/settings", response_model=PlatformBillingSettingsOut)
     async def admin_get_billing_settings(admin: dict = Depends(admin_auth)):
         s = await get_platform_settings()
-        return PlatformBillingSettingsOut(
-            price_per_bag=float(s.get("price_per_bag") or 0),
-            new_merchant_free_bags=int(s.get("new_merchant_free_bags") or 0),
-            gst_percent=float(s.get("gst_percent") or 0),
-            allow_test_payments=bool(s.get("allow_test_payments", True)),
-            billing_active=bool(s.get("billing_active", True)),
-            updated_at=s.get("updated_at"),
-        )
+        return _settings_out(s)
 
     @api.put("/admin/billing/settings", response_model=PlatformBillingSettingsOut)
     async def admin_put_billing_settings(
@@ -577,6 +806,15 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
                 "gst_percent": float(payload.gst_percent),
                 "allow_test_payments": bool(payload.allow_test_payments),
                 "billing_active": bool(payload.billing_active),
+                "hsn_sac_code": (payload.hsn_sac_code or _DEFAULT_HSN_SAC).strip() or _DEFAULT_HSN_SAC,
+                "invoice_prefix": (payload.invoice_prefix or _DEFAULT_INVOICE_PREFIX).strip() or _DEFAULT_INVOICE_PREFIX,
+                "invoice_item_description": (
+                    (payload.invoice_item_description or _DEFAULT_INVOICE_ITEM).strip() or _DEFAULT_INVOICE_ITEM
+                ),
+                "seller_name": (payload.seller_name or _DEFAULT_SELLER_NAME).strip() or _DEFAULT_SELLER_NAME,
+                "seller_address": (payload.seller_address or "").strip(),
+                "seller_phone": (payload.seller_phone or "").strip(),
+                "seller_gstin": (payload.seller_gstin or "").strip(),
                 "updated_at": now,
             }},
             upsert=True,
@@ -595,6 +833,8 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
                     "price_per_bag": float(payload.price_per_bag),
                     "new_merchant_free_bags": int(payload.new_merchant_free_bags),
                     "gst_percent": float(payload.gst_percent),
+                    "hsn_sac_code": (payload.hsn_sac_code or "").strip(),
+                    "invoice_prefix": (payload.invoice_prefix or "").strip(),
                 },
             )
         except Exception:
@@ -691,6 +931,10 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
         if not purchase:
             raise HTTPException(404, "Purchase not found")
         if purchase.get("status") == "PAID":
+            try:
+                purchase = await _ensure_purchase_invoice_fields(purchase)
+            except Exception:
+                pass
             return PurchaseOut(**purchase)
         if purchase.get("status") != "PENDING":
             raise HTTPException(400, f"Cannot confirm purchase in status {purchase.get('status')}")
@@ -726,6 +970,12 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
                 )
                 paid = await db.bag_purchases.find_one({"id": purchase_id}, {"_id": 0})
                 return PurchaseOut(**paid)
+            # Issue stable invoice number once when purchase becomes PAID.
+            try:
+                d = await _ensure_purchase_invoice_fields(d)
+            except Exception:
+                # Wallet already credited — invoice can be issued lazily on GET.
+                pass
             return PurchaseOut(**d)
         raise HTTPException(409, "Could not confirm purchase — retry")
 
@@ -735,6 +985,23 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
             {"shop_id": user["shop_id"]}, {"_id": 0},
         ).sort("created_at", -1).limit(limit)
         return [PurchaseOut(**d) async for d in cur]
+
+    @api.get("/billing/purchases/{purchase_id}/invoice", response_model=PurchaseInvoiceOut)
+    async def get_purchase_invoice(purchase_id: str, user=Depends(owner_only)):
+        """Merchant invoice for one of THEIR bag purchases only (shop ownership enforced)."""
+        purchase = await db.bag_purchases.find_one(
+            {"id": purchase_id, "shop_id": user["shop_id"]}, {"_id": 0},
+        )
+        if not purchase:
+            raise HTTPException(404, "Purchase not found")
+        return await _build_purchase_invoice(purchase)
+
+    @api.get("/admin/purchases/{purchase_id}/invoice", response_model=PurchaseInvoiceOut)
+    async def admin_get_purchase_invoice(purchase_id: str, admin: dict = Depends(admin_auth)):
+        purchase = await db.bag_purchases.find_one({"id": purchase_id}, {"_id": 0})
+        if not purchase:
+            raise HTTPException(404, "Purchase not found")
+        return await _build_purchase_invoice(purchase)
 
     @api.get("/billing/usage")
     async def list_usage(user=Depends(owner_only), limit: int = Query(200, ge=1, le=1000)):
