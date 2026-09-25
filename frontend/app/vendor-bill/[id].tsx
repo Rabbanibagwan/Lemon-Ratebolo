@@ -201,7 +201,7 @@ export default function VendorBillDetail() {
             </View>
           ))}
           <View style={styles.divider} />
-          <Row label={`Goods (×${b.vendor_factor ?? 1} + ₹${b.margin_per_bag}/bag)`} value={money(b.goods_total)} />
+          <Row label="Lemon" value={money(b.goods_total)} />
           <Row label={`Commission (${b.total_bags} × ₹${b.commission_per_bag})`} value={money(b.commission_total)} />
           <Row label="Hamali" value={money(b.hamali)} />
           {b.cess > 0 ? <Row label="Cess / Other" value={money(b.cess)} /> : null}
