@@ -1,23 +1,35 @@
 import { useCallback, useEffect, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 
-import { api, Settings as SettingsT } from "@/src/api";
+import { api, apiErrorMessage, Settings as SettingsT } from "@/src/api";
 import { useAuth } from "@/src/context/AuthContext";
 import { KeyboardFormScroll } from "@/src/components/KeyboardForm";
 import { Button, Input } from "@/src/components/ui";
+import {
+  LEGAL_SUPPORT_EMAIL,
+  LEGAL_URLS,
+  openPrivacyPolicy,
+  openSupportContact,
+  openSupportEmail,
+  openTermsOfService,
+} from "@/src/utils/legal-links";
 import { colors, font, spacing } from "@/src/theme";
 
 export default function SettingsScreen() {
-  const { session, logout } = useAuth();
+  const { session, logout, deleteAccount } = useAuth();
   const router = useRouter();
   const isOwner = session?.role === "owner";
   const [s, setS] = useState<SettingsT | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deletePassword, setDeletePassword] = useState("");
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(async () => {
     try { setS(await api.get<SettingsT>("/settings")); } catch { /* silent */ }
@@ -51,6 +63,37 @@ export default function SettingsScreen() {
       setError(e?.detail || "Failed to save");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const openDeleteModal = () => {
+    setDeletePassword("");
+    setDeleteError(null);
+    setDeleteOpen(true);
+  };
+
+  const closeDeleteModal = () => {
+    if (deleting) return;
+    setDeleteOpen(false);
+    setDeletePassword("");
+    setDeleteError(null);
+  };
+
+  const confirmDeleteAccount = async () => {
+    if (!deletePassword.trim()) {
+      setDeleteError("Enter your password to confirm deletion.");
+      return;
+    }
+    setDeleteError(null);
+    try {
+      setDeleting(true);
+      await deleteAccount(deletePassword);
+      setDeleteOpen(false);
+      router.replace("/login");
+    } catch (e) {
+      setDeleteError(apiErrorMessage(e, "Could not delete account"));
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -209,14 +252,95 @@ export default function SettingsScreen() {
           <Text style={[styles.section, { marginTop: spacing.xl }]}>Printing</Text>
           <NavRow icon="print-outline" label="PRINTER" onPress={() => router.push("/printer")} testID="settings-printer-all" />
 
+          <Text style={[styles.section, { marginTop: spacing.xl }]}>Legal & Support</Text>
+          {LEGAL_URLS.privacyPolicy ? (
+            <ExternalLinkRow
+              icon="shield-checkmark-outline"
+              label="PRIVACY POLICY"
+              onPress={() => openPrivacyPolicy()}
+              testID="settings-privacy-policy"
+            />
+          ) : null}
+          {LEGAL_URLS.termsOfService ? (
+            <ExternalLinkRow
+              icon="document-text-outline"
+              label="TERMS OF SERVICE"
+              onPress={() => openTermsOfService()}
+              testID="settings-terms"
+            />
+          ) : null}
+          {LEGAL_URLS.support ? (
+            <ExternalLinkRow
+              icon="help-circle-outline"
+              label="SUPPORT / CONTACT"
+              onPress={() => openSupportContact()}
+              testID="settings-support"
+            />
+          ) : null}
+          <ExternalLinkRow
+            icon="mail-outline"
+            label={`EMAIL · ${LEGAL_SUPPORT_EMAIL}`}
+            onPress={() => openSupportEmail()}
+            testID="settings-support-email"
+          />
+
           <View style={styles.dangerBox}>
             <Text style={styles.dangerTitle}>Session</Text>
             <Pressable onPress={logout} style={styles.logout} testID="settings-logout">
               <Ionicons name="log-out-outline" size={18} color={colors.error} />
               <Text style={styles.logoutText}>LOGOUT</Text>
             </Pressable>
+            {isOwner ? (
+              <>
+                <Text style={[styles.dangerTitle, { marginTop: spacing.lg }]}>Account</Text>
+                <Text style={styles.deleteHint}>
+                  Permanently deletes your shop account and all associated data (Pattis, lots, farmers,
+                  vendors, staff, bills, wallet, and backups on this device). This cannot be undone.
+                </Text>
+                <Pressable onPress={openDeleteModal} style={styles.deleteAccount} testID="settings-delete-account">
+                  <Ionicons name="trash-outline" size={18} color={colors.error} />
+                  <Text style={styles.logoutText}>DELETE ACCOUNT</Text>
+                </Pressable>
+              </>
+            ) : null}
           </View>
         </KeyboardFormScroll>
+
+      <Modal
+        visible={deleteOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={closeDeleteModal}
+      >
+        <View style={styles.modalBackdrop}>
+          <Pressable style={StyleSheet.absoluteFillObject} onPress={closeDeleteModal} />
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Delete account?</Text>
+            <Text style={styles.modalBody}>
+              This permanently removes {session?.shop_name || "your shop"} and all shop data from our
+              servers. Staff accounts will lose access. Enter your password to confirm.
+            </Text>
+            <Input
+              label="Password"
+              value={deletePassword}
+              onChangeText={setDeletePassword}
+              secureTextEntry
+              autoCapitalize="none"
+              testID="settings-delete-password"
+            />
+            {deleteError ? <Text style={styles.err}>{deleteError}</Text> : null}
+            <Button
+              label="DELETE MY ACCOUNT"
+              onPress={confirmDeleteAccount}
+              loading={deleting}
+              testID="settings-delete-confirm"
+            />
+            <Pressable style={styles.modalCancel} onPress={closeDeleteModal} disabled={deleting}>
+              <Text style={styles.modalCancelText}>CANCEL</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -231,6 +355,20 @@ function NavRow({ icon, label, onPress, testID }: { icon: any; label: string; on
       <Ionicons name={icon} size={20} color={colors.onSurface} />
       <Text style={styles.navRowText}>{label}</Text>
       <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+    </Pressable>
+  );
+}
+
+function ExternalLinkRow({ icon, label, onPress, testID }: { icon: any; label: string; onPress: () => void; testID?: string }) {
+  return (
+    <Pressable
+      testID={testID}
+      onPress={onPress}
+      style={({ pressed }) => [styles.navRow, pressed && { backgroundColor: colors.surfaceSecondary }]}
+    >
+      <Ionicons name={icon} size={20} color={colors.onSurface} />
+      <Text style={styles.navRowText} numberOfLines={2}>{label}</Text>
+      <Ionicons name="open-outline" size={18} color={colors.muted} />
     </Pressable>
   );
 }
@@ -276,7 +414,29 @@ const styles = StyleSheet.create({
     paddingVertical: 12, paddingHorizontal: 14, borderWidth: 2, borderColor: colors.error, backgroundColor: colors.surface,
     justifyContent: "center",
   },
+  deleteAccount: {
+    flexDirection: "row", alignItems: "center", gap: spacing.sm,
+    paddingVertical: 12, paddingHorizontal: 14, borderWidth: 2, borderColor: colors.error, backgroundColor: "#FEE2E2",
+    justifyContent: "center", marginTop: spacing.sm,
+  },
+  deleteHint: {
+    fontSize: 12, color: colors.muted, fontFamily: font.display, lineHeight: 18, marginBottom: spacing.sm,
+  },
   logoutText: { color: colors.error, fontFamily: font.display, fontWeight: "800", letterSpacing: 1 },
+  modalBackdrop: {
+    flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", padding: spacing.lg,
+  },
+  modalCard: {
+    backgroundColor: colors.surface, borderWidth: 2, borderColor: colors.borderStrong, padding: spacing.lg,
+  },
+  modalTitle: {
+    fontSize: 20, fontWeight: "900", color: colors.error, fontFamily: font.display, marginBottom: spacing.sm,
+  },
+  modalBody: {
+    fontSize: 13, color: colors.onSurface, fontFamily: font.display, lineHeight: 20, marginBottom: spacing.md,
+  },
+  modalCancel: { marginTop: spacing.md, alignItems: "center", paddingVertical: spacing.sm },
+  modalCancelText: { fontSize: 13, fontWeight: "800", color: colors.muted, fontFamily: font.display, letterSpacing: 1 },
   roleNote: {
     flexDirection: "row", gap: spacing.sm, alignItems: "flex-start",
     padding: spacing.md, backgroundColor: colors.surfaceSecondary,

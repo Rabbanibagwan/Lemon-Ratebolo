@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { storage } from "@/src/utils/storage";
+import { clearGoogleSession } from "@/src/utils/google-drive-backup";
 import { api, ApiError, AUTH_SHOP_KEY, AUTH_TOKEN_KEY, Session } from "@/src/api";
 
 type AuthState = {
@@ -8,6 +9,7 @@ type AuthState = {
   login: (username: string, password: string) => Promise<void>;
   signup: (shop_name: string, username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  deleteAccount: (password: string) => Promise<void>;
 };
 
 const Ctx = createContext<AuthState | null>(null);
@@ -81,7 +83,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setSession(null);
   }, []);
 
-  const value = useMemo(() => ({ loading, session, login, signup, logout }), [loading, session, login, signup, logout]);
+  const deleteAccount = useCallback(async (password: string) => {
+    await api.post<{ ok: boolean }>("/auth/delete-account", { password });
+    try {
+      await clearGoogleSession();
+    } catch {
+      /* local Drive tokens are best-effort cleanup */
+    }
+    await logout();
+  }, [logout]);
+
+  const value = useMemo(
+    () => ({ loading, session, login, signup, logout, deleteAccount }),
+    [loading, session, login, signup, logout, deleteAccount],
+  );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

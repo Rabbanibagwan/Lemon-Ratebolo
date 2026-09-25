@@ -1,25 +1,31 @@
 /**
  * Generic ESC/POS command builder. Not tied to any printer brand.
- * Column count follows paper width (58 / 80 / 100 mm).
+ * Column count is derived from printable dots ÷ Font A pitch so 58/80/100 mm
+ * each use the full usable width (never a fixed 80 mm layout on 100 mm paper).
  */
 import { clampPaperMm } from "@/src/utils/thermal-print";
 
-export function escposCols(paperMm: number): number {
-  const w = clampPaperMm(paperMm);
-  if (w <= 58) return 32;
-  if (w <= 80) return 48;
-  return 64;
-}
+/** ESC/POS Font A character cell width at 203 DPI. */
+export const ESCPOS_FONT_A_DOTS = 12;
 
 /**
  * Printable width in dots at 203 DPI (8 dots/mm).
- * Uses the full printable area for each roll so content spans the selected paper.
+ * Matches typical usable area inside the roll (not the nominal roll label).
  */
 export function escposPrintDots(paperMm: number): number {
   const w = clampPaperMm(paperMm);
   if (w <= 58) return 384; // ~48 mm printable on 58 mm roll
   if (w <= 80) return 576; // ~72 mm printable on 80 mm roll
   return 720; // ~90 mm printable on 100 mm roll
+}
+
+/**
+ * Character columns for Font A — must fit inside printDots or lines wrap
+ * and the slip looks like a narrow (80 mm) layout on wider paper.
+ * 58→32, 80→48, 100→60 (was incorrectly 64, which overflowed 720 dots).
+ */
+export function escposCols(paperMm: number): number {
+  return Math.max(24, Math.floor(escposPrintDots(paperMm) / ESCPOS_FONT_A_DOTS));
 }
 
 function concat(parts: Uint8Array[]): Uint8Array {
@@ -60,8 +66,11 @@ export class EscPosBuilder {
 
   /** Column widths (lot / mid / amount) that always sum to this.cols. */
   lineWidths(): [number, number, number] {
-    const lot = Math.max(5, Math.floor(this.cols * 0.18));
-    const amt = Math.max(8, Math.floor(this.cols * 0.3));
+    // Wider paper: keep Lot compact, stretch Bags×Rate, pin Amount to the right edge.
+    const lotShare = this.cols >= 56 ? 0.14 : this.cols >= 40 ? 0.18 : 0.2;
+    const amtShare = this.cols >= 56 ? 0.28 : 0.3;
+    const lot = Math.max(5, Math.floor(this.cols * lotShare));
+    const amt = Math.max(8, Math.floor(this.cols * amtShare));
     const mid = Math.max(8, this.cols - lot - amt);
     return [lot, mid, amt];
   }
@@ -184,17 +193,17 @@ export class EscPosBuilder {
   }
 
   /**
-   * Preview-style emphasized total: double rule + tall boxed row + double rule.
-   * Closest ESC/POS stand-in for the HTML black NET PAYABLE / TOTAL box.
+   * Emphasized total: double rules + one tall kv row (no ASCII box / blank feeds).
+   * Keeps Net Payable / TOTAL prominent without adding vertical length.
    */
   emphasizedTotalBox(left: string, right: string): this {
-    this.align("left").feed(1);
+    this.align("left");
     this.line("=".repeat(this.cols));
     this.bold(true).size("tall");
-    this.boxedKv(left, right);
+    this.kv(left, right);
     this.size("normal").bold(false);
     this.line("=".repeat(this.cols));
-    return this.feed(1);
+    return this;
   }
 
   /** White-on-black line where the printer supports GS B reverse mode (optional emphasis). */
@@ -249,9 +258,8 @@ export class EscPosBuilder {
   }
 
   cut(): this {
-    // Tear-off feed only. GS V A n feeds extra units before cut and on many
-    // printers (incl. generic 80 mm) dumps a long blank tail.
-    return this.feed(2).raw(u8(0x1d, 0x56, 0x00));
+    // Minimal tear-off feed. Extra blank feeds made pattis unnecessarily long.
+    return this.feed(1).raw(u8(0x1d, 0x56, 0x00));
   }
 
   toBytes(): Uint8Array {

@@ -14,6 +14,7 @@ import { Ionicons } from "@expo/vector-icons";
 
 import { api, apiErrorMessage, BagPurchase, BagUsageRow, BagWallet } from "@/src/api";
 import { useAuth } from "@/src/context/AuthContext";
+import { isBagPurchaseEnabled } from "@/src/utils/bag-billing";
 import { Button, Input } from "@/src/components/ui";
 import { colors, font, money, spacing } from "@/src/theme";
 
@@ -41,7 +42,8 @@ export default function BillingScreen() {
   const [loading, setLoading] = useState(false);
   const [qty, setQty] = useState("1000");
   const [buying, setBuying] = useState(false);
-  const [tab, setTab] = useState<"buy" | "purchases" | "usage">("buy");
+  const purchaseEnabled = isBagPurchaseEnabled();
+  const [tab, setTab] = useState<"buy" | "purchases" | "usage">(purchaseEnabled ? "buy" : "purchases");
 
   const load = useCallback(async () => {
     if (!isOwner) return;
@@ -90,6 +92,7 @@ export default function BillingScreen() {
   }, [bagsToBuy, wallet?.price_per_bag]);
 
   const purchase = async () => {
+    if (!purchaseEnabled) return;
     if (!bagsToBuy) {
       Alert.alert("Enter quantity", "Enter how many bags to purchase.");
       return;
@@ -173,7 +176,9 @@ export default function BillingScreen() {
         ) : null}
 
         <View style={styles.tabs}>
-          {(["buy", "purchases", "usage"] as const).map((t) => (
+          {(["buy", "purchases", "usage"] as const)
+            .filter((t) => purchaseEnabled || t !== "buy")
+            .map((t) => (
             <Pressable
               key={t}
               onPress={() => setTab(t)}
@@ -187,7 +192,7 @@ export default function BillingScreen() {
           ))}
         </View>
 
-        {tab === "buy" ? (
+        {purchaseEnabled && tab === "buy" ? (
           <View style={styles.card}>
             <Text style={styles.cardLabel}>PURCHASE BAGS</Text>
             <Text style={styles.hint}>

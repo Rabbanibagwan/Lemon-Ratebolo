@@ -433,7 +433,8 @@ export function renderDriverThermalHtml(
   <meta name="viewport" content="width=${m.widthPx}, initial-scale=1, maximum-scale=1"/>
   <title>Driver ${escHtml(d.driver_name)}</title>
   <style>${thermalBaseCss(m)}
-    #slip { padding: ${Math.max(1, m.padY - 1)}px 1px !important; }
+    /* Side inset via thermalMetrics.pattiPadX (58→5 / 80→8 / 100→10) — same as Patti/Vendor. */
+    #slip { padding: ${Math.max(1, m.padY - 1)}px ${m.pattiPadX}px !important; }
     .drv-shop {
       font-size: ${headFs}px !important;
       font-weight: 900 !important;

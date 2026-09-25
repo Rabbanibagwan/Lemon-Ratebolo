@@ -261,7 +261,7 @@ export default function History() {
                   )}
                 </View>
                 <Text style={styles.meta}>
-                  {new Date(item.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}
+                  {new Date(`${item.date}T00:00:00`).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}
                   {" · "}{item.total_bags} bag{item.total_bags === 1 ? "" : "s"}
                   {item.driver_name ? ` · ${item.driver_name}` : ""}
                 </Text>

@@ -289,7 +289,7 @@ export default function PattiDetail() {
     );
   }
 
-  const date = new Date(p.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" });
+  const date = new Date(`${p.date}T00:00:00`).toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" });
   const isDeleted = (p as any).deleted === true || p.status === ("deleted" as any);
 
   return (

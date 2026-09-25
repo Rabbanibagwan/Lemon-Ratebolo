@@ -46,9 +46,11 @@ export default function ShopProfileScreen() {
         address: p.address || null, village: p.village || null, taluk: p.taluk || null,
         district: p.district || null, state: p.state || null,
         gst_number: p.gst_number || null, pan_number: p.pan_number || null,
+        logo_base64: p.logo_base64 || null,
         bank_name: p.bank_name || null, bank_account_holder: p.bank_account_holder || null,
         bank_account_number: p.bank_account_number || null, bank_ifsc: p.bank_ifsc || null,
         bank_branch: p.bank_branch || null, upi_id: p.upi_id || null,
+        upi_qr_base64: p.upi_qr_base64 || null,
       });
       setP(upd);
       setMsg("Saved");

@@ -15,7 +15,7 @@ import { PartyPicker } from "@/src/components/PartyPicker";
 import { colors, font, money, spacing } from "@/src/theme";
 import { thermalPrintAndMark, canUserPrintPatti, staffPrintBlockedMessage } from "@/src/utils/patti-print";
 import { clampPaperMm, thermalPrintUserMessage } from "@/src/utils/thermal-print";
-import { handleBagBillingError } from "@/src/utils/bag-billing";
+import { handleBagBillingError, insufficientBagMessage } from "@/src/utils/bag-billing";
 
 type LocalSale = { key: string; vendor_id: string | null; vendor_name: string; bags: string; rate: string };
 type LocalLot = {
@@ -203,7 +203,7 @@ export default function EditPatti() {
       Alert.alert("Saved", `Patti #${updated.patti_no} updated. Net ${money(updated.net_payable)}`);
     } catch (e: any) {
       if (handleBagBillingError(e, router)) {
-        setError("Insufficient bag balance. Please purchase additional bags to continue.");
+        setError(insufficientBagMessage());
       } else {
         setError(errText(e));
       }

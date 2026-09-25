@@ -471,15 +471,15 @@ export default function OcrCapture() {
                   <Text style={styles.retakeText}>CHANGE IMAGE</Text>
                 </Pressable>
               </View>
-              <View style={{ marginTop: spacing.lg }}>
-                <Input
-                  label="Extraction hint (optional)"
-                  value={hint}
-                  onChangeText={setHint}
+            <View style={{ marginTop: spacing.lg }}>
+              <Input
+                label="Extraction hint (optional)"
+                value={hint}
+                onChangeText={setHint}
                   placeholder="e.g. 1/5 ABDG (50) then MM 02 1000"
-                  multiline
-                  testID="ocr-hint"
-                />
+                multiline
+                testID="ocr-hint"
+              />
               </View>
             </View>
           ) : null}

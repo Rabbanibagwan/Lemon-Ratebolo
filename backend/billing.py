@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 
@@ -91,7 +91,23 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
         await db.bag_usage.create_index("id", unique=True)
 
     def _admin_key() -> str:
-        return (os.environ.get("ADMIN_API_KEY") or os.environ.get("BILLING_ADMIN_KEY") or "lemon-admin-dev").strip()
+        key = (os.environ.get("ADMIN_API_KEY") or os.environ.get("BILLING_ADMIN_KEY") or "").strip()
+        if key:
+            return key
+        allow_dev = (os.environ.get("ALLOW_DEV_ADMIN_KEY") or "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        if allow_dev:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "ALLOW_DEV_ADMIN_KEY is enabled — X-Admin-Key routes accept the development fallback key"
+            )
+            return "lemon-admin-dev"
+        # No configured key and dev fallback disabled — reject all keys (including lemon-admin-dev).
+        return "__UNCONFIGURED_ADMIN_KEY__"
 
     async def admin_auth(x_admin_key: Optional[str] = Header(default=None, alias="X-Admin-Key")) -> None:
         if not x_admin_key or x_admin_key.strip() != _admin_key():
@@ -556,19 +572,45 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
         )
 
     @api.put("/admin/billing/settings", response_model=PlatformBillingSettingsOut)
-    async def admin_put_billing_settings(payload: PlatformBillingSettingsIn, _: None = Depends(admin_auth)):
+    async def admin_put_billing_settings(
+        payload: PlatformBillingSettingsIn,
+        request: Request,
+        _: None = Depends(admin_auth),
+    ):
+        from admin_auth import write_admin_audit_log
+
+        before_doc = await get_platform_settings()
+        before = {
+            "price_per_bag": float(before_doc.get("price_per_bag") or 0),
+            "new_merchant_free_bags": int(before_doc.get("new_merchant_free_bags") or 0),
+            "gst_percent": float(before_doc.get("gst_percent") or 0),
+            "allow_test_payments": bool(before_doc.get("allow_test_payments", True)),
+            "billing_active": bool(before_doc.get("billing_active", True)),
+        }
+        after = {
+            "price_per_bag": float(payload.price_per_bag),
+            "new_merchant_free_bags": int(payload.new_merchant_free_bags),
+            "gst_percent": float(payload.gst_percent),
+            "allow_test_payments": bool(payload.allow_test_payments),
+            "billing_active": bool(payload.billing_active),
+        }
         now = _utc_now()
         await db.platform_billing_settings.update_one(
             {"id": "default"},
-            {"$set": {
-                "price_per_bag": float(payload.price_per_bag),
-                "new_merchant_free_bags": int(payload.new_merchant_free_bags),
-                "gst_percent": float(payload.gst_percent),
-                "allow_test_payments": bool(payload.allow_test_payments),
-                "billing_active": bool(payload.billing_active),
-                "updated_at": now,
-            }},
+            {"$set": {**after, "updated_at": now}},
             upsert=True,
+        )
+        await write_admin_audit_log(
+            db,
+            admin_id="legacy:x-admin-key",
+            admin_username="x-admin-key",
+            action="BILLING_SETTINGS_UPDATED",
+            resource_type="platform_billing_settings",
+            resource_id="default",
+            before=before,
+            after=after,
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
         )
         return await admin_get_billing_settings()
 
@@ -613,6 +655,8 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
     @api.post("/billing/purchases", response_model=PurchaseOut, status_code=201)
     async def create_purchase(payload: PurchaseCreateIn, user=Depends(owner_only)):
         settings = await get_platform_settings()
+        if not settings.get("allow_test_payments", True):
+            raise HTTPException(403, "Test payments disabled — use live payment gateway")
         price = float(settings.get("price_per_bag") or 0)
         gst_pct = float(settings.get("gst_percent") or 0)
         bags = int(payload.bags)

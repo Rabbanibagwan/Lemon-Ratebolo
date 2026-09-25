@@ -11,6 +11,7 @@ import { api, Farmer, Vendor } from "@/src/api";
 import { KeyboardFormAvoid } from "@/src/components/KeyboardForm";
 import { Button, Empty, Input } from "@/src/components/ui";
 import { colors, font, spacing } from "@/src/theme";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 
 export type PartyKind = "farmer" | "vendor";
 export type PartyItem = Farmer | Vendor;
@@ -115,6 +116,7 @@ export function PartyPicker({
   const villageRef = useRef<TextInput>(null);
   const createKeyRef = useRef<TextInput>(null);
   const createActionRef = useRef<"save" | "cancel">("save");
+  const runCreateActionRef = useRef<(action: "save" | "cancel") => void>(() => undefined);
   const suppressCreateEnterUntilRef = useRef(0);
   const nameFocusPendingRef = useRef(false);
   const searchFocusPendingRef = useRef(false);
@@ -171,7 +173,9 @@ export function PartyPicker({
   type CreateField = "name" | "details" | "phone" | "village";
 
   const createFieldOrder = useMemo((): CreateField[] => {
-    if (isFarmer) return ["name", "phone", "village"];
+    // Enter chain: Name → Phone → Save (village optional, Tab-reachable).
+    // Vendor: Name → Details → Phone → Save.
+    if (isFarmer) return ["name", "phone"];
     return ["name", "details", "phone"];
   }, [isFarmer]);
 
@@ -192,8 +196,13 @@ export function PartyPicker({
     focusTextInputSoon(nameRef);
   }, []);
 
+  const lastCreateAdvanceRef = useRef(0);
+
   const submitCreateField = (field: CreateField) => {
     if (shouldIgnoreCreateEnter()) return;
+    const now = Date.now();
+    if (now - lastCreateAdvanceRef.current < 280) return;
+    lastCreateAdvanceRef.current = now;
     advanceCreateField(field);
   };
 
@@ -235,19 +244,6 @@ export function PartyPicker({
     activateCreateActions("save");
   };
 
-  const runCreateAction = (action: "save" | "cancel") => {
-    if (action !== "cancel" && shouldIgnoreCreateEnter()) return;
-    if (action === "cancel") {
-      closeCreate();
-      return;
-    }
-    if (exact) {
-      selectExistingParty(exact);
-      return;
-    }
-    saveNew();
-  };
-
   const handleCreateFormKeyPress = (e: NativeSyntheticEvent<TextInputKeyPressEventData>) => {
     const key = e.nativeEvent.key;
     if (key === "Escape") {
@@ -257,13 +253,28 @@ export function PartyPicker({
     if (!createActionsActive) return;
     if (key === "ArrowLeft") setCreateAction("save");
     else if (key === "ArrowRight") setCreateAction("cancel");
-    else if (key === "Enter") runCreateAction(createActionRef.current);
+    else if (key === "Enter") runCreateActionRef.current(createActionRef.current);
   };
 
-  const handleCreateFieldKeyPress = (_field: CreateField) => (
+  const handleCreateFormSubmit = () => {
+    runCreateActionRef.current(createActionRef.current);
+  };
+
+  const handleCreateFieldKeyPress = (field: CreateField) => (
     e: NativeSyntheticEvent<TextInputKeyPressEventData>,
   ) => {
-    if (e.nativeEvent.key === "Escape") closeCreate();
+    const key = e.nativeEvent.key;
+    if (key === "Escape") {
+      closeCreate();
+      return;
+    }
+    if (key === "Enter") {
+      if (field === "village") {
+        activateCreateActions("save");
+        return;
+      }
+      submitCreateField(field);
+    }
   };
 
   const handleCreateFieldFocus = () => {
@@ -307,6 +318,10 @@ export function PartyPicker({
 
   const handleSearchKeyPress = (e: NativeSyntheticEvent<TextInputKeyPressEventData>) => {
     const key = e.nativeEvent.key;
+    if (key === "Escape") {
+      onClose();
+      return;
+    }
     if (key === "ArrowDown") {
       if (!filtered.length) return;
       setHighlightIndex((i) => Math.min(i + 1, filtered.length - 1));
@@ -380,6 +395,23 @@ export function PartyPicker({
     }
   };
 
+  const runCreateAction = (action: "save" | "cancel") => {
+    if (action !== "cancel" && shouldIgnoreCreateEnter()) return;
+    if (action === "cancel") {
+      closeCreate();
+      return;
+    }
+    const now = Date.now();
+    if (now - lastCreateAdvanceRef.current < 280) return;
+    lastCreateAdvanceRef.current = now;
+    if (exact) {
+      selectExistingParty(exact);
+      return;
+    }
+    void saveNew();
+  };
+  runCreateActionRef.current = runCreateAction;
+
   return (
     <>
       <Modal
@@ -389,7 +421,7 @@ export function PartyPicker({
         onRequestClose={onClose}
         onShow={handleSearchModalShown}
       >
-        <View style={styles.modalRoot}>
+        <KeyboardFormAvoid style={styles.modalRoot}>
           <Pressable style={styles.backdrop} onPress={onClose} />
           <View style={styles.sheet}>
             <View style={styles.header}>
@@ -438,7 +470,8 @@ export function PartyPicker({
               data={filtered}
               keyExtractor={(x) => x.id}
               keyboardShouldPersistTaps="handled"
-              style={{ maxHeight: 360 }}
+              keyboardDismissMode="none"
+              style={styles.list}
               contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.xl, gap: spacing.sm }}
               onScrollToIndexFailed={() => {
                 /* ignore — list may still be measuring */
@@ -449,32 +482,40 @@ export function PartyPicker({
                   subtitle={`Type a name and press Enter to add, or tap ${addLabel} above`}
                 />
               }
-              renderItem={({ item, index }) => (
-                <Pressable
-                  onPress={() => onSelect(item)}
-                  style={[
-                    styles.row,
-                    item.id === selectedId && styles.rowOn,
-                    index === highlightIndex && styles.rowHighlight,
-                  ]}
-                  testID={`party-pick-${item.id}`}
-                >
-                  <View style={styles.avatar}>
-                    <Text style={styles.avatarText}>{item.name.charAt(0).toUpperCase()}</Text>
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.rowTitle}>{item.name}</Text>
-                    <Text style={styles.rowMeta} numberOfLines={1}>
-                      {isFarmer
-                        ? ((item as Farmer).village || item.phone || "—")
-                        : ((item as Vendor).details || item.phone || "—")}
+              renderItem={({ item, index }) => {
+                const highlighted = index === highlightIndex;
+                return (
+                  <Pressable
+                    onPress={() => onSelect(item)}
+                    style={[
+                      styles.row,
+                      item.id === selectedId && styles.rowOn,
+                      highlighted && styles.rowHighlight,
+                    ]}
+                    testID={`party-pick-${item.id}`}
+                  >
+                    <Text style={[styles.rowCaret, !highlighted && styles.rowCaretHidden]}>
+                      {highlighted ? ">" : " "}
                     </Text>
-                  </View>
-                </Pressable>
-              )}
+                    <View style={styles.avatar}>
+                      <Text style={styles.avatarText}>{item.name.charAt(0).toUpperCase()}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.rowTitle, highlighted && styles.rowTitleHighlight]}>
+                        {item.name}
+                      </Text>
+                      <Text style={styles.rowMeta} numberOfLines={1}>
+                        {isFarmer
+                          ? ((item as Farmer).village || item.phone || "—")
+                          : ((item as Vendor).details || item.phone || "—")}
+                      </Text>
+                    </View>
+                  </Pressable>
+                );
+              }}
             />
           </View>
-        </View>
+        </KeyboardFormAvoid>
       </Modal>
 
       <Modal
@@ -493,7 +534,12 @@ export function PartyPicker({
                 <Ionicons name="close" size={22} color={colors.onSurface} />
               </Pressable>
             </View>
-            <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.md }}>
+            <KeyboardAwareScrollView
+              keyboardShouldPersistTaps="handled"
+              bottomOffset={24}
+              extraKeyboardSpace={16}
+              contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.xl }}
+            >
             <Input
               label="Name"
               value={name}
@@ -533,7 +579,7 @@ export function PartyPicker({
               keyboardType="phone-pad"
               testID={isFarmer ? "new-farmer-phone" : "new-vendor-phone"}
               inputRef={phoneRef}
-              returnKeyType="next"
+              returnKeyType="done"
               blurOnSubmit={false}
               onFocus={handleCreateFieldFocus}
               onSubmitEditing={() => submitCreateField("phone")}
@@ -550,7 +596,7 @@ export function PartyPicker({
                 returnKeyType="done"
                 blurOnSubmit={false}
                 onFocus={handleCreateFieldFocus}
-                onSubmitEditing={() => submitCreateField("village")}
+                onSubmitEditing={() => activateCreateActions("save")}
                 onKeyPress={handleCreateFieldKeyPress("village")}
               />
             ) : null}
@@ -594,6 +640,9 @@ export function PartyPicker({
                 caretHidden
                 accessible={false}
                 importantForAccessibility="no-hide-descendants"
+                blurOnSubmit={false}
+                returnKeyType="done"
+                onSubmitEditing={handleCreateFormSubmit}
                 onKeyPress={handleCreateFormKeyPress}
                 testID="party-create-key-trap"
               />
@@ -623,7 +672,7 @@ export function PartyPicker({
                 testID={isFarmer ? "new-farmer-cancel" : "new-vendor-cancel"}
               />
             </View>
-            </View>
+            </KeyboardAwareScrollView>
           </View>
         </KeyboardFormAvoid>
       </Modal>
@@ -636,11 +685,12 @@ const styles = StyleSheet.create({
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.45)" },
   sheet: {
     backgroundColor: colors.surface, borderTopWidth: 2, borderColor: colors.borderStrong,
-    paddingBottom: spacing.md, maxHeight: "82%",
+    paddingBottom: spacing.md, maxHeight: "88%",
   },
+  list: { flexGrow: 0, maxHeight: 360 },
   createCard: {
     backgroundColor: colors.surface, borderTopWidth: 2, borderColor: colors.borderStrong,
-    paddingBottom: spacing.xl,
+    maxHeight: "92%",
   },
   header: {
     flexDirection: "row", justifyContent: "space-between", alignItems: "center",
@@ -662,12 +712,20 @@ const styles = StyleSheet.create({
   },
   searchInput: { flex: 1, color: colors.onSurface, fontFamily: font.display, fontSize: 15, paddingVertical: 8 },
   row: {
-    flexDirection: "row", alignItems: "center", gap: spacing.md,
+    flexDirection: "row", alignItems: "center", gap: spacing.sm,
     borderWidth: 2, borderColor: colors.borderStrong, padding: spacing.md, backgroundColor: colors.surface,
   },
   rowOn: { borderColor: colors.brandPrimary, backgroundColor: colors.brandSecondary },
-  rowHighlight: { borderColor: colors.brand, backgroundColor: colors.brandSecondary },
+  rowHighlight: {
+    borderColor: colors.brand, borderWidth: 3, backgroundColor: colors.brandSecondary,
+  },
+  rowCaret: {
+    width: 16, fontSize: 16, fontWeight: "900", color: colors.brand,
+    fontFamily: font.mono, textAlign: "center",
+  },
+  rowCaretHidden: { color: "transparent" },
   rowTitle: { fontSize: 15, fontWeight: "800", color: colors.onSurface, fontFamily: font.display },
+  rowTitleHighlight: { color: colors.brand, fontWeight: "900" },
   rowMeta: { fontSize: 12, color: colors.muted, fontFamily: font.display, marginTop: 2 },
   avatar: {
     width: 40, height: 40, borderWidth: 2, borderColor: colors.borderStrong,

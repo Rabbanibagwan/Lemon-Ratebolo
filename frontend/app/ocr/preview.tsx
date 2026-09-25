@@ -100,13 +100,13 @@ function fuzzyMatchId(input: string, list: { id: string; name: string }[]): stri
 function rowsToLots(raw: any[]): LotDraft[] {
   const map = new Map<string, LotDraft>();
   for (const r of raw) {
-    let serial = r.lot_serial_no != null ? String(r.lot_serial_no) : "";
-    let total = r.total_bags != null ? String(r.total_bags) : "";
-    if (!serial || !total) {
-      const legacy = splitLegacyLot(r.lot_no);
-      if (!serial) serial = legacy.serial;
-      if (!total) total = legacy.total;
-    }
+        let serial = r.lot_serial_no != null ? String(r.lot_serial_no) : "";
+        let total = r.total_bags != null ? String(r.total_bags) : "";
+        if (!serial || !total) {
+          const legacy = splitLegacyLot(r.lot_no);
+          if (!serial) serial = legacy.serial;
+          if (!total) total = legacy.total;
+        }
     const farmer = (r.farmer_name || "").trim();
     const gkey = `${serial}#${farmer.toLowerCase()}`;
     let lot = map.get(gkey);
@@ -116,11 +116,11 @@ function rowsToLots(raw: any[]): LotDraft[] {
       if (r.bhada_total != null) bhadaTotal = String(r.bhada_total);
       else if (r.bhada_per_bag != null) bhadaTotal = String(r.bhada_per_bag);
       lot = {
-        key: newKey(),
-        lot_serial_no: serial,
-        total_bags: total,
+          key: newKey(),
+          lot_serial_no: serial,
+          total_bags: total,
         farmer_name: farmer,
-        farmer_id: null,
+          farmer_id: null,
         bhada_total: bhadaTotal,
         vendors: [],
       };
@@ -135,10 +135,10 @@ function rowsToLots(raw: any[]): LotDraft[] {
     if (r.vendor_name || r.bags != null) {
       lot.vendors.push({
         key: newKey(),
-        vendor_name: r.vendor_name || "",
-        vendor_id: null,
-        bags: r.bags != null ? String(r.bags) : "",
-        rate_per_bag: r.rate_per_bag != null ? String(r.rate_per_bag) : "",
+          vendor_name: r.vendor_name || "",
+          vendor_id: null,
+          bags: r.bags != null ? String(r.bags) : "",
+          rate_per_bag: r.rate_per_bag != null ? String(r.rate_per_bag) : "",
       });
     }
   }
@@ -702,8 +702,8 @@ export default function OcrPreview() {
           <View style={styles.photoRef}>
             <Text style={styles.photoRefLabel}>PHOTO REFERENCE</Text>
             <Image source={{ uri: photoUri }} style={styles.photoRefImg} resizeMode="contain" />
-          </View>
-        ) : null}
+                </View>
+              ) : null}
         {lots.map((lot, li) => {
           const st = auctionStatus(lot);
           const badge = statusLabel(lot);
@@ -739,7 +739,7 @@ export default function OcrPreview() {
                     }
                   >
                     {badge.text}
-                  </Text>
+                </Text>
                 ) : null}
                 {!isDone ? (
                   <Pressable onPress={() => removeLot(lot.key)} hitSlop={10} testID={`ocr-lot-remove-${li}`}>
@@ -819,17 +819,17 @@ export default function OcrPreview() {
                         <Ionicons name="close-circle-outline" size={18} color={colors.error} />
                       </Pressable>
                     ) : null}
-                  </View>
-                  <View style={{ flexDirection: "row", gap: spacing.sm, alignItems: "flex-end" }}>
+              </View>
+              <View style={{ flexDirection: "row", gap: spacing.sm, alignItems: "flex-end" }}>
                     <View style={{ flex: 1 }}>
-                      <Input
+                  <Input
                         label={v.vendor_id ? "Vendor ✓ linked" : "Vendor"}
                         value={v.vendor_name}
                         onChangeText={(t) => updateVendor(lot.key, v.key, { vendor_name: t, vendor_id: null })}
                         testID={`ocr-vendor-${li}-${vi}`}
-                      />
-                    </View>
-                    <Pressable
+                  />
+                </View>
+                <Pressable
                       style={[styles.pickBtn, v.vendor_id && styles.pickBtnOn]}
                       onPress={() => {
                         captureScrollBeforePicker(lot.key);
@@ -839,10 +839,10 @@ export default function OcrPreview() {
                       testID={`ocr-pick-vendor-${li}-${vi}`}
                     >
                       <Ionicons name="link" size={14} color={v.vendor_id ? colors.onBrandPrimary : colors.onSurface} />
-                    </Pressable>
-                  </View>
-                  <View style={{ flexDirection: "row", gap: spacing.sm }}>
-                    <View style={{ flex: 1 }}>
+                </Pressable>
+              </View>
+              <View style={{ flexDirection: "row", gap: spacing.sm }}>
+                <View style={{ flex: 1 }}>
                       <Input
                         label="Bags"
                         value={v.bags}
@@ -850,8 +850,8 @@ export default function OcrPreview() {
                         keyboardType="number-pad"
                         testID={`ocr-bags-${li}-${vi}`}
                       />
-                    </View>
-                    <View style={{ flex: 1.3 }}>
+                </View>
+                <View style={{ flex: 1.3 }}>
                       <Input
                         label="Rate / Bag ₹"
                         value={v.rate_per_bag}
@@ -859,10 +859,10 @@ export default function OcrPreview() {
                         keyboardType="decimal-pad"
                         testID={`ocr-rate-${li}-${vi}`}
                       />
-                    </View>
-                  </View>
-                </View>
-              ))}
+              </View>
+            </View>
+            </View>
+          ))}
 
               <Pressable style={styles.addVendor} onPress={() => addVendor(lot.key)} testID={`ocr-add-vendor-${li}`}>
                 <Ionicons name="add-circle-outline" size={18} color={colors.brandPrimary} />
@@ -891,7 +891,7 @@ export default function OcrPreview() {
                   </Pressable>
                   <Text style={styles.dupHint}>Edit Lot No. above, then tap SAVE or SAVE & PRINT</Text>
                 </View>
-              ) : null}
+          ) : null}
             </View>
           );
         })}

@@ -102,17 +102,6 @@ async def lifespan(app: FastAPI):
         name="uniq_patti_per_lot",
     )
     await db.pattis.create_index([("shop_id", 1), ("auction_day_id", 1), ("farmer_id", 1)])
-    # Migration: remove legacy pattis that have no lot_id (they were grouped-by-farmer).
-    # These will be re-generated on next lot save under the new 1-Patti-per-Lot rule.
-    try:
-        purge = await db.pattis.delete_many({"lot_id": {"$in": [None]}})
-        if purge.deleted_count:
-            logger.info(f"Startup: purged {purge.deleted_count} legacy pattis without lot_id")
-        purge2 = await db.pattis.delete_many({"lot_id": {"$exists": False}})
-        if purge2.deleted_count:
-            logger.info(f"Startup: purged {purge2.deleted_count} legacy pattis (no lot_id field)")
-    except Exception as _e:  # noqa: BLE001
-        logger.warning(f"Startup: legacy patti purge skipped: {_e}")
     await db.pattis.create_index([("shop_id", 1), ("qr_token", 1)])
     await db.pattis.create_index([("shop_id", 1), ("date", -1), ("patti_no", -1)])
     await db.settings.create_index("shop_id", unique=True)
@@ -139,6 +128,12 @@ async def lifespan(app: FastAPI):
             await _billing.ensure_indexes()
     except Exception as _e:  # noqa: BLE001
         logger.warning("Startup: billing indexes skipped: %s", _e)
+    try:
+        import admin_auth as _admin_auth
+        await _admin_auth.ensure_indexes(db)
+        await _admin_auth.maybe_bootstrap_first_admin(db, pwd)
+    except Exception as _e:  # noqa: BLE001
+        logger.warning("Startup: platform admin auth skipped: %s", _e)
     logger.info("Startup: indexes ensured.")
     yield
     # Shutdown
@@ -240,6 +235,10 @@ class SignupBody(BaseModel):
 class LoginBody(BaseModel):
     username: str
     password: str
+
+
+class DeleteAccountBody(BaseModel):
+    password: str = Field(min_length=1, max_length=72)
 
 
 class TokenOut(BaseModel):
@@ -655,6 +654,23 @@ async def login(body: LoginBody):
 @api.get("/auth/me", response_model=MeOut)
 async def me(user=Depends(current_user)):
     return MeOut(**user)
+
+
+@api.post("/auth/delete-account")
+async def delete_account(body: DeleteAccountBody, user=Depends(owner_only)):
+    """Owner-only permanent account deletion for the authenticated shop."""
+    from backup import delete_merchant_account
+
+    shop_id = user["shop_id"]
+    if user.get("id") != shop_id:
+        raise HTTPException(403, "Only the shop owner can delete this account")
+    shop = await db.shops.find_one({"id": shop_id})
+    if not shop:
+        raise HTTPException(404, "Shop not found")
+    if not pwd.verify(body.password, shop["password_hash"]):
+        raise HTTPException(401, "Incorrect password")
+    await delete_merchant_account(db, shop_id)
+    return {"ok": True}
 
 
 class VendorBillLineIn(BaseModel):
@@ -1621,6 +1637,13 @@ async def update_lot(lot_id: str, body: LotIn, user=Depends(owner_only)):
         "bhada_manual": bhada_manual,
         "sales": sales_docs,
     }
+    if sales_docs:
+        # Validate before mutating the lot/Patti. A rejected balance check must
+        # leave the existing records unchanged.
+        await billing_mod.assert_can_consume(
+            user, user["shop_id"],
+            max(0, int(total_bags) - (old_patti_bags if existing_patti else 0)),
+        )
     d = await db.lots.find_one_and_update(
         {"id": lot_id, "shop_id": user["shop_id"]},
         {"$set": update}, return_document=True, projection={"_id": 0},
@@ -1631,10 +1654,6 @@ async def update_lot(lot_id: str, body: LotIn, user=Depends(owner_only)):
     patti_id: Optional[str] = None
     patti_no: Optional[int] = None
     if d.get("sales"):
-        await billing_mod.assert_can_consume(
-            user, user["shop_id"],
-            max(0, int(total_bags) - (old_patti_bags if existing_patti else 0)),
-        )
         patti_doc = await _generate_patti_for_lot(user["shop_id"], day, d, user=user)
         patti_id = patti_doc.get("id")
         patti_no = patti_doc.get("patti_no")
@@ -2453,7 +2472,7 @@ class ReportRow(BaseModel):
 @api.get("/reports/by-farmer", response_model=List[ReportRow])
 async def report_by_farmer(user=Depends(current_user)):
     pipeline = [
-        {"$match": {"shop_id": user["shop_id"]}},
+        {"$match": {"shop_id": user["shop_id"], "deleted": {"$ne": True}}},
         {"$group": {
             "_id": {"fid": "$farmer_id", "name": "$farmer_name"},
             "pattis": {"$sum": 1},
@@ -2474,7 +2493,7 @@ async def report_by_farmer(user=Depends(current_user)):
 @api.get("/reports/by-vendor", response_model=List[ReportRow])
 async def report_by_vendor(user=Depends(current_user)):
     pipeline = [
-        {"$match": {"shop_id": user["shop_id"]}},
+        {"$match": {"shop_id": user["shop_id"], "deleted": {"$ne": True}}},
         {"$unwind": "$lots"},
         {"$unwind": "$lots.sales"},
         {"$group": {
@@ -3099,6 +3118,8 @@ async def update_vendor_bill(bill_id: str, body: VendorBillIn, user=Depends(curr
     )
     grand = _round2(goods + commission + body.hamali + body.cess)
     paid = float(existing.get("paid", 0))
+    if paid - grand > 0.01:
+        raise HTTPException(400, "Bill total cannot be reduced below the amount already paid")
     # Refresh vendor_details snapshot from current vendor doc
     vendor = await db.vendors.find_one({"id": existing["vendor_id"], "shop_id": user["shop_id"]}, {"_id": 0, "details": 1})
     upd = {
@@ -3166,9 +3187,13 @@ async def receive_payment(body: VendorPaymentIn, user=Depends(current_user)):
     alloc_total = sum(a.amount for a in body.allocations)
     if alloc_total - body.amount > 0.01:
         raise HTTPException(400, "Allocations exceed payment amount")
+    seen_bill_ids: set[str] = set()
     for a in body.allocations:
         if a.amount <= 0:
             continue
+        if a.bill_id in seen_bill_ids:
+            raise HTTPException(400, f"Duplicate allocation for bill {a.bill_id}")
+        seen_bill_ids.add(a.bill_id)
         bill = await db.vendor_bills.find_one(
             {"id": a.bill_id, "shop_id": user["shop_id"], "vendor_id": body.vendor_id, "deleted": {"$ne": True}},
             {"_id": 0},
@@ -4060,8 +4085,12 @@ async def create_ledger_txn(body: LedgerTxnIn, user=Depends(owner_only)):
 
 # ---------- Register + CORS ----------
 from backup import register_backup_routes  # noqa: E402
+import admin_auth as admin_auth_mod  # noqa: E402
+import admin_merchants as admin_merchants_mod  # noqa: E402
 
 register_backup_routes(api, db, current_user, owner_only)
+admin_auth_mod.register_admin_auth_routes(api, db, pwd)
+admin_merchants_mod.register_admin_merchant_routes(api, db, admin_auth_mod.admin_only)
 
 app.include_router(api)
 

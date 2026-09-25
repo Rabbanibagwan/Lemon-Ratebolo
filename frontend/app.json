@@ -24,17 +24,14 @@
       "edgeToEdgeEnabled": true,
       "softwareKeyboardLayoutMode": "resize",
       "package": "com.emergent.lemonauctionhub.n49a6j",
-      "versionCode": 2,
+      "versionCode": 3,
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO"
+      ],
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.READ_MEDIA_IMAGES",
-        "android.permission.INTERNET",
-        "android.permission.RECORD_AUDIO",
-        "android.permission.BLUETOOTH",
-        "android.permission.BLUETOOTH_ADMIN",
-        "android.permission.BLUETOOTH_CONNECT",
-        "android.permission.BLUETOOTH_SCAN",
-        "android.permission.ACCESS_FINE_LOCATION"
+        "android.permission.INTERNET"
       ]
     },
     "web": {
@@ -48,9 +45,9 @@
         "expo-splash-screen",
         {
           "image": "./assets/images/splash-image.png",
-          "imageWidth": 200,
+          "imageWidth": 280,
           "resizeMode": "contain",
-          "backgroundColor": "#000000"
+          "backgroundColor": "#FFFFFF"
         }
       ],
       [
@@ -66,6 +63,7 @@
           "cameraPermission": "Take Action Book photos for OCR"
         }
       ],
+      "./plugins/with-android-store-permissions.js",
       "@react-native-community/datetimepicker"
     ],
     "experiments": {

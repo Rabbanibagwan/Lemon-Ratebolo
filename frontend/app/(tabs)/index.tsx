@@ -9,6 +9,7 @@ import { useAuth } from "@/src/context/AuthContext";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
 import { colors, font, money, spacing } from "@/src/theme";
 import { DatePickerModal } from "@/src/components/DatePickerModal";
+import { isBagPurchaseEnabled } from "@/src/utils/bag-billing";
 
 export default function Home() {
   const { session } = useAuth();
@@ -19,6 +20,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const isOwner = session?.role === "owner";
+  const bagPurchaseEnabled = isBagPurchaseEnabled();
 
   const load = useCallback(async (iso?: string) => {
     const day = iso || workingDateISO;
@@ -123,7 +125,7 @@ export default function Home() {
               <Text style={styles.bagLine}>
                 FREE {wallet.free_used.toLocaleString()} / {wallet.free_allocated.toLocaleString()} · PURCHASED {wallet.purchased_used.toLocaleString()} / {wallet.purchased_bags.toLocaleString()} · {money(wallet.price_per_bag)} / BAG
               </Text>
-              <Text style={styles.bagCta}>PURCHASE BAGS →</Text>
+              <Text style={styles.bagCta}>{bagPurchaseEnabled ? "PURCHASE BAGS →" : "VIEW BALANCE →"}</Text>
             </Pressable>
           </>
         ) : null}

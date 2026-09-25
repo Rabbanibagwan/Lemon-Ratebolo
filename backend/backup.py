@@ -217,6 +217,12 @@ async def _delete_shop_data(db, shop_id: str) -> None:
         await db[name].delete_many({"shop_id": shop_id})
 
 
+async def delete_merchant_account(db, shop_id: str) -> None:
+    """Permanently remove a merchant shop and all shop-scoped data."""
+    await _delete_shop_data(db, shop_id)
+    await db.shops.delete_one({"id": shop_id})
+
+
 async def _insert_shop_data(db, shop_id: str, payload: dict) -> None:
     shop_doc = deepcopy(payload["shop"])
     shop_doc["id"] = shop_id

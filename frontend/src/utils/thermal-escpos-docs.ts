@@ -12,11 +12,11 @@ export type CashBookDoc = {
 
 function shopHead(b: EscPosBuilder, profile: ShopProfile | { shop_name?: string; address?: string; village?: string; taluk?: string; district?: string; state?: string; mobile?: string } | null) {
   // Preserve merchant shop name casing exactly as entered.
-  const shop = (profile?.shop_name || "").trim();
-  // Merchant name: double-size bold — Preview .shop hierarchy. Printer cannot load Times New Roman.
-  b.init().align("center").bold(true).size("big").line(shop || "LEMON MANDI").size("normal").bold(false);
+  const shop = (profile?.shop_name || "").trim() || "LEMON MANDI";
+  // Tall (double height) keeps full paper width; "big" (double W+H) halves columns and
+  // makes 100 mm slips look like a narrow centered strip.
+  b.init().align("center").bold(true).size("tall").line(shop).size("normal").bold(false);
   const addr = [profile?.address, profile?.village, profile?.taluk, profile?.district, profile?.state].filter(Boolean).join(", ");
-  // Address / mobile: smaller than merchant (Preview .addr).
   if (addr) b.align("center").bold(false).size("normal").wrapped(slipText(addr));
   if (profile?.mobile) b.align("center").bold(false).size("normal").line(`Mobile: ${slipText(profile.mobile)}`);
 }
@@ -80,26 +80,19 @@ export function encodeFarmerPattiEscPos(
   detailed: boolean = false,
 ): string {
   const b = new EscPosBuilder(paperMm);
-  const date = new Date(p.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+  const date = new Date(`${p.date}T00:00:00`).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
   shopHead(b, profile);
 
   b.align("left").hr();
-  // Patti number clearly visible (Preview Patti / Bill · No.).
   b.bold(true).kv("Patti / Bill", `No. ${p.patti_no}`).bold(false);
-  b.hr();
-
-  // Same line as Date/Driver: label left, name right (not a two-line block).
-  // Labels are system sentence-case; farmer/driver names keep user casing via slipText.
-  b.size("normal").bold(true).kv("Farmer", slipText(p.farmer_name || "-")).bold(false);
+  b.bold(true).kv("Farmer", slipText(p.farmer_name || "-")).bold(false);
   b.kv("Date", date);
   if (p.driver_name) {
     const drv = p.driver_place ? `${p.driver_name} - ${p.driver_place}` : p.driver_name;
-    // Prefer value width so driver names are not clipped on narrow paper.
     b.kvPreferValue("Driver", slipText(drv));
   }
 
-  // Full paper width 3-col table (Preview Lot | Bags x Rate | Amount).
-  // Lot cell bold only — mid/amount stay normal so 58 mm stays readable.
+  // Full paper width 3-col table — columns scale with EscPosBuilder.cols (32/48/60).
   b.hr().bold(true).itemRow("Lot", "Bags x Rate", "Amount").bold(false);
   for (const lot of p.lots) {
     lot.sales.forEach((s, i) => {
@@ -112,7 +105,6 @@ export function encodeFarmerPattiEscPos(
   const hamaliLabel = detailed
     ? `Hamali (${p.total_bags} x ${rupees(p.hamali_per_bag)})`
     : "Hamali";
-  // Deductions: same base size; only Total deduction bold (ESC/POS has no smaller font).
   b.hr()
     .kv("Gross total", rupees(p.farmer_gross))
     .bold(false)
@@ -123,16 +115,15 @@ export function encodeFarmerPattiEscPos(
     .kv("Total deduction", `- ${rupees(p.deductions_total)}`)
     .bold(false);
 
-  // Preview .netbox — strong box + tall text; slight amount padding for readability.
-  b.emphasizedTotalBox("Net payable", `  ${rupees(p.net_payable)}`);
+  b.emphasizedTotalBox("Net payable", rupees(p.net_payable));
 
-  // Receiver: bold + readable (Preview Receiver is bold wrap, not farmer-sized). Never print STATUS.
   b.bold(true).size("normal").kv("Receiver", slipText(p.receiver_name || "-")).bold(false);
 
   const token = (qrToken || p.qr_token || "").trim();
   if (token) {
-    // Slightly larger modules; still fits 58/80/100 printable width.
-    b.align("center").feed(1).qr(token, paperMm <= 58 ? 4 : paperMm <= 80 ? 5 : 6);
+    // Module size scales with paper; keep QR compact so it does not dominate height.
+    const qrMod = paperMm <= 58 ? 3 : paperMm <= 80 ? 4 : 5;
+    b.align("center").qr(token, qrMod);
     b.size("normal").bold(false).line("Scan at counter").align("left");
   }
   b.cut();

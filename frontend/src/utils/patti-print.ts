@@ -65,7 +65,7 @@ export function escapeHtml(s: string): string {
 
 /** A4-style PDF for digital share only (no app buttons). */
 export function renderPattiHtml(p: Patti, profile: ShopProfile, qrUri: string, userName: string, detailed: boolean = false): string {
-  const date = new Date(p.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" });
+  const date = new Date(`${p.date}T00:00:00`).toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" });
   const rows = p.lots.map((lot) =>
     lot.sales.map((s, i) => `
       <tr>
@@ -169,7 +169,7 @@ export function renderThermalPattiHtml(
   detailed: boolean = false,
 ): string {
   const m = thermalMetrics(paperMm);
-  const date = new Date(p.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+  const date = new Date(`${p.date}T00:00:00`).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
   const lines = p.lots.map((lot) =>
     lot.sales.map((s, i) => `
       <div class="row">
@@ -193,7 +193,6 @@ export function renderThermalPattiHtml(
     ${mobile ? `<div class="center addr">Mobile: ${escapeHtml(mobile)}</div>` : ""}
     <div class="hr"></div>
     <div class="kv"><span class="k">Patti / Bill</span><span class="bold patti-no">No. ${p.patti_no}</span></div>
-    <div class="hr"></div>
     <div class="kv farmer"><span class="k">Farmer</span><span class="bold v wrap">${escapeHtml(p.farmer_name)}</span></div>
     <div class="kv"><span class="k">Date</span><span class="v">${date}</span></div>
     ${p.driver_name

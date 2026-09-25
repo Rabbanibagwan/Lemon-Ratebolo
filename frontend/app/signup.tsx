@@ -7,6 +7,7 @@ import { useAuth } from "@/src/context/AuthContext";
 import { apiErrorMessage } from "@/src/api";
 import { KeyboardFormScroll } from "@/src/components/KeyboardForm";
 import { Button, Input } from "@/src/components/ui";
+import { LEGAL_URLS, openPrivacyPolicy, openTermsOfService } from "@/src/utils/legal-links";
 import { colors, font, spacing } from "@/src/theme";
 
 export default function Signup() {
@@ -92,6 +93,26 @@ export default function Signup() {
             style={{ marginTop: spacing.sm }}
           />
 
+          {LEGAL_URLS.privacyPolicy || LEGAL_URLS.termsOfService ? (
+            <Text style={styles.legalNote}>
+              By creating an account you agree to our{" "}
+              {LEGAL_URLS.termsOfService ? (
+                <>
+                  <Text style={styles.legalLink} onPress={() => openTermsOfService()} testID="signup-terms-link">
+                    Terms of Service
+                  </Text>
+                  {LEGAL_URLS.privacyPolicy ? " and " : ""}
+                </>
+              ) : null}
+              {LEGAL_URLS.privacyPolicy ? (
+                <Text style={styles.legalLink} onPress={() => openPrivacyPolicy()} testID="signup-privacy-link">
+                  Privacy Policy
+                </Text>
+              ) : null}
+              .
+            </Text>
+          ) : null}
+
           <View style={styles.footRow}>
             <Text style={styles.footText}>Already have an account? </Text>
             <Pressable onPress={() => router.replace("/login")} testID="signup-goto-login">
@@ -114,6 +135,19 @@ const styles = StyleSheet.create({
   err: {
     color: colors.error, backgroundColor: "#FEE2E2", borderWidth: 2, borderColor: colors.error,
     padding: spacing.sm, marginBottom: spacing.sm, fontFamily: font.display, fontWeight: "700",
+  },
+  legalNote: {
+    marginTop: spacing.md,
+    fontSize: 12,
+    lineHeight: 18,
+    color: colors.muted,
+    fontFamily: font.display,
+    textAlign: "center",
+  },
+  legalLink: {
+    color: colors.brandPrimary,
+    fontWeight: "800",
+    textDecorationLine: "underline",
   },
   footRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", marginTop: spacing.lg },
   footText: { color: colors.muted, fontFamily: font.display },

@@ -14,7 +14,7 @@ import { PartyPicker } from "@/src/components/PartyPicker";
 import { colors, font, money, spacing } from "@/src/theme";
 import { useAuth } from "@/src/context/AuthContext";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
-import { handleBagBillingError } from "@/src/utils/bag-billing";
+import { handleBagBillingError, insufficientBagMessage } from "@/src/utils/bag-billing";
 import { canUserPrintPatti } from "@/src/utils/patti-print";
 
 type LocalSale = { key: string; vendor_id: string | null; vendor_name: string; bags: string; rate: string };
@@ -27,6 +27,17 @@ function focusTextInputSoon(focus: () => void) {
   focus();
   setTimeout(focus, 80);
   setTimeout(focus, 250);
+}
+
+/** Soft keyboard uses onSubmitEditing; hardware Enter often only fires onKeyPress. Guard both. */
+function useEnterAdvance(action: () => void) {
+  const lastRef = useRef(0);
+  return useCallback(() => {
+    const now = Date.now();
+    if (now - lastRef.current < 280) return;
+    lastRef.current = now;
+    action();
+  }, [action]);
 }
 
 export default function AddLot() {
@@ -69,6 +80,19 @@ export default function AddLot() {
   footerActionRef.current = footerAction;
 
   const deactivateFooterKeys = () => setFooterKeysActive(false);
+
+  const advanceLotToBags = useEnterAdvance(() => {
+    deactivateFooterKeys();
+    focusTextInputSoon(() => totalBagsRef.current?.focus());
+  });
+  const advanceBagsToBhada = useEnterAdvance(() => {
+    deactivateFooterKeys();
+    focusTextInputSoon(() => bhadaRef.current?.focus());
+  });
+  const advanceBhadaToFarmer = useEnterAdvance(() => {
+    deactivateFooterKeys();
+    setFarmerPickerOpen(true);
+  });
 
   const resetForNextPatti = useCallback(() => {
     setLotSerial("");
@@ -233,7 +257,7 @@ export default function AddLot() {
       } else if (e?.status === 422 && typeof e?.detail === "object" && e.detail?.code === "bags_mismatch") {
         setError(e.detail.message || "Bags mismatch");
       } else if (handleBagBillingError(e, router)) {
-        setError("Insufficient bag balance. Please purchase additional bags to continue.");
+        setError(insufficientBagMessage());
       } else {
         setError(apiErrorMessage(e, "Farmer Patti generation failed"));
       }
@@ -393,7 +417,10 @@ export default function AddLot() {
                 returnKeyType="next"
                 blurOnSubmit={false}
                 onFocus={deactivateFooterKeys}
-                onSubmitEditing={() => totalBagsRef.current?.focus()}
+                onSubmitEditing={advanceLotToBags}
+                onKeyPress={(e) => {
+                  if (e.nativeEvent.key === "Enter") advanceLotToBags();
+                }}
               />
             </View>
             <View style={{ flex: 1 }}>
@@ -408,7 +435,10 @@ export default function AddLot() {
                 returnKeyType="next"
                 blurOnSubmit={false}
                 onFocus={deactivateFooterKeys}
-                onSubmitEditing={() => bhadaRef.current?.focus()}
+                onSubmitEditing={advanceBagsToBhada}
+                onKeyPress={(e) => {
+                  if (e.nativeEvent.key === "Enter") advanceBagsToBhada();
+                }}
               />
             </View>
             <View style={{ flex: 1 }}>
@@ -423,9 +453,9 @@ export default function AddLot() {
                 returnKeyType="next"
                 blurOnSubmit={false}
                 onFocus={deactivateFooterKeys}
-                onSubmitEditing={() => {
-                  deactivateFooterKeys();
-                  setFarmerPickerOpen(true);
+                onSubmitEditing={advanceBhadaToFarmer}
+                onKeyPress={(e) => {
+                  if (e.nativeEvent.key === "Enter") advanceBhadaToFarmer();
                 }}
               />
             </View>

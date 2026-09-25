@@ -25,40 +25,41 @@ export function thermalMetrics(paperMm: number) {
   const widthPx = Math.round(w * MM_TO_CSS_PX);
   // Global Y pad for head/cut edge. Slip docs add horizontal margins via pattiPadX.
   const padX = 0;
-  const padY = w <= 58 ? 2 : 3;
-  /** Shared side inset (~1.5–2.5 mm) for Farmer Patti + Vendor Bill (not edge-to-edge). */
-  const pattiPadX = w <= 58 ? 5 : w <= 80 ? 8 : 10;
-  /** QR display px — slightly larger, still under (widthPx - 2*pattiPadX). */
-  const qrPx = w <= 58 ? 108 : w <= 80 ? 140 : 168;
+  const padY = w <= 58 ? 1 : 2;
+  /** Shared side inset (~1–2 mm) — keep small so 100 mm uses the printable width. */
+  const pattiPadX = w <= 58 ? 4 : w <= 80 ? 6 : 8;
+  /** QR display px — readable but not a tall blank block. */
+  const qrPx = w <= 58 ? 96 : w <= 80 ? 120 : 144;
+  const wide = w > 80;
   return {
     w,
     widthPx,
-    bodyFs: w <= 58 ? 10 : w <= 80 ? 12 : 14,
-    bigFs: w <= 58 ? 13 : w <= 80 ? 16 : 19,
-    hugeFs: w <= 58 ? 17 : w <= 80 ? 22 : 26,
+    bodyFs: w <= 58 ? 10 : w <= 80 ? 12 : 13,
+    bigFs: w <= 58 ? 13 : w <= 80 ? 16 : 18,
+    hugeFs: w <= 58 ? 17 : w <= 80 ? 22 : 24,
     rowFs: w <= 58 ? 10 : w <= 80 ? 12 : 13,
-    emphFs: w <= 58 ? 13 : w <= 80 ? 15 : 17,
+    emphFs: w <= 58 ? 13 : w <= 80 ? 15 : 16,
     /** Lot no. — one step above emph, still below bigFs (safe on 58 mm). */
-    lotFs: w <= 58 ? 14 : w <= 80 ? 16 : 18,
+    lotFs: w <= 58 ? 14 : w <= 80 ? 16 : 17,
     /** Hamali / Bhada / Stationery — slightly under body. */
-    deductFs: w <= 58 ? 9 : w <= 80 ? 11 : 13,
+    deductFs: w <= 58 ? 9 : w <= 80 ? 11 : 12,
     /** TOTAL DEDUCTION — one step above deductFs, still below bodyFs. */
-    deductTotalFs: w <= 58 ? 10 : w <= 80 ? 12 : 14,
+    deductTotalFs: w <= 58 ? 10 : w <= 80 ? 12 : 13,
     qrPx,
     /** @deprecated use padX / padY — kept so older callers still compile */
     padPx: padY,
     padX,
     padY,
     pattiPadX,
-    // Column shares (percent of slip) — avoid fixed px mins that overflow narrow rolls
-    lotPct: w <= 58 ? 20 : 18,
-    midPct: w <= 58 ? 48 : 50,
-    rightPct: w <= 58 ? 32 : 32,
-    farmerFs: w <= 58 ? 20 : w <= 80 ? 24 : 28,
+    // Column shares — on 100 mm stretch Bags×Rate and pin Amount to the right edge.
+    lotPct: w <= 58 ? 20 : wide ? 14 : 18,
+    midPct: w <= 58 ? 48 : wide ? 54 : 50,
+    rightPct: w <= 58 ? 32 : wide ? 32 : 32,
+    farmerFs: w <= 58 ? 18 : w <= 80 ? 22 : 24,
     /** Vendor name — one step under farmerFs, still bold/readable on the same row. */
-    vendorFs: w <= 58 ? 16 : w <= 80 ? 18 : 22,
-    /** Merchant shop name — largest header signal (Preview shopName ~20–24px). */
-    shopFs: w <= 58 ? 18 : w <= 80 ? 24 : 28,
+    vendorFs: w <= 58 ? 16 : w <= 80 ? 18 : 20,
+    /** Merchant shop name — largest header signal without eating vertical space. */
+    shopFs: w <= 58 ? 16 : w <= 80 ? 20 : 24,
   };
 }
 
@@ -109,22 +110,22 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
     .shop {
       font-size: ${m.shopFs}px !important;
       font-weight: 900 !important;
-      line-height: 1.1;
+      line-height: 1.05;
       letter-spacing: -0.3px;
       -webkit-text-stroke: 0.4px #000;
-      margin: 0 0 2px 0;
+      margin: 0 0 1px 0;
     }
     .addr {
       font-size: ${Math.max(8, m.bodyFs - 1)}px !important;
       font-weight: 400 !important;
       -webkit-text-stroke: 0 !important;
-      line-height: 1.2;
+      line-height: 1.15;
     }
     .huge { font-size: ${m.hugeFs}px; font-weight: 900 !important; -webkit-text-stroke: 0.35px #000; }
     .hr {
       border: 0;
       border-top: 2px solid #000 !important;
-      margin: 3px 0;
+      margin: 2px 0;
       height: 0;
     }
     /* Three columns fill 100% of the slip — no leftover side gutters, no fixed-px overflow */
@@ -135,7 +136,7 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       align-items: baseline;
       width: 100%;
       max-width: 100%;
-      padding: 1px 0;
+      padding: 0;
       font-size: ${m.rowFs}px;
       font-weight: 700 !important;
     }
@@ -146,7 +147,7 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
     }
     .row .mid {
       min-width: 0;
-      text-align: center;
+      text-align: ${m.w > 80 ? "left" : "center"};
       font-weight: 700 !important;
       font-size: ${m.rowFs}px !important;
       overflow-wrap: anywhere;
@@ -207,7 +208,7 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
     }
     .th { font-size: ${m.rowFs}px; font-weight: 900 !important; text-transform: uppercase; }
     .kv {
-      display: flex; justify-content: space-between; gap: 4px; padding: 1px 0;
+      display: flex; justify-content: space-between; gap: 4px; padding: 0;
       font-weight: 700 !important; width: 100%; max-width: 100%;
     }
     .kv .k { text-transform: uppercase; flex-shrink: 0; font-weight: 800 !important; }
@@ -218,7 +219,7 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       align-items: baseline;
       justify-content: space-between;
       gap: 4px;
-      padding: 3px 0;
+      padding: 1px 0;
     }
     /* Farmer label + name must stay one row (label left, name right). */
     #slip.patti .kv.farmer {
@@ -263,7 +264,7 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
     }
     .netbox {
       border: 3px solid #000 !important;
-      padding: 8px 6px; margin: 6px 0;
+      padding: 4px 6px; margin: 3px 0;
       display: flex; justify-content: space-between; align-items: center; gap: 6px;
       background: #000 !important;
       width: 100%;
@@ -297,8 +298,8 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
     #slip.patti .netbox {
       /* Outline only — no black fill (Vendor Bill keeps filled TOTAL). */
       background: #fff !important;
-      padding: 12px 12px;
-      gap: 14px;
+      padding: 5px 8px;
+      gap: 8px;
     }
     #slip.patti .netbox,
     #slip.patti .netbox * {
@@ -306,14 +307,14 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       -webkit-text-stroke: 0 !important;
     }
     #slip.patti .netbox .bold {
-      letter-spacing: 0.1em;
+      letter-spacing: 0.08em;
       flex-shrink: 0;
       text-transform: none !important;
     }
     #slip.patti .netbox .huge {
-      letter-spacing: 0.06em;
+      letter-spacing: 0.04em;
       font-variant-numeric: lining-nums tabular-nums;
-      padding-left: 10px;
+      padding-left: 6px;
       white-space: nowrap;
       text-align: right;
     }
@@ -331,7 +332,7 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       font-weight: 900 !important;
     }
     img.qr {
-      display: block; margin: 4px auto 2px;
+      display: block; margin: 2px auto 1px;
       width: ${m.qrPx}px; height: ${m.qrPx}px;
       max-width: 100%;
       image-rendering: pixelated;
@@ -342,7 +343,7 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       width: ${m.qrPx}px !important;
       height: ${m.qrPx}px !important;
       max-width: calc(100% - 2px) !important;
-      margin: 10px auto 4px !important;
+      margin: 4px auto 2px !important;
     }
     /* Vendor Bill only: Times + printable side margins + same-row vendor name. */
     #slip.vendor,
@@ -417,9 +418,9 @@ export function estimateThermalHeightMm(html: string, paperMm: number): number {
     drvTr * compactRowMm +
     tableRows * lineMm +
     hrs * 1.1 +
-    nets * (m.hugeFs + 18) * pxToMm +
-    (hasQr ? (m.qrPx + 14) * pxToMm : 0) +
-    10; // safety buffer: Android WebView line-height rounding + tear margin
+    nets * (m.hugeFs + 10) * pxToMm +
+    (hasQr ? (m.qrPx + 8) * pxToMm : 0) +
+    6; // small tear margin — avoid long blank tails
   return Math.max(28, Math.ceil(contentMm));
 }
 
