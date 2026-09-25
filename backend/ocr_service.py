@@ -303,9 +303,10 @@ def classify_provider_error(
 
 
 class OcrServiceError(RuntimeError):
-    def __init__(self, classified: ClassifiedOcrError):
+    def __init__(self, classified: ClassifiedOcrError, attempts: Optional[List[Dict[str, Any]]] = None):
         super().__init__(classified.message)
         self.classified = classified
+        self.attempts = list(attempts or [])
 
     def http_payload(self) -> Dict[str, Any]:
         c = self.classified
@@ -326,7 +327,7 @@ class OcrServiceError(RuntimeError):
         message = c.message
         if is_high_demand_503(c):
             message = "OCR model is busy due to high demand. Retrying with a backup model..."
-        return {
+        payload = {
             "code": code_map.get(c.error_class, "OCR_UPSTREAM"),
             "class": c.error_class.value,
             "message": message,
@@ -338,6 +339,9 @@ class OcrServiceError(RuntimeError):
             "upstream_body": c.upstream_snippet[:300],
             "high_demand": is_high_demand_503(c),
         }
+        if self.attempts:
+            payload["attempts"] = self.attempts
+        return payload
 
 
 # ---------------------------------------------------------------------------
@@ -448,6 +452,8 @@ class OcrJob:
     error: Optional[Dict[str, Any]] = None
     attempt: int = 0
     latency_ms: Optional[float] = None
+    # Per-model attempt trail for ops (model / http / class / success).
+    attempts: List[Dict[str, Any]] = field(default_factory=list)
 
 
 _JOBS: Dict[str, OcrJob] = {}
@@ -856,6 +862,7 @@ class OcrExtractResult:
     model: str
     provider: str
     warning: Optional[str] = None
+    attempts: List[Dict[str, Any]] = field(default_factory=list)
 
 
 async def extract_with_resilience(
@@ -893,6 +900,27 @@ async def extract_with_resilience(
     # Per-model attempts: fewer for high-demand 503 so we rotate models faster.
     max_attempts = max(1, int(os.environ.get("OCR_MAX_RETRIES", "3")))
     t_start = time.time()
+    attempt_trail: List[Dict[str, Any]] = []
+
+    def _record_attempt(
+        *,
+        model: str,
+        http_status: Optional[int],
+        error_class: Optional[str],
+        success: bool,
+        attempt_n: int,
+    ) -> None:
+        entry = {
+            "model": model,
+            "http_status": http_status,
+            "error_class": error_class,
+            "success": success,
+            "attempt": attempt_n,
+        }
+        attempt_trail.append(entry)
+        if job is not None:
+            job.attempts = list(attempt_trail)
+            _set_job(job)
 
     async with sem:
         if job:
@@ -934,16 +962,35 @@ async def extract_with_resilience(
                     )
                     latency = (time.time() - t_start) * 1000
                     METRICS.record_success("gemini", latency)
+                    _record_attempt(
+                        model=used_model or model,
+                        http_status=200,
+                        error_class=None,
+                        success=True,
+                        attempt_n=attempt + 1,
+                    )
                     logger.info(
                         "OCR_SUCCESS shop=%s provider=gemini model=%s latency_ms=%.0f",
                         shop_id,
                         used_model,
                         latency,
                     )
-                    return OcrExtractResult(rows_raw_text=text, model=used_model, provider="gemini")
+                    return OcrExtractResult(
+                        rows_raw_text=text,
+                        model=used_model,
+                        provider="gemini",
+                        attempts=list(attempt_trail),
+                    )
                 except OcrServiceError as e:
                     last_err = e
                     METRICS.record_failure(e.classified.error_class.value)
+                    _record_attempt(
+                        model=e.classified.model or model,
+                        http_status=e.classified.http_status,
+                        error_class=e.classified.error_class.value,
+                        success=False,
+                        attempt_n=attempt + 1,
+                    )
                     logger.warning(
                         "OCR_ATTEMPT_FAIL shop=%s provider=%s model=%s class=%s status=%s "
                         "retryable=%s attempt=%s provider_msg=%s",
@@ -1014,6 +1061,13 @@ async def extract_with_resilience(
                     if rows:
                         latency = (time.time() - t_start) * 1000
                         METRICS.record_success("vision", latency)
+                        _record_attempt(
+                            model="vision+parser",
+                            http_status=200,
+                            error_class=None,
+                            success=True,
+                            attempt_n=1,
+                        )
                         # Encode as JSON for the shared parser path
                         payload = {
                             "rows": [
@@ -1026,6 +1080,7 @@ async def extract_with_resilience(
                             model="vision+parser",
                             provider="vision",
                             warning="Extracted via fallback OCR. Please review carefully.",
+                            attempts=list(attempt_trail),
                         )
                     # No structured rows — return raw text wrapped so caller can warn
                     return OcrExtractResult(
@@ -1033,6 +1088,7 @@ async def extract_with_resilience(
                         model="vision+parser",
                         provider="vision",
                         warning="Fallback OCR found text but could not structure lots. Please enter manually or retake.",
+                        attempts=list(attempt_trail),
                     )
             except OcrServiceError as ve:
                 logger.warning(
@@ -1048,12 +1104,18 @@ async def extract_with_resilience(
                     last_err = last_err or ve
 
     if last_err:
-        if last_err.classified.retryable:
-            if job:
-                job.state = OcrJobState.TEMPORARILY_UNAVAILABLE
-                job.error = last_err.http_payload()
-                _set_job(job)
-        raise last_err
+        if job:
+            job.state = (
+                OcrJobState.TEMPORARILY_UNAVAILABLE
+                if last_err.classified.retryable
+                else OcrJobState.FAILED
+            )
+            err_payload = last_err.http_payload()
+            err_payload["attempts"] = list(attempt_trail)
+            job.error = err_payload
+            job.attempts = list(attempt_trail)
+            _set_job(job)
+        raise OcrServiceError(last_err.classified, attempts=attempt_trail)
 
     raise OcrServiceError(
         ClassifiedOcrError(
@@ -1065,7 +1127,8 @@ async def extract_with_resilience(
             primary_model(),
             USER_MESSAGES[OcrErrorClass.OTHER],
             "unknown",
-        )
+        ),
+        attempts=attempt_trail,
     )
 
 

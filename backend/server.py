@@ -3683,6 +3683,7 @@ async def ocr_get_job(job_id: str, user=Depends(current_user)):
         "provider": job.provider,
         "model": job.model,
         "attempt": job.attempt,
+        "attempts": job.attempts,
         "rows": job.rows,
         "warning": job.warning,
         "error": job.error,
