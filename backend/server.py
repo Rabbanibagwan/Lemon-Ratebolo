@@ -3310,6 +3310,7 @@ class OcrResponse(BaseModel):
     rows: List[OcrRow]
     model: str
     warning: Optional[str] = None
+    attempts: Optional[List[Dict[str, Any]]] = None
 
 
 _OCR_SYSTEM = """Extract Indian mandi Action Diary handwriting into JSON only.
@@ -3616,7 +3617,7 @@ async def ocr_action_diary(body: OcrRequest, user=Depends(current_user)):
     rows, warning = _parse_model_json(result.rows_raw_text)
     if result.warning:
         warning = result.warning if not warning else f"{result.warning} {warning}"
-    return OcrResponse(rows=rows, model=result.model, warning=warning)
+    return OcrResponse(rows=rows, model=result.model, warning=warning, attempts=result.attempts or None)
 
 
 @api.post("/ocr/jobs")
