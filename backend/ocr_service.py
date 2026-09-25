@@ -474,26 +474,49 @@ def model_candidates() -> List[str]:
     """Ordered unique Gemini models for OCR.
 
     Production has been observed returning HTTP 503 UNAVAILABLE ("high demand")
-    for gemini-3.6-flash. Always append known-stable multimodal flash models so a
-    flaky primary does not block OCR permanently.
+    for gemini-3.6-flash. Prefer known-stable multimodal flash models first when
+    the configured primary is a known flaky capacity model.
     """
-    preferred = [
-        primary_model(),
-        fallback_model(),
+    # Models observed returning frequent high-demand 503s in Lemon Mandi production.
+    flaky = {"gemini-3.6-flash", "gemini-3.6-flash-preview", "gemini-3.0-flash"}
+    stable = [
         "gemini-2.5-flash",
         "gemini-2.0-flash",
         "gemini-1.5-flash",
     ]
+    configured = primary_model()
+    fallback = fallback_model()
+
+    preferred: List[str] = []
+    if configured in flaky:
+        # Demote flaky primary: try stable models first, keep configured as last resort.
+        preferred.extend(stable)
+        if fallback and fallback not in preferred:
+            preferred.insert(0 if fallback not in flaky else len(preferred), fallback)
+        preferred.append(configured)
+    else:
+        preferred.append(configured)
+        if fallback:
+            preferred.append(fallback)
+        preferred.extend(stable)
+
     # Extra models from env (comma-separated), if set.
     extra = (os.environ.get("GEMINI_OCR_MODEL_CHAIN") or "").strip()
     if extra:
         preferred.extend(x.strip() for x in extra.split(",") if x.strip())
+
     out: List[str] = []
     seen = set()
     for m in preferred:
         if m and m not in seen:
+            # Avoid trying flaky models before stables have been attempted
             seen.add(m)
             out.append(m)
+    # Ensure flaky configured model is always last among candidates (not first).
+    for bad in list(out):
+        if bad in flaky and out.index(bad) == 0 and len(out) > 1:
+            out.remove(bad)
+            out.append(bad)
     return out
 
 

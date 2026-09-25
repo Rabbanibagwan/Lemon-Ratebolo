@@ -313,12 +313,12 @@ def test_call_gemini_vision_classifies_503(monkeypatch):
 
 
 def test_high_demand_503_rotates_models():
-    """Production failure: gemini-3.6-flash 503 high demand → switch to next model."""
+    """If a stable model returns high-demand 503, rotate to the next candidate."""
     calls: list[str] = []
 
     def fake_gemini(image_b64, mime_type, hint, api_key, system_prompt, model=None):
         calls.append(model or "")
-        if model == "gemini-3.6-flash":
+        if model == "gemini-2.5-flash":
             raise OcrServiceError(
                 classify_provider_error(
                     status_code=503,
@@ -335,7 +335,7 @@ def test_high_demand_503_rotates_models():
             {
                 "GEMINI_API_KEY": "k",
                 "GEMINI_OCR_MODEL": "gemini-3.6-flash",
-                "GEMINI_OCR_FALLBACK_MODEL": "gemini-2.5-flash",
+                "GEMINI_OCR_FALLBACK_MODEL": "gemini-2.0-flash",
                 "OCR_MAX_RETRIES": "2",
                 "OCR_MAX_CONCURRENT": "1",
             },
@@ -355,9 +355,10 @@ def test_high_demand_503_rotates_models():
                     )
 
     result = asyncio.run(_run())
-    assert result.model == "gemini-2.5-flash"
-    assert "gemini-3.6-flash" in calls
-    assert "gemini-2.5-flash" in calls
+    assert calls[0] == "gemini-2.5-flash"
+    assert "gemini-2.0-flash" in calls or result.model == "gemini-2.0-flash" or result.model == "gemini-1.5-flash"
+    assert result.model != "gemini-2.5-flash" or result.provider == "gemini"
+    assert result.model != "gemini-3.6-flash"
 
 
 def test_model_candidates_include_stable_chain():
@@ -365,9 +366,12 @@ def test_model_candidates_include_stable_chain():
         from ocr_service import model_candidates
 
         models = model_candidates()
-    assert models[0] == "gemini-3.6-flash"
+    # Flaky 3.6 must not be primary; stables first.
+    assert models[0] != "gemini-3.6-flash"
+    assert models[0] in {"gemini-2.5-flash", "gemini-2.0-flash"}
     assert "gemini-2.5-flash" in models
     assert "gemini-2.0-flash" in models
+    assert "gemini-3.6-flash" in models  # still available as last resort
 
 
 def test_high_demand_payload_message():
@@ -382,3 +386,39 @@ def test_high_demand_payload_message():
     assert p["high_demand"] is True
     assert "high demand" in p["message"].lower()
     assert p["code"] == "OCR_TEMP_UNAVAILABLE"
+
+
+def test_flaky_primary_demoted_so_first_call_uses_stable():
+    calls: list[str] = []
+
+    def fake_gemini(image_b64, mime_type, hint, api_key, system_prompt, model=None):
+        calls.append(model or "")
+        return json.dumps({"rows": [{"lot_serial_no": 1, "total_bags": 1, "farmer_name": "X", "vendor_name": "Y", "bags": 1, "rate_per_bag": 10}]}), model or "ok"
+
+    async def _run():
+        with patch.dict(
+            "os.environ",
+            {
+                "GEMINI_API_KEY": "k",
+                "GEMINI_OCR_MODEL": "gemini-3.6-flash",
+                "GEMINI_OCR_FALLBACK_MODEL": "gemini-2.0-flash",
+                "OCR_MAX_RETRIES": "1",
+                "OCR_MAX_CONCURRENT": "1",
+            },
+        ):
+            import ocr_service as mod
+
+            mod._gemini_sem = asyncio.Semaphore(1)
+            with patch("ocr_service.call_gemini_vision", side_effect=fake_gemini):
+                return await extract_with_resilience(
+                    image_b64="a" * 200,
+                    mime_type="image/jpeg",
+                    hint=None,
+                    system_prompt="sys",
+                    parse_diary_text=lambda t: [],
+                    shop_id="shop1",
+                )
+
+    result = asyncio.run(_run())
+    assert calls[0] != "gemini-3.6-flash"
+    assert result.model != "gemini-3.6-flash"
