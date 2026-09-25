@@ -3507,15 +3507,23 @@ def _parse_model_json(full_text: str) -> tuple[List[OcrRow], Optional[str]]:
 @api.get("/ocr/status")
 async def ocr_status(user=Depends(current_user)):
     """Whether photo OCR has a Gemini key (env) — never returns the key."""
-    from ocr_service import METRICS, model_candidates, primary_model
+    from ocr_service import (
+        METRICS,
+        fallback_model,
+        fallback_model_2,
+        model_candidates,
+        primary_model,
+    )
 
     key = await _resolve_ocr_api_key(user["shop_id"])
     snap = METRICS.snapshot()
-    chain = model_candidates() if key else []
+    chain = model_candidates(api_key=key) if key else []
     return {
         "configured": bool(key),
         "model": chain[0] if chain else (primary_model() if key else None),
         "configured_model": primary_model() if key else None,
+        "fallback_model": fallback_model() if key else None,
+        "fallback_model_2": fallback_model_2() if key else None,
         "model_chain": chain[:5],
         "metrics": {
             "requests": snap["requests"],
@@ -3531,12 +3539,13 @@ async def ocr_status(user=Depends(current_user)):
 @api.get("/ocr/metrics")
 async def ocr_metrics(user=Depends(owner_only)):
     """Owner-only aggregate OCR observability (no secrets)."""
-    from ocr_service import METRICS, primary_model, fallback_model
+    from ocr_service import METRICS, fallback_model, fallback_model_2, primary_model
 
     snap = METRICS.snapshot()
     return {
         "primary_model": primary_model(),
         "fallback_model": fallback_model(),
+        "fallback_model_2": fallback_model_2(),
         "configured": bool(_gemini_api_key()),
         **snap,
     }
