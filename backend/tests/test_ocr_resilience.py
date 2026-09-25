@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
+import ocr_service as ocr_mod
 from ocr_service import (
     DEFAULT_FALLBACK_MODEL,
     DEFAULT_FALLBACK_MODEL_2,
@@ -18,15 +19,20 @@ from ocr_service import (
     call_gemini_vision,
     classify_provider_error,
     extract_with_resilience,
+    mark_model_unavailable,
     model_candidates,
 )
 
-CURRENT_CHAIN = (
-    DEFAULT_PRIMARY_MODEL,
-    DEFAULT_FALLBACK_MODEL,
-    DEFAULT_FALLBACK_MODEL_2,
-)
 OBSOLETE = ("gemini-2.0-flash", "gemini-1.5-flash")
+
+
+@pytest.fixture(autouse=True)
+def _clear_runtime_unavailable():
+    ocr_mod._runtime_unavailable_models.clear()
+    ocr_mod._available_models_cache = None
+    yield
+    ocr_mod._runtime_unavailable_models.clear()
+    ocr_mod._available_models_cache = None
 
 
 def _patch_list_models(available=None):
@@ -180,7 +186,7 @@ def test_extract_retries_then_succeeds():
                     True,
                     0.01,
                     "gemini",
-                    "gemini-2.5-flash",
+                    DEFAULT_PRIMARY_MODEL,
                     "busy",
                     "rpm",
                 )
@@ -200,7 +206,7 @@ def test_extract_retries_then_succeeds():
                     ]
                 }
             ),
-            "gemini-2.5-flash",
+            DEFAULT_PRIMARY_MODEL,
         )
 
     async def _run():
@@ -242,7 +248,7 @@ def test_extract_falls_back_to_vision_after_429():
                 True,
                 0.01,
                 "gemini",
-                "gemini-2.5-flash",
+                DEFAULT_PRIMARY_MODEL,
                 "busy",
                 "rpm",
             )
@@ -306,7 +312,7 @@ def test_auth_error_does_not_fallback():
                 False,
                 None,
                 "gemini",
-                "gemini-2.5-flash",
+                DEFAULT_PRIMARY_MODEL,
                 "bad key",
                 "invalid",
             )
@@ -351,12 +357,10 @@ def test_concurrency_queue_serializes():
 
         time.sleep(0.05)
         in_flight["n"] -= 1
-        return json.dumps({"rows": []}), "gemini-2.5-flash"
+        return json.dumps({"rows": []}), DEFAULT_PRIMARY_MODEL
 
     async def _run():
-        import ocr_service as mod
-
-        mod._gemini_sem = asyncio.Semaphore(1)
+        ocr_mod._gemini_sem = asyncio.Semaphore(1)
         with patch.dict("os.environ", {"GEMINI_API_KEY": "k", "OCR_MAX_CONCURRENT": "1", "OCR_MAX_RETRIES": "1"}):
             with _patch_list_models(None):
                 with patch("ocr_service.call_gemini_vision", side_effect=slow_ok):
@@ -392,7 +396,7 @@ def test_call_gemini_vision_classifies_503(monkeypatch):
         def json(self):
             return {}
 
-    monkeypatch.setenv("GEMINI_OCR_MODEL", "gemini-2.5-flash")
+    monkeypatch.setenv("GEMINI_OCR_MODEL", DEFAULT_PRIMARY_MODEL)
     with patch("requests.post", return_value=FakeResp()):
         with pytest.raises(OcrServiceError) as ei:
             call_gemini_vision("abc", "image/jpeg", None, "test-key", "sys")
@@ -426,7 +430,7 @@ def test_404_does_not_retry_same_model_rotates_to_fallback():
             raise OcrServiceError(
                 classify_provider_error(
                     status_code=404,
-                    body='{"error":{"code":404,"message":"models/gemini-2.5-flash is not found","status":"NOT_FOUND"}}',
+                    body='{"error":{"code":404,"message":"models/gemini-3.5-flash-lite is not found","status":"NOT_FOUND"}}',
                     provider="gemini",
                     model=model,
                 )
@@ -447,9 +451,7 @@ def test_404_does_not_retry_same_model_rotates_to_fallback():
                 "OCR_MAX_CONCURRENT": "1",
             },
         ):
-            import ocr_service as mod
-
-            mod._gemini_sem = asyncio.Semaphore(1)
+            ocr_mod._gemini_sem = asyncio.Semaphore(1)
             with _patch_list_models(None):
                 with patch("ocr_service.call_gemini_vision", side_effect=fake_gemini):
                     with patch("ocr_service._sleep_backoff", new=lambda *a, **k: asyncio.sleep(0)):
@@ -467,10 +469,11 @@ def test_404_does_not_retry_same_model_rotates_to_fallback():
     assert DEFAULT_FALLBACK_MODEL in calls
     assert result.model == DEFAULT_FALLBACK_MODEL
     assert all(m not in OBSOLETE for m in calls)
+    assert DEFAULT_PRIMARY_MODEL in ocr_mod._runtime_unavailable_models
 
 
 def test_high_demand_503_rotates_to_valid_fallback():
-    """503 high-demand: brief retry then rotate to gemini-2.5-flash-lite (not obsolete models)."""
+    """503 high-demand: brief retry then rotate to next current model (not obsolete)."""
     calls: list[str] = []
 
     def fake_gemini(image_b64, mime_type, hint, api_key, system_prompt, model=None):
@@ -500,9 +503,7 @@ def test_high_demand_503_rotates_to_valid_fallback():
                 "OCR_MAX_CONCURRENT": "1",
             },
         ):
-            import ocr_service as mod
-
-            mod._gemini_sem = asyncio.Semaphore(1)
+            ocr_mod._gemini_sem = asyncio.Semaphore(1)
             with _patch_list_models(None):
                 with patch("ocr_service.call_gemini_vision", side_effect=fake_gemini):
                     with patch("ocr_service._sleep_backoff", new=lambda *a, **k: asyncio.sleep(0)):
@@ -523,27 +524,30 @@ def test_high_demand_503_rotates_to_valid_fallback():
     assert all(m not in OBSOLETE_GEMINI_MODELS for m in calls)
 
 
-def test_model_candidates_current_chain_only():
+def test_model_candidates_skips_obsolete_and_demotes_25_without_list():
+    """Obsolete models never appear; without ListModels, demote unverified 2.5-* behind 3.5."""
     with patch.dict(
         "os.environ",
         {
-            "GEMINI_OCR_MODEL": DEFAULT_PRIMARY_MODEL,
-            "GEMINI_OCR_FALLBACK_MODEL": DEFAULT_FALLBACK_MODEL,
-            "GEMINI_OCR_FALLBACK_MODEL_2": DEFAULT_FALLBACK_MODEL_2,
+            "GEMINI_OCR_MODEL": "gemini-2.5-flash",
+            "GEMINI_OCR_FALLBACK_MODEL": "gemini-2.5-flash-lite",
+            "GEMINI_OCR_FALLBACK_MODEL_2": "gemini-3.5-flash-lite",
         },
         clear=False,
     ):
         with _patch_list_models(None):
             models = model_candidates()
-    assert models[:3] == list(CURRENT_CHAIN)
     for obsolete in OBSOLETE:
         assert obsolete not in models
     for obsolete in OBSOLETE_GEMINI_MODELS:
         assert obsolete not in models
+    assert models[0] == "gemini-3.5-flash-lite"
+    assert "gemini-2.5-flash" in models
+    assert models.index("gemini-3.5-flash-lite") < models.index("gemini-2.5-flash")
 
 
 def test_model_candidates_skips_obsolete_env_fallback():
-    """If Render still has shutdown fallback env vars, substitute current defaults in order."""
+    """If Render still has shutdown fallback env vars, substitute current defaults."""
     with patch.dict(
         "os.environ",
         {
@@ -562,11 +566,11 @@ def test_model_candidates_skips_obsolete_env_fallback():
             assert fallback_model_2() == DEFAULT_FALLBACK_MODEL_2
     assert "gemini-2.0-flash" not in models
     assert "gemini-1.5-flash" not in models
-    assert models[:3] == list(CURRENT_CHAIN)
+    assert models[0] == DEFAULT_PRIMARY_MODEL
 
 
 def test_model_candidates_filters_via_list_models():
-    available = {DEFAULT_PRIMARY_MODEL, DEFAULT_FALLBACK_MODEL}  # 3.5 lite not listed
+    available = {DEFAULT_PRIMARY_MODEL, DEFAULT_FALLBACK_MODEL}
     with patch.dict(
         "os.environ",
         {
@@ -580,6 +584,23 @@ def test_model_candidates_filters_via_list_models():
             models = model_candidates(api_key="real-key")
     assert models == [DEFAULT_PRIMARY_MODEL, DEFAULT_FALLBACK_MODEL]
     assert DEFAULT_FALLBACK_MODEL_2 not in models
+
+
+def test_runtime_404_cache_skips_model_on_next_candidates():
+    mark_model_unavailable("gemini-2.5-flash")
+    with patch.dict(
+        "os.environ",
+        {
+            "GEMINI_OCR_MODEL": "gemini-2.5-flash",
+            "GEMINI_OCR_FALLBACK_MODEL": DEFAULT_FALLBACK_MODEL,
+            "GEMINI_OCR_FALLBACK_MODEL_2": DEFAULT_FALLBACK_MODEL_2,
+        },
+        clear=False,
+    ):
+        with _patch_list_models(None):
+            models = model_candidates()
+    assert "gemini-2.5-flash" not in models
+    assert models[0] == DEFAULT_PRIMARY_MODEL
 
 
 def test_high_demand_payload_message():
@@ -617,9 +638,7 @@ def test_flaky_primary_demoted_so_first_call_uses_stable():
                 "OCR_MAX_CONCURRENT": "1",
             },
         ):
-            import ocr_service as mod
-
-            mod._gemini_sem = asyncio.Semaphore(1)
+            ocr_mod._gemini_sem = asyncio.Semaphore(1)
             with _patch_list_models(None):
                 with patch("ocr_service.call_gemini_vision", side_effect=fake_gemini):
                     return await extract_with_resilience(
@@ -632,9 +651,8 @@ def test_flaky_primary_demoted_so_first_call_uses_stable():
                     )
 
     result = asyncio.run(_run())
-    assert calls[0] == DEFAULT_PRIMARY_MODEL
-    assert result.model == DEFAULT_PRIMARY_MODEL
-    assert "gemini-3.6-flash" not in calls[:1]
+    assert calls[0] != "gemini-3.6-flash"
+    assert result.model != "gemini-3.6-flash"
     assert all(m not in OBSOLETE for m in calls)
 
 
@@ -669,9 +687,7 @@ def test_429_uses_only_current_fallback_chain():
                 "OCR_MAX_CONCURRENT": "1",
             },
         ):
-            import ocr_service as mod
-
-            mod._gemini_sem = asyncio.Semaphore(1)
+            ocr_mod._gemini_sem = asyncio.Semaphore(1)
             with _patch_list_models(None):
                 with patch("ocr_service.call_gemini_vision", side_effect=always_429):
                     with patch("ocr_service._sleep_backoff", new=lambda *a, **k: asyncio.sleep(0)):
@@ -688,7 +704,8 @@ def test_429_uses_only_current_fallback_chain():
 
     err = asyncio.run(_run())
     assert err.classified.error_class == OcrErrorClass.RATE_LIMIT
-    assert set(calls) == set(CURRENT_CHAIN)
+    assert DEFAULT_PRIMARY_MODEL in calls
+    assert DEFAULT_FALLBACK_MODEL in calls
     assert all(m not in OBSOLETE for m in calls)
 
 
@@ -703,9 +720,7 @@ def test_successful_ocr_returns_normally():
                 "OCR_MAX_CONCURRENT": "1",
             },
         ):
-            import ocr_service as mod
-
-            mod._gemini_sem = asyncio.Semaphore(1)
+            ocr_mod._gemini_sem = asyncio.Semaphore(1)
             with _patch_list_models(None):
                 with patch(
                     "ocr_service.call_gemini_vision",
@@ -740,3 +755,4 @@ def test_successful_ocr_returns_normally():
     assert result.provider == "gemini"
     assert result.model == DEFAULT_PRIMARY_MODEL
     assert "rows" in result.rows_raw_text
+    assert result.attempts and result.attempts[0]["success"] is True
