@@ -106,7 +106,7 @@ export function renderVendorBillPdfHtml(b: VendorBill, profile: ShopProfile, use
       <tbody>${rows}</tbody>
     </table>
     <div style="margin-top:10px">
-      <div class="trow"><span>Goods</span><span class="mono">${fmt(b.goods_total)}</span></div>
+      <div class="trow"><span>Lemon</span><span class="mono">${fmt(b.goods_total)}</span></div>
       <div class="trow"><span>Commission</span><span class="mono">${fmt(b.commission_total)}</span></div>
       <div class="trow"><span>Hamali</span><span class="mono">${fmt(b.hamali)}</span></div>
       ${b.cess > 0 ? `<div class="trow"><span>Cess / Other</span><span class="mono">${fmt(b.cess)}</span></div>` : ""}
