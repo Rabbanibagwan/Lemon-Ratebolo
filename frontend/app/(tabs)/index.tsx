@@ -150,6 +150,12 @@ export default function Home() {
           <QuickTile icon="search-outline" label="Search" onPress={() => router.push("/search")} testID="quick-search" />
           <QuickTile icon="qr-code-outline" label="Scan Patti" onPress={() => router.push("/scan")} testID="quick-scan" />
           <QuickTile icon="add-circle-outline" label="Create Action Diary" onPress={() => router.push("/action-diary")} testID="quick-action-diary" />
+          <QuickTile
+            icon="bus-outline"
+            label="Set Driver"
+            onPress={() => router.push({ pathname: "/(tabs)/auction", params: { editDrivers: "1" } })}
+            testID="quick-set-driver"
+          />
           <QuickTile icon="document-text-outline" label="Patti Details" onPress={() => router.push("/(tabs)/history")} testID="quick-pattis" />
           <QuickTile icon="cash-outline" label="Vendors" onPress={() => router.push("/vendors")} testID="quick-vendors" />
           {isOwner && <QuickTile icon="book-outline" label="Account Ledger" onPress={() => router.push("/account-ledger")} testID="quick-ledger" />}

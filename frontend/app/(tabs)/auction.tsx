@@ -48,7 +48,14 @@ export default function Auction() {
     }
   }, [workingDateISO]);
 
-  useFocusEffect(useCallback(() => { load(); }, [load]));
+  useFocusEffect(useCallback(() => {
+    load();
+    // Allow Dashboard / Reports "SET DRIVER" shortcut to reopen the existing driver modal
+    // on each visit without changing driver assignment logic.
+    return () => {
+      editDriversOpened.current = false;
+    };
+  }, [load]));
 
   useEffect(() => {
     if (editDrivers !== "1" || editDriversOpened.current || !day) return;
