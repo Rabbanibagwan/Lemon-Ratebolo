@@ -144,8 +144,19 @@ def classify_provider_error(
                 snippet or str(exc)[:200],
             )
 
-    # Billing (check before generic auth — 403 can be either)
-    if any(x in low for x in ("billing", "payment required", "enable billing", "spend limit", "budget")):
+    # Billing — only when clearly a billing/account problem, NOT free-tier quota text
+    # that merely links to billing docs ("check your plan and billing details").
+    if any(
+        x in low
+        for x in (
+            "billing account",
+            "enable billing",
+            "billing is not enabled",
+            "payment required",
+            "spend limit",
+            "budget exceeded",
+        )
+    ) and "quota" not in low and status_code != 429:
         return ClassifiedOcrError(
             OcrErrorClass.BILLING,
             status_code,
@@ -182,7 +193,7 @@ def classify_provider_error(
             snippet,
         )
 
-    # 429 subtypes
+    # 429 subtypes — must run before generic "billing" heuristics in message text
     if status_code == 429 or "resource_exhausted" in low or "rate limit" in low or "quota" in low:
         if any(
             x in low
@@ -193,7 +204,9 @@ def classify_provider_error(
                 "rpd",
                 "requests per day",
                 "generate_requests_per_model_per_day",
-                "free_tier_requests",
+                "free_tier",
+                "exceeded your current quota",
+                "check your plan and billing details",
             )
         ):
             return ClassifiedOcrError(
@@ -826,6 +839,10 @@ async def extract_with_resilience(
                     )
                     if e.classified.error_class in (OcrErrorClass.AUTH, OcrErrorClass.MALFORMED, OcrErrorClass.BILLING):
                         raise
+                    # Project-level quota: stop burning remaining Gemini models; try Vision fallback.
+                    if e.classified.error_class == OcrErrorClass.DAILY_QUOTA:
+                        last_err = e
+                        break
                     # High-demand 503: one short retry on same model, then rotate.
                     if is_high_demand_503(e.classified):
                         if attempt == 0 and model_attempts > 1:
@@ -845,6 +862,11 @@ async def extract_with_resilience(
                         continue
                     # Non-retryable or retries exhausted for this model → try next model
                     break
+            else:
+                continue
+            # break from inner due to DAILY_QUOTA → exit model loop
+            if last_err and last_err.classified.error_class == OcrErrorClass.DAILY_QUOTA:
+                break
 
     # Fallback to Vision when appropriate
     if last_err and _should_use_fallback(last_err.classified):

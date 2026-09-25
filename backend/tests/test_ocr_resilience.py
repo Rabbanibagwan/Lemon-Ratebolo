@@ -67,6 +67,18 @@ def test_classify_billing():
     assert c.retryable is False
 
 
+def test_classify_quota_exceeded_not_billing():
+    c = classify_provider_error(
+        status_code=429,
+        body='{"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits"}}',
+        provider="gemini",
+        model="gemini-2.5-flash",
+    )
+    assert c.error_class == OcrErrorClass.DAILY_QUOTA
+    assert c.retryable is False
+    assert "billing" not in c.message.lower() or "quota" in c.message.lower()
+
+
 def test_classify_retry_delay_from_body():
     c = classify_provider_error(
         status_code=429,
