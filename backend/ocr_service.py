@@ -528,12 +528,26 @@ FLAKY_CAPACITY_MODELS = frozenset(
 )
 
 # Current multimodal OCR chain (image-capable).
-DEFAULT_PRIMARY_MODEL = "gemini-2.5-flash"
-DEFAULT_FALLBACK_MODEL = "gemini-2.5-flash-lite"
-DEFAULT_FALLBACK_MODEL_2 = "gemini-3.5-flash-lite"
+# Live Lemon Mandi production key (2026-09-25): gemini-2.5-flash and
+# gemini-2.5-flash-lite returned HTTP 404 NOT_FOUND; gemini-3.5-flash-lite succeeded.
+# Prefer proven-available models first; keep 2.5-* after ListModels confirms access.
+DEFAULT_PRIMARY_MODEL = "gemini-3.5-flash-lite"
+DEFAULT_FALLBACK_MODEL = "gemini-3.5-flash"
+DEFAULT_FALLBACK_MODEL_2 = "gemini-2.5-flash"
+
+# Preferred when env still asks for gemini-2.5-flash but ListModels is unavailable.
+_PREFERRED_WHEN_25_UNVERIFIED = ("gemini-3.5-flash-lite", "gemini-3.5-flash")
 
 _available_models_cache: Optional[Tuple[float, set]] = None
 _AVAILABLE_MODELS_TTL_SEC = 300.0
+# Models that returned 404 model-unavailable for this process (skip on later requests).
+_runtime_unavailable_models: set = set()
+
+
+def mark_model_unavailable(model: Optional[str]) -> None:
+    if model and model.strip():
+        _runtime_unavailable_models.add(model.strip())
+        logger.warning("OCR_RUNTIME_UNAVAILABLE_CACHE add model=%s", model.strip())
 
 
 def primary_model() -> str:
@@ -541,12 +555,14 @@ def primary_model() -> str:
     if configured in OBSOLETE_GEMINI_MODELS:
         logger.warning("OCR_SKIP_OBSOLETE_PRIMARY model=%s → %s", configured, DEFAULT_PRIMARY_MODEL)
         return DEFAULT_PRIMARY_MODEL
+    if configured in _runtime_unavailable_models:
+        return DEFAULT_PRIMARY_MODEL
     return configured or DEFAULT_PRIMARY_MODEL
 
 
 def fallback_model() -> str:
     configured = (os.environ.get("GEMINI_OCR_FALLBACK_MODEL") or DEFAULT_FALLBACK_MODEL).strip()
-    if configured in OBSOLETE_GEMINI_MODELS:
+    if configured in OBSOLETE_GEMINI_MODELS or configured in _runtime_unavailable_models:
         logger.warning("OCR_SKIP_OBSOLETE_FALLBACK model=%s → %s", configured, DEFAULT_FALLBACK_MODEL)
         return DEFAULT_FALLBACK_MODEL
     return configured or DEFAULT_FALLBACK_MODEL
@@ -554,7 +570,7 @@ def fallback_model() -> str:
 
 def fallback_model_2() -> str:
     configured = (os.environ.get("GEMINI_OCR_FALLBACK_MODEL_2") or DEFAULT_FALLBACK_MODEL_2).strip()
-    if configured in OBSOLETE_GEMINI_MODELS:
+    if configured in OBSOLETE_GEMINI_MODELS or configured in _runtime_unavailable_models:
         logger.warning("OCR_SKIP_OBSOLETE_FALLBACK_2 model=%s → %s", configured, DEFAULT_FALLBACK_MODEL_2)
         return DEFAULT_FALLBACK_MODEL_2
     return configured or DEFAULT_FALLBACK_MODEL_2
@@ -597,6 +613,7 @@ def model_candidates(api_key: Optional[str] = None) -> List[str]:
 
     Never includes shutdown models (gemini-2.0-flash / gemini-1.5-flash).
     When ListModels succeeds, filters to models that exist for this API key.
+    Skips models that already returned 404 for this process.
     """
     configured = primary_model()
     fb1 = fallback_model()
@@ -613,9 +630,10 @@ def model_candidates(api_key: Optional[str] = None) -> List[str]:
     if extra:
         preferred.extend(x.strip() for x in extra.split(",") if x.strip())
 
-    # Ensure defaults are present as safety net.
+    # Ensure defaults are present as safety net (proven-available first).
     for m in (DEFAULT_PRIMARY_MODEL, DEFAULT_FALLBACK_MODEL, DEFAULT_FALLBACK_MODEL_2):
         preferred.append(m)
+    preferred.extend(_PREFERRED_WHEN_25_UNVERIFIED)
 
     out: List[str] = []
     seen = set()
@@ -624,6 +642,8 @@ def model_candidates(api_key: Optional[str] = None) -> List[str]:
             continue
         if m in OBSOLETE_GEMINI_MODELS:
             logger.warning("OCR_SKIP_OBSOLETE_MODEL model=%s", m)
+            continue
+        if m in _runtime_unavailable_models:
             continue
         seen.add(m)
         out.append(m)
@@ -654,6 +674,15 @@ def model_candidates(api_key: Optional[str] = None) -> List[str]:
                 "OCR_MODEL_CHAIN_UNVERIFIED no overlap with ListModels; keeping configured chain=%s",
                 ",".join(out),
             )
+    else:
+        # Without ListModels, demote gemini-2.5-* (live 404 on Lemon Mandi key) behind 3.5 models.
+        demote = [m for m in out if m.startswith("gemini-2.5-")]
+        keep = [m for m in out if not m.startswith("gemini-2.5-")]
+        if DEFAULT_PRIMARY_MODEL in keep:
+            keep = [DEFAULT_PRIMARY_MODEL] + [m for m in keep if m != DEFAULT_PRIMARY_MODEL]
+        if keep:
+            out = keep + demote
+            logger.info("OCR_MODEL_CHAIN_DEMOTED_25 chain=%s", ",".join(out))
 
     return out
 
@@ -1007,6 +1036,7 @@ async def extract_with_resilience(
                         raise
                     # 404 model-not-found is permanent for this model — never retry it.
                     if e.classified.error_class == OcrErrorClass.MODEL_UNAVAILABLE:
+                        mark_model_unavailable(e.classified.model or model)
                         logger.warning(
                             "OCR_MODEL_UNAVAILABLE_SKIP shop=%s model=%s — rotating to next candidate",
                             shop_id,
