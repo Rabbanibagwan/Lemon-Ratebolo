@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Empty, ErrorBanner, Shell } from "../components/ui";
 import { api, setToken, type ApiError } from "../lib/api";
 import { istToday, qs } from "../lib/dates";
@@ -64,11 +64,207 @@ export function VendorBillsPage() {
 
 export function PurchasesPage() {
   const s = useList("/admin/purchases");
+  const nav = useNavigate();
   return (
-    <ListShell title="Purchases" s={s} columns={[
-      ["event_at", "Event At"], ["shop_name", "Shop"], ["bags", "Bags"], ["total_amount", "Amount"], ["status", "Status"],
-    ]} />
+    <Shell title="Purchases" actions={
+      <>
+        <input type="date" value={s.date} onChange={(e) => { s.setPage(1); s.setDate(e.target.value); }} />
+        <input placeholder="Shop ID" value={s.shopId} onChange={(e) => { s.setPage(1); s.setShopId(e.target.value); }} style={{ border: "2px solid #111", padding: 6, width: 160 }} />
+        <input placeholder="Search" value={s.q} onChange={(e) => { s.setPage(1); s.setQ(e.target.value); }} style={{ border: "2px solid #111", padding: 6 }} />
+      </>
+    }>
+      {s.error ? <ErrorBanner message={s.error} /> : null}
+      {s.loading ? <Empty message="Loading…" /> : !s.items.length ? <Empty message="No rows." /> : (
+        <table style={table}>
+          <thead>
+            <tr>
+              {["Event At", "Invoice", "Shop", "Bags", "Rate", "Subtotal", "GST %", "GST", "Total", "Status", ""].map((h) => (
+                <th key={h || "act"} style={th}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {s.items.map((row) => (
+              <tr key={row.id}>
+                <td style={td}>{formatCell(row.event_at)}</td>
+                <td style={td}>{formatCell(row.invoice_no)}</td>
+                <td style={td}>{formatCell(row.shop_name)}</td>
+                <td style={td}>{formatCell(row.bags)}</td>
+                <td style={td}>{formatCell(row.price_per_bag)}</td>
+                <td style={td}>{formatCell(row.base_amount)}</td>
+                <td style={td}>{formatCell(row.gst_percent)}</td>
+                <td style={td}>{formatCell(row.gst_amount)}</td>
+                <td style={td}>{formatCell(row.total_amount)}</td>
+                <td style={td}>{formatCell(row.status)}</td>
+                <td style={td}>
+                  <button
+                    type="button"
+                    onClick={() => nav(`/purchases/${row.id}`)}
+                    style={{ border: "2px solid #111", padding: "4px 8px", fontWeight: 800, cursor: "pointer" }}
+                  >
+                    Invoice
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div style={{ marginTop: 12 }}>
+        <button disabled={s.page <= 1} onClick={() => s.setPage(s.page - 1)}>Prev</button>
+        <span style={{ margin: "0 8px" }}>Page {s.page} · {s.total} total</span>
+        <button disabled={s.page * 50 >= s.total} onClick={() => s.setPage(s.page + 1)}>Next</button>
+      </div>
+    </Shell>
   );
+}
+
+export function PurchaseInvoicePage() {
+  const { id } = useParams();
+  const nav = useNavigate();
+  const [inv, setInv] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      if (!id) return;
+      setError(null);
+      try {
+        setInv(await api(`/admin/purchases/${id}/invoice`));
+      } catch (err) {
+        const e = err as ApiError;
+        if (e.status === 401) { setToken(null); nav("/login"); return; }
+        setError(e.detail);
+      }
+    })();
+  }, [id, nav]);
+
+  function downloadPdf() {
+    if (!inv) return;
+    setBusy(true);
+    try {
+      const html = buildAdminInvoiceHtml(inv);
+      const w = window.open("", "_blank");
+      if (!w) {
+        setError("Popup blocked — allow popups to download/print the invoice PDF.");
+        return;
+      }
+      w.document.open();
+      w.document.write(html);
+      w.document.close();
+      // Give the document a moment, then open the browser print → Save as PDF flow.
+      setTimeout(() => {
+        try { w.focus(); w.print(); } catch { /* ignore */ }
+      }, 300);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Shell title="Purchase Invoice" actions={
+      <>
+        <button type="button" onClick={() => nav(-1)} style={{ border: "2px solid #111", padding: "6px 10px", fontWeight: 700 }}>Back</button>
+        <button
+          type="button"
+          disabled={!inv || busy}
+          onClick={downloadPdf}
+          style={{ border: "2px solid #111", background: "#111", color: "#fff", padding: "6px 10px", fontWeight: 800 }}
+        >
+          {busy ? "…" : "Download / Print PDF"}
+        </button>
+      </>
+    }>
+      {error ? <ErrorBanner message={error} /> : null}
+      {!inv ? <Empty message="Loading…" /> : (
+        <div style={{ background: "#fff", border: "2px solid #111", padding: 16, maxWidth: 720 }}>
+          <div style={{ fontSize: 20, fontWeight: 900 }}>{inv.seller?.name || "Lemon Mandi"}</div>
+          {inv.seller?.address ? <div style={{ color: "#374151", fontSize: 12 }}>{inv.seller.address}</div> : null}
+          {inv.seller?.phone ? <div style={{ color: "#374151", fontSize: 12 }}>Phone: {inv.seller.phone}</div> : null}
+          {inv.seller?.gstin ? <div style={{ color: "#374151", fontSize: 12 }}>GSTIN: {inv.seller.gstin}</div> : null}
+          <div style={{ marginTop: 10, letterSpacing: 2, fontWeight: 800, color: "#6B7280", fontSize: 11 }}>PURCHASE INVOICE</div>
+          <hr style={{ border: 0, borderTop: "2px solid #111", margin: "12px 0" }} />
+          <div style={{ display: "flex", gap: 24 }}>
+            <div style={{ flex: 1 }}>
+              <div style={miniLabel}>Invoice No</div>
+              <div style={{ fontWeight: 900, fontFamily: "monospace" }}>{inv.invoice_no}</div>
+              <div style={{ ...miniLabel, marginTop: 8 }}>Invoice Date</div>
+              <div style={{ fontWeight: 700 }}>{String(inv.invoice_date || "").slice(0, 10)}</div>
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={miniLabel}>Billing To</div>
+              <div style={{ fontWeight: 900 }}>{inv.bill_to?.name}</div>
+              {inv.bill_to?.address ? <div style={{ fontSize: 12 }}>{inv.bill_to.address}</div> : null}
+              {inv.bill_to?.phone ? <div style={{ fontSize: 12 }}>{inv.bill_to.phone}</div> : null}
+              {inv.bill_to?.gstin ? <div style={{ fontSize: 12 }}>GSTIN: {inv.bill_to.gstin}</div> : null}
+            </div>
+          </div>
+          <table style={{ ...table, marginTop: 16 }}>
+            <thead>
+              <tr>
+                {["Description", "HSN/SAC", "Bags", "Rate", "Amount"].map((h) => <th key={h} style={th}>{h}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style={td}>{inv.item?.description}</td>
+                <td style={td}>{inv.item?.hsn_sac_code}</td>
+                <td style={td}>{inv.item?.bags}</td>
+                <td style={td}>{inv.item?.price_per_bag}</td>
+                <td style={td}>{inv.item?.amount}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div style={{ marginTop: 12, maxWidth: 280, marginLeft: "auto" }}>
+            <div style={totRow}><span>Subtotal</span><span>{inv.subtotal}</span></div>
+            <div style={totRow}><span>GST ({inv.gst_percent}%)</span><span>{inv.gst_amount}</span></div>
+            <div style={{ ...totRow, background: "#111", color: "#fff", padding: 8, fontWeight: 900 }}>
+              <span>TOTAL</span><span>{inv.total_amount}</span>
+            </div>
+          </div>
+          <p style={{ fontSize: 12, color: "#6B7280" }}>Purchase {inv.purchase_id} · Shop {inv.shop_id} · {inv.status}</p>
+        </div>
+      )}
+    </Shell>
+  );
+}
+
+const miniLabel: CSSProperties = { fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: "#6B7280", fontWeight: 800 };
+const totRow: CSSProperties = { display: "flex", justifyContent: "space-between", padding: "4px 0", fontWeight: 700 };
+
+function buildAdminInvoiceHtml(inv: any): string {
+  const esc = (s: unknown) => String(s ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string),
+  );
+  const seller = inv.seller || {};
+  const bill = inv.bill_to || {};
+  const item = inv.item || {};
+  return `<!doctype html><html><head><meta charset="utf-8"/><title>Invoice ${esc(inv.invoice_no)}</title>
+  <style>
+    body{font-family:Arial,sans-serif;color:#111;padding:24px}
+    .seller{font-size:22px;font-weight:900}
+    .meta{font-size:12px;color:#374151}
+    table{width:100%;border-collapse:collapse;margin-top:12px}
+    th,td{border-bottom:1px solid #ddd;padding:8px;text-align:left;font-size:13px}
+    th{border-bottom:2px solid #111;font-size:11px;text-transform:uppercase}
+    .grand{background:#111;color:#fff;padding:10px;display:flex;justify-content:space-between;font-weight:900;margin-top:8px}
+  </style></head><body>
+  <div class="seller">${esc(seller.name)}</div>
+  ${seller.address ? `<div class="meta">${esc(seller.address)}</div>` : ""}
+  ${seller.phone ? `<div class="meta">Phone: ${esc(seller.phone)}</div>` : ""}
+  ${seller.gstin ? `<div class="meta">GSTIN: ${esc(seller.gstin)}</div>` : ""}
+  <h2>PURCHASE INVOICE</h2>
+  <p><b>Invoice No:</b> ${esc(inv.invoice_no)}<br/><b>Invoice Date:</b> ${esc(String(inv.invoice_date || "").slice(0, 10))}</p>
+  <p><b>Billing To:</b><br/>${esc(bill.name)}<br/>${esc(bill.address || "")}<br/>${esc(bill.phone || "")}<br/>${bill.gstin ? `GSTIN: ${esc(bill.gstin)}` : ""}</p>
+  <table><thead><tr><th>Description</th><th>HSN/SAC</th><th>Bags</th><th>Rate</th><th>Amount</th></tr></thead>
+  <tbody><tr>
+    <td>${esc(item.description)}</td><td>${esc(item.hsn_sac_code)}</td>
+    <td>${esc(item.bags)}</td><td>${esc(item.price_per_bag)}</td><td>${esc(item.amount)}</td>
+  </tr></tbody></table>
+  <p>Subtotal: ${esc(inv.subtotal)}<br/>GST (${esc(inv.gst_percent)}%): ${esc(inv.gst_amount)}</p>
+  <div class="grand"><span>TOTAL AMOUNT</span><span>${esc(inv.total_amount)}</span></div>
+  </body></html>`;
 }
 
 export function OperationsPage() {
@@ -173,18 +369,30 @@ export function SettingsPage() {
     }
   }
 
+  const numberFields = ["price_per_bag", "new_merchant_free_bags", "gst_percent"] as const;
+  const textFields = [
+    ["hsn_sac_code", "HSN / SAC code (purchase invoices)"],
+    ["invoice_prefix", "Invoice prefix (e.g. INV)"],
+    ["invoice_item_description", "Invoice item description"],
+    ["seller_name", "Seller / invoice from name"],
+    ["seller_address", "Seller address"],
+    ["seller_phone", "Seller phone"],
+    ["seller_gstin", "Seller GSTIN"],
+  ] as const;
+
   return (
     <Shell title="Settings">
       {error ? <ErrorBanner message={error} /> : null}
       {msg ? <div style={{ background: "#d1fae5", border: "2px solid #059669", padding: 8, marginBottom: 12 }}>{msg}</div> : null}
       {!form ? <Empty message="Loading…" /> : (
-        <div style={{ maxWidth: 420, display: "flex", flexDirection: "column", gap: 10 }}>
-          {(["price_per_bag", "new_merchant_free_bags", "gst_percent"] as const).map((k) => (
+        <div style={{ maxWidth: 520, display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ fontWeight: 800, fontSize: 12, letterSpacing: 1, color: "#6B7280" }}>BAG BILLING</div>
+          {numberFields.map((k) => (
             <label key={k} style={{ fontWeight: 700, fontSize: 12 }}>
-              {k}
+              {k === "gst_percent" ? "GST % (default for new purchases)" : k}
               <input
                 style={{ display: "block", width: "100%", border: "2px solid #111", padding: 8, marginTop: 4 }}
-                value={form[k]}
+                value={form[k] ?? ""}
                 onChange={(e) => setForm({ ...form, [k]: Number(e.target.value) })}
               />
             </label>
@@ -195,6 +403,21 @@ export function SettingsPage() {
           <label style={{ fontWeight: 700 }}>
             <input type="checkbox" checked={!!form.billing_active} onChange={(e) => setForm({ ...form, billing_active: e.target.checked })} /> Billing active
           </label>
+
+          <div style={{ fontWeight: 800, fontSize: 12, letterSpacing: 1, color: "#6B7280", marginTop: 12 }}>PURCHASE INVOICE</div>
+          <p style={{ margin: 0, fontSize: 12, color: "#6B7280" }}>
+            GST % and HSN/SAC are configurable. Changing them affects new purchases / newly issued invoice snapshots — existing paid purchase amounts stay as stored.
+          </p>
+          {textFields.map(([k, label]) => (
+            <label key={k} style={{ fontWeight: 700, fontSize: 12 }}>
+              {label}
+              <input
+                style={{ display: "block", width: "100%", border: "2px solid #111", padding: 8, marginTop: 4 }}
+                value={form[k] ?? ""}
+                onChange={(e) => setForm({ ...form, [k]: e.target.value })}
+              />
+            </label>
+          ))}
           <button onClick={save} style={{ border: "2px solid #111", background: "#111", color: "#fff", padding: 10, fontWeight: 800 }}>Save</button>
         </div>
       )}
@@ -283,6 +506,6 @@ function formatCell(v: unknown) {
   return JSON.stringify(v);
 }
 
-const table: React.CSSProperties = { width: "100%", borderCollapse: "collapse", background: "#fff", border: "2px solid #111" };
-const th: React.CSSProperties = { textAlign: "left", borderBottom: "2px solid #111", padding: 8, fontSize: 12 };
-const td: React.CSSProperties = { borderBottom: "1px solid #ddd", padding: 8, fontSize: 13 };
+const table: CSSProperties = { width: "100%", borderCollapse: "collapse", background: "#fff", border: "2px solid #111" };
+const th: CSSProperties = { textAlign: "left", borderBottom: "2px solid #111", padding: 8, fontSize: 12 };
+const td: CSSProperties = { borderBottom: "1px solid #ddd", padding: 8, fontSize: 13 };

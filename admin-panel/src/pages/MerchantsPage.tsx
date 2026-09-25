@@ -133,7 +133,7 @@ export function MerchantDetailPage() {
             {" · "}
             <Link to={`/vendor-bills?shop_id=${id}&date=${date}`}>View Bills</Link>
             {" · "}
-            <Link to={`/purchases?shop_id=${id}&date=${date}`}>View Purchases</Link>
+            <Link to={`/purchases?shop_id=${id}&date=${date}`}>View Purchases / Invoices</Link>
           </p>
         </>
       )}
