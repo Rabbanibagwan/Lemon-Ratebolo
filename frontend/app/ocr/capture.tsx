@@ -16,6 +16,14 @@ import { Button, Input } from "@/src/components/ui";
 import { colors, font, spacing } from "@/src/theme";
 
 type Stage = "pick" | "crop" | "ready";
+type OcrJobUiState =
+  | "IDLE"
+  | "UPLOADING"
+  | "PROCESSING"
+  | "RETRYING"
+  | "SUCCESS"
+  | "TEMPORARILY_UNAVAILABLE"
+  | "FAILED";
 
 export default function OcrCapture() {
   const router = useRouter();
@@ -29,8 +37,10 @@ export default function OcrCapture() {
   const [keyConfigured, setKeyConfigured] = useState(false);
   const [cropInsets, setCropInsets] = useState({ top: 0, bottom: 0, left: 0, right: 0 });
   const [processing, setProcessing] = useState(false);
+  const [jobState, setJobState] = useState<OcrJobUiState>("IDLE");
   const [error, setError] = useState<string | null>(null);
   const inFlightRef = useRef(false);
+  const lastSubmitHashRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   // Env / Settings key → Extract works without the yellow paste box.
@@ -60,6 +70,8 @@ export default function OcrCapture() {
     setImageBase64(null);
     setCropInsets({ top: 0, bottom: 0, left: 0, right: 0 });
     setError(null);
+    setJobState("IDLE");
+    lastSubmitHashRef.current = null;
   };
 
   const pickImage = async (source: "camera" | "gallery") => {
@@ -191,9 +203,7 @@ export default function OcrCapture() {
     );
   };
 
-  const OCR_QUOTA_MSG = "OCR limit temporarily reached. Please wait a moment and try again.";
-  const OCR_CONFIG_MSG = "OCR is not configured correctly on the server. Please contact your administrator.";
-  const OCR_UPSTREAM_TEMP_MSG = "OCR provider is temporarily unavailable. Please try again shortly.";
+  const OCR_CONFIG_MSG = "OCR service configuration error. Please contact administrator.";
 
   /** True only for real missing/invalid-key configuration failures — not quota text that mentions "API key". */
   const isGenuineOcrConfigError = (e: unknown): boolean => {
@@ -204,17 +214,20 @@ export default function OcrCapture() {
     const upstreamMessage = typeof detailObj?.message === "string" ? detailObj.message : "";
     const upstreamBody = typeof detailObj?.upstream_body === "string" ? detailObj.upstream_body : "";
     const code = typeof detailObj?.code === "string" ? detailObj.code : "";
-    const combined = `${detailStr} ${upstreamMessage} ${upstreamBody} ${code}`.toLowerCase();
+    const cls = typeof detailObj?.class === "string" ? detailObj.class : "";
+    const combined = `${detailStr} ${upstreamMessage} ${upstreamBody} ${code} ${cls}`.toLowerCase();
 
-    // Quota / rate-limit must never be treated as configuration failure.
     if (
       upstreamStatus === 429 ||
+      code === "OCR_RATE_LIMIT" ||
+      code === "OCR_DAILY_QUOTA" ||
+      code === "OCR_TOKEN_QUOTA" ||
       /resource_exhausted|quota|rate limit|too many requests|exceeded your current quota/i.test(combined)
     ) {
       return false;
     }
 
-    if (code === "NO_CLOUD_OCR_KEY" || /no_cloud_ocr_key/i.test(combined)) return true;
+    if (code === "OCR_AUTH" || code === "NO_CLOUD_OCR_KEY" || cls === "auth" || /no_cloud_ocr_key/i.test(combined)) return true;
     if (/api key not valid|gemini api key not valid|invalid.*api.?key|api.?key.*invalid/i.test(combined)) return true;
     if ((upstreamStatus === 401 || upstreamStatus === 403) && /api.?key|unauthorized|forbidden|permission|credential/i.test(combined)) {
       return true;
@@ -222,105 +235,180 @@ export default function OcrCapture() {
     return false;
   };
 
-  const classifyOcrError = (e: unknown): string => {
+  const classifyOcrError = (e: unknown): { message: string; retryable: boolean; uiState: OcrJobUiState } => {
     const err = e as ApiError | undefined;
     const detailObj = err?.detail && typeof err.detail === "object" ? err.detail as Record<string, unknown> : null;
+    const code = typeof detailObj?.code === "string" ? detailObj.code : "";
+    const cls = typeof detailObj?.class === "string" ? detailObj.class : "";
     const upstreamStatus = typeof detailObj?.status_code === "number" ? detailObj.status_code : null;
     const upstreamMessage = typeof detailObj?.message === "string" ? detailObj.message : "";
     const upstreamBody = typeof detailObj?.upstream_body === "string" ? detailObj.upstream_body : "";
-    const detailCode = typeof detailObj?.code === "string" ? detailObj.code : "";
-    const combinedUpstream = `${upstreamMessage} ${upstreamBody}`.toLowerCase();
+    const retryableFlag = detailObj?.retryable === true;
+    const combinedUpstream = `${upstreamMessage} ${upstreamBody} ${code} ${cls}`.toLowerCase();
 
     if (err?.code === "TIMEOUT" || /timed out|taking longer|longer than expected/i.test(String(err?.detail || ""))) {
-      return "OCR is taking longer than usual. Please keep the app open and try again — do not assume it failed mid-extract.";
+      return {
+        message: "OCR is taking longer than usual. Please try again.",
+        retryable: true,
+        uiState: "TEMPORARILY_UNAVAILABLE",
+      };
     }
     if (err?.code === "NETWORK" || err?.status === 0) {
-      return apiErrorMessage(e, "Unable to connect to the server. Please check your internet connection and try again.");
+      return {
+        message: apiErrorMessage(e, "Unable to connect to the server. Please check your internet connection and try again."),
+        retryable: true,
+        uiState: "TEMPORARILY_UNAVAILABLE",
+      };
+    }
+
+    if (code === "OCR_RATE_LIMIT" || cls === "rate_limit") {
+      return {
+        message: "OCR service is temporarily busy. Retrying automatically...",
+        retryable: true,
+        uiState: "TEMPORARILY_UNAVAILABLE",
+      };
+    }
+    if (code === "OCR_DAILY_QUOTA" || code === "OCR_TOKEN_QUOTA" || cls === "daily_quota" || cls === "token_quota") {
+      return {
+        message: "OCR quota has been reached. Please try again after the quota resets or contact administrator.",
+        retryable: false,
+        uiState: "FAILED",
+      };
+    }
+    if (code === "OCR_BILLING" || cls === "billing") {
+      return {
+        message: "OCR billing/quota configuration requires attention.",
+        retryable: false,
+        uiState: "FAILED",
+      };
+    }
+    if (isGenuineOcrConfigError(e) || code === "OCR_AUTH") {
+      return { message: OCR_CONFIG_MSG, retryable: false, uiState: "FAILED" };
     }
     if (
       upstreamStatus === 429 ||
       /resource_exhausted|quota|rate limit|too many requests|exceeded your current quota/i.test(combinedUpstream)
     ) {
-      return OCR_QUOTA_MSG;
-    }
-    if (isGenuineOcrConfigError(e)) {
-      return OCR_CONFIG_MSG;
+      return {
+        message: "OCR service is temporarily busy. Please try again in a moment.",
+        retryable: true,
+        uiState: "TEMPORARILY_UNAVAILABLE",
+      };
     }
     if (
-      detailCode === "OCR_UPSTREAM" ||
-      detailCode === "OCR_INTERNAL" ||
+      code === "OCR_TEMP_UNAVAILABLE" ||
+      cls === "temp_unavailable" ||
+      retryableFlag ||
       (upstreamStatus != null && upstreamStatus >= 500) ||
       err?.status === 502 ||
       err?.status === 503 ||
       err?.status === 504
     ) {
-      return OCR_UPSTREAM_TEMP_MSG;
+      return {
+        message: typeof detailObj?.message === "string" && detailObj.message
+          ? String(detailObj.message)
+          : "OCR service is temporarily unavailable. Retrying...",
+        retryable: true,
+        uiState: "TEMPORARILY_UNAVAILABLE",
+      };
     }
     const text = apiErrorMessage(e, "We could not extract the information from this image. Please try again.");
     if (/blurry|unreadable|no rows|nothing extracted|select a clear/i.test(text)) {
-      return text.includes("clear") ? text : "Please select a clear Action Diary image.";
+      return {
+        message: text.includes("clear") ? text : "Please select a clear Action Diary image.",
+        retryable: true,
+        uiState: "FAILED",
+      };
     }
-    return text;
+    return { message: text, retryable: false, uiState: "FAILED" };
   };
 
-  /** Primary path: extract lots from the diary photo via Gemini. */
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  /** Primary path: extract lots from the diary photo via server OCR (queued + retries). */
   const runOcr = async () => {
     if (!imageBase64 || inFlightRef.current) return;
+    // Duplicate-submit guard: ignore rapid re-taps of the same image while results pending.
+    const submitHash = `${imageBase64.length}:${imageBase64.slice(0, 64)}:${imageBase64.slice(-64)}`;
+    if (processing && lastSubmitHashRef.current === submitHash) return;
+
     inFlightRef.current = true;
+    lastSubmitHashRef.current = submitHash;
     setError(null);
     setProcessing(true);
+    setJobState("UPLOADING");
     const ac = new AbortController();
     abortRef.current = ac;
     if (__DEV__) console.log("[ocr] started", { bytesApprox: Math.round(imageBase64.length * 0.75), timeoutMs: OCR_API_TIMEOUT_MS });
+
+    const payload: Record<string, unknown> = {
+      image_base64: imageBase64,
+      mime_type: "image/jpeg",
+      hint: hint.trim() || "1/5 ABDG (50) then MM 02 1000. Bhada in () is LOT TOTAL.",
+    };
+
+    const maxClientRetries = 2;
+    let lastError: unknown = null;
+
     try {
-      const payload: Record<string, unknown> = {
-        image_base64: imageBase64,
-        mime_type: "image/jpeg",
-        hint: hint.trim() || "1/5 ABDG (50) then MM 02 1000. Bhada in () is LOT TOTAL.",
-      };
-      if (__DEV__) console.log("[ocr] upload / request started");
-      const resp = await api.post<{ rows: OcrExtractedRow[]; model: string; warning?: string }>(
-        "/ocr/action-diary",
-        payload,
-        { timeoutMs: OCR_API_TIMEOUT_MS, signal: ac.signal },
-      );
-      if (__DEV__) console.log("[ocr] response received", { rows: resp.rows?.length, model: resp.model, warning: resp.warning });
-      if (resp.warning === "NO_CLOUD_OCR_KEY") {
-        setKeyConfigured(false);
-        setError(OCR_CONFIG_MSG);
-        return;
-      }
-      setKeyConfigured(true);
-      if (!resp.rows?.length) {
-        setError(resp.warning || "We could not extract the information from this image. Please try again.");
-        return;
-      }
-      goToPreview(resp.rows, resp.model, resp.warning);
-    } catch (e: any) {
-      if (__DEV__) {
-        const detail = e?.detail;
-        if (detail && typeof detail === "object") {
-          console.warn("[ocr] failed", {
-            code: e?.code,
-            status: e?.status,
-            detail,
-          });
-        } else {
-          console.warn("[ocr] failed", e?.code, e?.status, detail || e?.message);
+      for (let attempt = 0; attempt <= maxClientRetries; attempt++) {
+        if (ac.signal.aborted) return;
+        setJobState(attempt === 0 ? "PROCESSING" : "RETRYING");
+        if (__DEV__) console.log("[ocr] upload / request started", { attempt: attempt + 1 });
+        try {
+          const resp = await api.post<{ rows: OcrExtractedRow[]; model: string; warning?: string }>(
+            "/ocr/action-diary",
+            payload,
+            { timeoutMs: OCR_API_TIMEOUT_MS, signal: ac.signal },
+          );
+          if (__DEV__) console.log("[ocr] response received", { rows: resp.rows?.length, model: resp.model, warning: resp.warning });
+          if (resp.warning === "NO_CLOUD_OCR_KEY") {
+            setKeyConfigured(false);
+            setJobState("FAILED");
+            setError(OCR_CONFIG_MSG);
+            return;
+          }
+          setKeyConfigured(true);
+          if (!resp.rows?.length) {
+            setJobState("FAILED");
+            setError(resp.warning || "We could not extract the information from this image. Please try again.");
+            return;
+          }
+          setJobState("SUCCESS");
+          goToPreview(resp.rows, resp.model, resp.warning);
+          return;
+        } catch (e: any) {
+          lastError = e;
+          if ((e as ApiError)?.code === "ABORTED" && ac.signal.aborted) return;
+          const classified = classifyOcrError(e);
+          if (__DEV__) {
+            const detail = e?.detail;
+            console.warn("[ocr] attempt failed", { attempt: attempt + 1, code: e?.code, status: e?.status, detail, classified });
+          }
+          if (!classified.retryable || attempt >= maxClientRetries) {
+            if (isGenuineOcrConfigError(e)) setKeyConfigured(false);
+            setJobState(classified.uiState);
+            setError(classified.message);
+            return;
+          }
+          // Respect server retry_after when present
+          const detailObj = e?.detail && typeof e.detail === "object" ? e.detail as Record<string, unknown> : null;
+          const ra = typeof detailObj?.retry_after_seconds === "number" ? detailObj.retry_after_seconds : null;
+          const delayMs = Math.min(45_000, Math.max(1500, (ra != null ? ra * 1000 : 2000 * (attempt + 1))));
+          setJobState("RETRYING");
+          await sleep(delayMs);
         }
       }
-      if ((e as ApiError)?.code === "ABORTED" && ac.signal.aborted && !inFlightRef.current) {
-        return;
+      if (lastError) {
+        const classified = classifyOcrError(lastError);
+        setJobState(classified.uiState);
+        setError(classified.message);
       }
-      const text = classifyOcrError(e);
-      if (isGenuineOcrConfigError(e)) {
-        setKeyConfigured(false);
-      }
-      setError(text);
     } finally {
       inFlightRef.current = false;
       abortRef.current = null;
       setProcessing(false);
+      setJobState((s) => (s === "PROCESSING" || s === "UPLOADING" || s === "RETRYING" ? "IDLE" : s));
     }
   };
 
@@ -329,6 +417,7 @@ export default function OcrCapture() {
     inFlightRef.current = true;
     setError(null);
     setProcessing(true);
+    setJobState("PROCESSING");
     try {
       const resp = await api.post<{ rows: OcrExtractedRow[]; model: string; warning?: string }>(
         "/ocr/action-diary-text",
@@ -336,12 +425,16 @@ export default function OcrCapture() {
         { timeoutMs: 60_000 },
       );
       if (!resp.rows?.length) {
+        setJobState("FAILED");
         setError(resp.warning || "Could not parse text. Example:\n1/5 ABDG (50)\nMM 2 1000\nAB 2 1000");
         return;
       }
+      setJobState("SUCCESS");
       goToPreview(resp.rows, resp.model, resp.warning);
     } catch (e: any) {
-      setError(classifyOcrError(e));
+      const classified = classifyOcrError(e);
+      setJobState(classified.uiState);
+      setError(classified.message);
     } finally {
       inFlightRef.current = false;
       setProcessing(false);
@@ -523,9 +616,17 @@ export default function OcrCapture() {
           <View style={styles.overlayCard}>
             <ActivityIndicator size="large" color={colors.brandPrimary} style={{ marginVertical: spacing.md }} />
             <Text style={styles.overlayWait} testID="ocr-extract-wait">
-              Extracting data...
+              {jobState === "UPLOADING"
+                ? "Uploading image..."
+                : jobState === "RETRYING"
+                  ? "OCR service busy — retrying..."
+                  : "Extracting data..."}
             </Text>
-            <Text style={styles.overlayHint}>Please keep this screen open until extraction finishes.</Text>
+            <Text style={styles.overlayHint}>
+              {jobState === "RETRYING"
+                ? "Temporary provider delay. Keeping your photo — please wait."
+                : "Please keep this screen open until extraction finishes."}
+            </Text>
           </View>
         </View>
       </Modal>

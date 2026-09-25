@@ -3466,12 +3466,9 @@ def _parse_diary_text(text: str) -> List[OcrRow]:
 
 
 def _gemini_api_key() -> Optional[str]:
-    return (
-        os.environ.get("GEMINI_API_KEY")
-        or os.environ.get("GOOGLE_API_KEY")
-        or os.environ.get("EMERGENT_LLM_KEY")
-        or None
-    )
+    from ocr_service import gemini_api_key
+
+    return gemini_api_key()
 
 
 async def _resolve_ocr_api_key(shop_id: str) -> Optional[str]:
@@ -3480,236 +3477,15 @@ async def _resolve_ocr_api_key(shop_id: str) -> Optional[str]:
     return env_key.strip() if env_key and env_key.strip() else None
 
 
-def _gemini_key_auth_failed(status_code: int, body: str) -> bool:
-    """True when Google rejects the API key (try alternate auth style)."""
-    if status_code not in (400, 401, 403):
-        return False
-    low = (body or "").lower()
-    return (
-        "api key" in low
-        or "api_key" in low
-        or "apikey" in low
-        or "permission" in low
-        or "credential" in low
-        or "unauthorized" in low
-        or "forbidden" in low
-        or ("invalid" in low and "key" in low)
-    )
-
-
-class OcrUpstreamError(RuntimeError):
-    def __init__(self, status_code: int, message: str, body: str = "", model: Optional[str] = None):
-        super().__init__(message)
-        self.status_code = int(status_code)
-        self.message = message
-        self.body = body or ""
-        self.model = model
-
-
-def _log_gemini_429_diagnostic(raw_body: str, model: str) -> None:
-    """TEMPORARY: one-line Gemini 429 dump for Render (no API key / no request URL).
-
-    Logs the full upstream JSON compacted onto a single line, plus extracted quota fields.
-    Remove after the quota subtype is identified.
-    """
-    import json as _json
-
-    raw = raw_body or ""
-    # Never echo credentials if a key somehow appeared in the body text.
-    redacted = re.sub(
-        r"(?i)(AIza[0-9A-Za-z_-]{10,}|AQ\.[0-9A-Za-z._-]{10,}|key=)[^\s\"'&]*",
-        r"\1[REDACTED]",
-        raw,
-    )
-    one_line = ""
-    extracted: Dict[str, Any] = {
-        "model": model,
-        "http_status": 429,
-        "error.code": None,
-        "error.status": None,
-        "error.message": None,
-        "details": [],
-    }
-    try:
-        parsed = _json.loads(redacted)
-        one_line = _json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
-        err = parsed.get("error") if isinstance(parsed, dict) else None
-        if isinstance(err, dict):
-            extracted["error.code"] = err.get("code")
-            extracted["error.status"] = err.get("status")
-            extracted["error.message"] = err.get("message")
-            details = err.get("details") if isinstance(err.get("details"), list) else []
-            for det in details:
-                if not isinstance(det, dict):
-                    continue
-                row: Dict[str, Any] = {"@type": det.get("@type")}
-                md = det.get("metadata") if isinstance(det.get("metadata"), dict) else {}
-                for k in (
-                    "quotaMetric",
-                    "quota_metric",
-                    "quotaLimit",
-                    "quota_limit",
-                    "quotaValue",
-                    "quota_value",
-                    "quotaId",
-                    "quota_id",
-                    "model",
-                    "limit",
-                    "consumer",
-                ):
-                    if k in md:
-                        row[k] = md.get(k)
-                # Nested violations often carry the same quota fields.
-                viols = []
-                for v in det.get("violations") or []:
-                    if isinstance(v, dict):
-                        viols.append(
-                            {
-                                k: v.get(k)
-                                for k in (
-                                    "quotaMetric",
-                                    "quota_metric",
-                                    "quotaLimit",
-                                    "quota_limit",
-                                    "quotaValue",
-                                    "quota_value",
-                                    "subject",
-                                    "description",
-                                )
-                                if k in v
-                            }
-                        )
-                if viols:
-                    row["violations"] = viols
-                if det.get("retryDelay") is not None:
-                    row["retryDelay"] = det.get("retryDelay")
-                if det.get("retry_delay") is not None:
-                    row["retry_delay"] = det.get("retry_delay")
-                # Surface spend / RESOURCE_EXHAUSTED style strings if present anywhere in detail.
-                blob = _json.dumps(det, ensure_ascii=False)
-                if re.search(r"(?i)spend|billing|budget|RESOURCE_EXHAUSTED", blob):
-                    row["spend_or_resource_hint"] = True
-                extracted["details"].append(row)
-    except Exception:
-        # Fallback: still one line, even if body is not JSON.
-        one_line = " ".join(redacted.split())
-
-    extracted_line = _json.dumps(extracted, ensure_ascii=False, separators=(",", ":"))
-    logger.warning("OCR_GEMINI_429_DIAG_RAW model=%s body=%s", model, one_line)
-    logger.warning("OCR_GEMINI_429_DIAG_FIELDS %s", extracted_line)
-
-
-def _call_gemini_vision(image_b64: str, mime_type: str, hint: Optional[str], api_key: str) -> tuple[str, str]:
-    """Call Google Gemini generateContent. Returns (raw_text, model_name). Raises RuntimeError on failure.
-
-    Uses one deterministic Gemini model per tap. This avoids multiplying requests
-    across fallback models and unintentionally burning quota during repeated OCR use.
-    """
-    import requests as _requests
-
-    model = (os.environ.get("GEMINI_OCR_MODEL") or "gemini-2.5-flash").strip()
-    hint_line = f"\nHint: {hint}" if hint else ""
-    prompt = _OCR_SYSTEM + hint_line + "\nExtract all lots. JSON only."
-    key = api_key.strip()
-    auth_mode = "header" if key.startswith("AQ.") else "query"
-
-    # Long per-request wait so we do not fail while Gemini is still processing.
-    # Client OCR timeout is 360s; keep this single upstream call within that budget.
-    req_timeout = 200
-    base_url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{model}:generateContent"
-    )
-    payload = {
-        "contents": [{
-            "parts": [
-                {"text": prompt},
-                {"inline_data": {"mime_type": mime_type or "image/jpeg", "data": image_b64}},
-            ]
-        }],
-        "generationConfig": {
-            "temperature": 0.0,
-            "responseMimeType": "application/json",
-            "maxOutputTokens": 8192,
-        },
-    }
-    url = f"{base_url}?key={key}" if auth_mode == "query" else base_url
-    headers = {"Content-Type": "application/json"}
-    if auth_mode == "header":
-        headers["x-goog-api-key"] = key
-    try:
-        resp = _requests.post(url, json=payload, headers=headers, timeout=req_timeout)
-    except Exception as e:
-        raise RuntimeError(f"OCR model transport failed: {e}")
-
-    if resp.status_code >= 400:
-        raw_body = resp.text or ""
-        # TEMPORARY diagnostic: full one-line 429 body for Render (no key / no URL).
-        if resp.status_code == 429:
-            try:
-                _log_gemini_429_diagnostic(raw_body, model)
-            except Exception as diag_err:
-                logger.warning("OCR_GEMINI_429_DIAG_FAILED err=%s", diag_err)
-        body = raw_body[:600]
-        if _gemini_key_auth_failed(resp.status_code, body):
-            low = body.lower()
-            if "api key not valid" in low or ("invalid" in low and "key" in low):
-                raise RuntimeError(
-                    "Gemini API key not valid. In AI Studio click Copy key, then paste into "
-                    "Settings → Gemini API key (or Scan paste box) and Save."
-                )
-        raise OcrUpstreamError(
-            resp.status_code,
-            f"OCR upstream returned HTTP {resp.status_code}",
-            body=body,
-            model=model,
-        )
-
-    data = resp.json()
-    parts = (
-        data.get("candidates", [{}])[0]
-        .get("content", {})
-        .get("parts", [])
-    )
-    text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
-    if not (text or "").strip():
-        raise OcrUpstreamError(502, "OCR upstream returned an empty response", model=model)
-    return text, model
-
-
 def _optimize_ocr_image_b64(image_b64: str, mime_type: str) -> tuple[str, str]:
-    """Optional server-side resize/compress before Gemini (keeps handwriting readable)."""
-    try:
-        import base64
-        import io
-        from PIL import Image as _PILImage  # type: ignore
-    except Exception:
-        return image_b64, mime_type or "image/jpeg"
-    try:
-        raw = base64.b64decode(image_b64)
-        img = _PILImage.open(io.BytesIO(raw))
-        if img.mode not in ("RGB", "L"):
-            img = img.convert("RGB")
-        elif img.mode == "L":
-            img = img.convert("RGB")
-        w, h = img.size
-        max_side = 1024
-        if max(w, h) > max_side:
-            if w >= h:
-                nh = max(1, int(h * (max_side / float(w))))
-                img = img.resize((max_side, nh), _PILImage.Resampling.LANCZOS)
-            else:
-                nw = max(1, int(w * (max_side / float(h))))
-                img = img.resize((nw, max_side), _PILImage.Resampling.LANCZOS)
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=72, optimize=True)
-        return base64.b64encode(buf.getvalue()).decode("ascii"), "image/jpeg"
-    except Exception:
-        return image_b64, mime_type or "image/jpeg"
+    from ocr_service import optimize_ocr_image_b64
+
+    return optimize_ocr_image_b64(image_b64, mime_type)
 
 
 def _parse_model_json(full_text: str) -> tuple[List[OcrRow], Optional[str]]:
     import json
+
     text = (full_text or "").strip()
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.M).strip()
@@ -3722,7 +3498,6 @@ def _parse_model_json(full_text: str) -> tuple[List[OcrRow], Optional[str]]:
         if not rows:
             warning = "No rows extracted. The photo may be blurry or the page unreadable."
     except json.JSONDecodeError:
-        # Last chance: treat as plain diary text
         rows = _parse_diary_text(text)
         if not rows:
             warning = "Model returned non-JSON. Please retake the photo more clearly."
@@ -3731,15 +3506,43 @@ def _parse_model_json(full_text: str) -> tuple[List[OcrRow], Optional[str]]:
 
 @api.get("/ocr/status")
 async def ocr_status(user=Depends(current_user)):
-    """Whether photo OCR has a Gemini key (env or Settings) — never returns the key."""
+    """Whether photo OCR has a Gemini key (env) — never returns the key."""
+    from ocr_service import METRICS, primary_model
+
     key = await _resolve_ocr_api_key(user["shop_id"])
-    # Never reveal whether the key is configured to the client; just report boolean.
-    return {"configured": bool(key)}
+    snap = METRICS.snapshot()
+    return {
+        "configured": bool(key),
+        "model": primary_model() if key else None,
+        "metrics": {
+            "requests": snap["requests"],
+            "success": snap["success"],
+            "failure": snap["failure"],
+            "retries": snap["retries"],
+            "fallback_used": snap["fallback_used"],
+            "avg_latency_ms": snap["avg_latency_ms"],
+        },
+    }
+
+
+@api.get("/ocr/metrics")
+async def ocr_metrics(user=Depends(owner_only)):
+    """Owner-only aggregate OCR observability (no secrets)."""
+    from ocr_service import METRICS, primary_model, fallback_model
+
+    snap = METRICS.snapshot()
+    return {
+        "primary_model": primary_model(),
+        "fallback_model": fallback_model(),
+        "configured": bool(_gemini_api_key()),
+        **snap,
+    }
 
 
 @api.post("/ocr/action-diary", response_model=OcrResponse)
 async def ocr_action_diary(body: OcrRequest, user=Depends(current_user)):
-    # Strip data URL prefix if present
+    from ocr_service import OcrServiceError, extract_with_resilience
+
     img_b64 = body.image_base64
     if img_b64.startswith("data:"):
         try:
@@ -3748,57 +3551,131 @@ async def ocr_action_diary(body: OcrRequest, user=Depends(current_user)):
             pass
 
     api_key = await _resolve_ocr_api_key(user["shop_id"])
-    model_name = "gemini"
-    full_text = ""
+    if not api_key:
+        return OcrResponse(rows=[], model="none", warning="NO_CLOUD_OCR_KEY")
 
-    if api_key:
-        try:
-            import asyncio
-            img_b64, mime = _optimize_ocr_image_b64(img_b64, body.mime_type or "image/jpeg")
-            logger.info(
-                "OCR action-diary: Gemini extract starting (shop=%s, bytes≈%s)",
-                user.get("shop_id"),
-                int(len(img_b64) * 0.75) if img_b64 else 0,
-            )
-            full_text, model_name = await asyncio.to_thread(
-                _call_gemini_vision, img_b64, mime, body.hint, api_key
-            )
-            logger.info(
-                "OCR action-diary: Gemini extract done (model=%s, chars=%s)",
-                model_name,
-                len(full_text or ""),
-            )
-        except OcrUpstreamError as e:
-            logger.warning(
-                "OCR action-diary upstream failure (shop=%s, model=%s, status=%s): %s | body=%s",
-                user.get("shop_id"),
-                e.model or model_name,
-                e.status_code,
-                e.message,
-                (e.body or "")[:300],
-            )
-            raise HTTPException(502, {
-                "code": "OCR_UPSTREAM",
-                "message": e.message,
-                "status_code": e.status_code,
-                "model": e.model or model_name,
-                "upstream_body": (e.body or "")[:300],
-            })
-        except Exception as e:
-            logger.warning("OCR action-diary internal failure (shop=%s): %s", user.get("shop_id"), e)
-            raise HTTPException(502, {
-                "code": "OCR_INTERNAL",
-                "message": f"OCR model call failed: {e}",
-            })
-    else:
-        return OcrResponse(
-            rows=[],
-            model="none",
-            warning="NO_CLOUD_OCR_KEY",
+    try:
+        logger.info(
+            "OCR action-diary: extract starting (shop=%s, bytes≈%s)",
+            user.get("shop_id"),
+            int(len(img_b64) * 0.75) if img_b64 else 0,
         )
+        result = await extract_with_resilience(
+            image_b64=img_b64,
+            mime_type=body.mime_type or "image/jpeg",
+            hint=body.hint,
+            system_prompt=_OCR_SYSTEM,
+            parse_diary_text=_parse_diary_text,
+            shop_id=str(user.get("shop_id") or ""),
+        )
+        logger.info(
+            "OCR action-diary: extract done (provider=%s model=%s chars=%s)",
+            result.provider,
+            result.model,
+            len(result.rows_raw_text or ""),
+        )
+    except OcrServiceError as e:
+        payload = e.http_payload()
+        logger.warning(
+            "OCR action-diary failure (shop=%s class=%s code=%s status=%s provider=%s): %s",
+            user.get("shop_id"),
+            payload.get("class"),
+            payload.get("code"),
+            payload.get("status_code"),
+            payload.get("provider"),
+            payload.get("message"),
+        )
+        # 429 for quota/rate; 503 for temp; 502 otherwise — clients classify via payload.code
+        http_status = 429 if payload.get("class") in ("rate_limit", "daily_quota", "token_quota") else (
+            503 if payload.get("retryable") else 502
+        )
+        if payload.get("class") == "auth":
+            http_status = 503
+        raise HTTPException(http_status, payload)
+    except Exception as e:
+        logger.warning("OCR action-diary internal failure (shop=%s): %s", user.get("shop_id"), e)
+        raise HTTPException(502, {
+            "code": "OCR_INTERNAL",
+            "class": "other",
+            "message": "OCR model call failed. Please try again.",
+            "retryable": True,
+        })
 
-    rows, warning = _parse_model_json(full_text)
-    return OcrResponse(rows=rows, model=model_name, warning=warning)
+    rows, warning = _parse_model_json(result.rows_raw_text)
+    if result.warning:
+        warning = result.warning if not warning else f"{result.warning} {warning}"
+    return OcrResponse(rows=rows, model=result.model, warning=warning)
+
+
+@api.post("/ocr/jobs")
+async def ocr_create_job(body: OcrRequest, user=Depends(current_user)):
+    """Submit an OCR job. Returns job id immediately; poll GET /ocr/jobs/{id}."""
+    import asyncio as _asyncio
+    import uuid as _uuid
+
+    from ocr_service import OcrJob, OcrJobState, OcrServiceError, _set_job, run_ocr_job
+
+    img_b64 = body.image_base64
+    if img_b64.startswith("data:"):
+        try:
+            img_b64 = img_b64.split(",", 1)[1]
+        except Exception:
+            pass
+
+    if not await _resolve_ocr_api_key(user["shop_id"]):
+        raise HTTPException(503, {
+            "code": "OCR_AUTH",
+            "class": "auth",
+            "message": "OCR service configuration error. Please contact administrator.",
+            "retryable": False,
+        })
+
+    job_id = str(_uuid.uuid4())
+    job = OcrJob(id=job_id, shop_id=str(user.get("shop_id") or ""), state=OcrJobState.QUEUED)
+    _set_job(job)
+
+    async def _run() -> None:
+        try:
+            await run_ocr_job(
+                shop_id=str(user.get("shop_id") or ""),
+                image_b64=img_b64,
+                mime_type=body.mime_type or "image/jpeg",
+                hint=body.hint,
+                system_prompt=_OCR_SYSTEM,
+                parse_model_json=_parse_model_json,
+                parse_diary_text=_parse_diary_text,
+                job_id=job_id,
+            )
+        except OcrServiceError:
+            pass
+        except Exception as e:
+            job.state = OcrJobState.FAILED
+            job.error = {"code": "OCR_INTERNAL", "message": "OCR failed", "retryable": True}
+            _set_job(job)
+            logger.warning("OCR job fail shop=%s err=%s", user.get("shop_id"), e)
+
+    _asyncio.create_task(_run())
+    return {"job_id": job.id, "state": job.state.value}
+
+
+@api.get("/ocr/jobs/{job_id}")
+async def ocr_get_job(job_id: str, user=Depends(current_user)):
+    from ocr_service import get_job
+
+    job = get_job(job_id)
+    if not job or job.shop_id != str(user.get("shop_id") or ""):
+        raise HTTPException(404, "OCR job not found")
+    return {
+        "job_id": job.id,
+        "state": job.state.value,
+        "provider": job.provider,
+        "model": job.model,
+        "attempt": job.attempt,
+        "rows": job.rows,
+        "warning": job.warning,
+        "error": job.error,
+        "latency_ms": job.latency_ms,
+    }
 
 
 @api.post("/ocr/action-diary-text", response_model=OcrResponse)
