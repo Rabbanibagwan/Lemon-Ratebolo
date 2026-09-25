@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
-  FlatList, Modal,
-  Pressable, StyleSheet, Text, TextInput, View,
+  FlatList, Modal, Platform,
+  Pressable, StyleSheet, Text, TextInput, View, findNodeHandle,
   type NativeSyntheticEvent,
   type TextInputKeyPressEventData,
 } from "react-native";
@@ -110,6 +110,8 @@ export function PartyPicker({
   const [createActionsActive, setCreateActionsActive] = useState(false);
   const searchRef = useRef<TextInput>(null);
   const listRef = useRef<FlatList<PartyItem>>(null);
+  const rowRefs = useRef<Array<View | null>>([]);
+  const [searchNextFocusDown, setSearchNextFocusDown] = useState<number | undefined>(undefined);
   const nameRef = useRef<TextInput>(null);
   const detailsRef = useRef<TextInput>(null);
   const phoneRef = useRef<TextInput>(null);
@@ -307,6 +309,11 @@ export function PartyPicker({
     setShowCreate(true);
   };
 
+  const moveHighlight = useCallback((delta: 1 | -1) => {
+    if (!filtered.length) return;
+    setHighlightIndex((i) => Math.min(Math.max(i + delta, 0), filtered.length - 1));
+  }, [filtered.length]);
+
   const confirmHighlighted = () => {
     if (filtered.length === 0) {
       if (query.trim()) openCreate();
@@ -317,18 +324,24 @@ export function PartyPicker({
   };
 
   const handleSearchKeyPress = (e: NativeSyntheticEvent<TextInputKeyPressEventData>) => {
-    const key = e.nativeEvent.key;
-    if (key === "Escape") {
+    const raw = String(e.nativeEvent.key || "");
+    // Web / some devices report Arrow*; Android hardware DPAD usually does NOT
+    // reach TextInput.onKeyPress (see ReactEditTextInputConnectionWrapper) — those
+    // devices use focusable rows + nextFocusDown below instead.
+    const key = raw.toLowerCase();
+    if (key === "escape" || key === "esc") {
       onClose();
       return;
     }
-    if (key === "ArrowDown") {
-      if (!filtered.length) return;
-      setHighlightIndex((i) => Math.min(i + 1, filtered.length - 1));
-    } else if (key === "ArrowUp") {
-      if (!filtered.length) return;
-      setHighlightIndex((i) => Math.max(i - 1, 0));
-    } else if (key === "Enter") {
+    if (key === "arrowdown" || key === "down" || key === "dpad_down") {
+      moveHighlight(1);
+      return;
+    }
+    if (key === "arrowup" || key === "up" || key === "dpad_up") {
+      moveHighlight(-1);
+      return;
+    }
+    if (key === "enter" || key === "return") {
       if (filtered.length === 0 && query.trim()) {
         suppressCreateEnterUntilRef.current = Date.now() + 650;
         nameFocusPendingRef.current = true;
@@ -337,15 +350,43 @@ export function PartyPicker({
     }
   };
 
+  // Android: wire Search ↓ to the *next* result row so the first DPAD_DOWN
+  // advances highlight (AH → ASM), matching combobox behaviour. Further ↑/↓
+  // walk focusable rows; onFocus keeps highlightIndex in sync.
+  useEffect(() => {
+    if (!visible || showCreate || !filtered.length) {
+      setSearchNextFocusDown(undefined);
+      return;
+    }
+    const target = Math.min(highlightIndex + 1, filtered.length - 1);
+    // Defer until row refs attach after render.
+    const sync = () => {
+      const tag = findNodeHandle(rowRefs.current[target]);
+      setSearchNextFocusDown(typeof tag === "number" ? tag : undefined);
+    };
+    sync();
+    const t = setTimeout(sync, 50);
+    return () => clearTimeout(t);
+  }, [visible, showCreate, highlightIndex, filtered.length, filtered.map((x) => x.id).join("|")]);
+
   useEffect(() => {
     if (!visible || showCreate || !filtered.length) return;
     const idx = Math.min(highlightIndex, filtered.length - 1);
     try {
-      listRef.current?.scrollToIndex({ index: idx, animated: false });
+      listRef.current?.scrollToIndex({
+        index: idx,
+        animated: true,
+        viewPosition: 0.4,
+      });
     } catch {
       /* layout not ready */
     }
   }, [visible, showCreate, highlightIndex, filtered.length]);
+
+  // Keep row ref array sized to current results.
+  useEffect(() => {
+    rowRefs.current = rowRefs.current.slice(0, filtered.length);
+  }, [filtered.length]);
 
   const selectExistingParty = (item: PartyItem) => {
     setShowCreate(false);
@@ -422,11 +463,11 @@ export function PartyPicker({
         onShow={handleSearchModalShown}
       >
         <KeyboardFormAvoid style={styles.modalRoot}>
-          <Pressable style={styles.backdrop} onPress={onClose} />
-          <View style={styles.sheet}>
-            <View style={styles.header}>
+          <Pressable style={styles.backdrop} onPress={onClose} focusable={false} />
+          <View style={styles.sheet} focusable={false}>
+            <View style={styles.header} focusable={false}>
               <Text style={styles.title}>{title}</Text>
-              <Pressable onPress={onClose} hitSlop={12} testID="party-picker-close">
+              <Pressable onPress={onClose} hitSlop={12} focusable={false} testID="party-picker-close">
                 <Ionicons name="close" size={22} color={colors.onSurface} />
               </Pressable>
             </View>
@@ -434,6 +475,10 @@ export function PartyPicker({
             <Pressable
               style={styles.addNew}
               onPress={openCreate}
+              // Android: accessible/focusable rows steal DPAD from the search field.
+              accessible={false}
+              focusable={false}
+              importantForAccessibility="no"
               testID={isFarmer ? "farmer-add-btn" : "vendor-add-btn"}
             >
               <Ionicons name="add-circle-outline" size={20} color={colors.brandPrimary} />
@@ -452,6 +497,12 @@ export function PartyPicker({
                 autoCapitalize="none"
                 returnKeyType="search"
                 blurOnSubmit={false}
+                autoCorrect={false}
+                // Android hardware ↑/↓ move focus (onKeyPress does not receive DPAD).
+                // Point ↓ at the next result so the first Down advances the highlight.
+                {...(Platform.OS === "android" && searchNextFocusDown != null
+                  ? { nextFocusDown: searchNextFocusDown }
+                  : {})}
                 onLayout={handleSearchLayout}
                 onSubmitEditing={() => {
                   if (filtered.length === 0 && query.trim()) {
@@ -471,10 +522,20 @@ export function PartyPicker({
               keyExtractor={(x) => x.id}
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode="none"
+              // Let row Pressables take DPAD focus; don't focus the ScrollView itself.
+              focusable={false}
+              accessible={false}
+              importantForAccessibility="no"
               style={styles.list}
               contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.xl, gap: spacing.sm }}
-              onScrollToIndexFailed={() => {
-                /* ignore — list may still be measuring */
+              onScrollToIndexFailed={(info) => {
+                requestAnimationFrame(() => {
+                  try {
+                    listRef.current?.scrollToIndex({ index: info.index, animated: false, viewPosition: 0.5 });
+                  } catch {
+                    /* ignore */
+                  }
+                });
               }}
               ListEmptyComponent={
                 <Empty
@@ -486,7 +547,16 @@ export function PartyPicker({
                 const highlighted = index === highlightIndex;
                 return (
                   <Pressable
+                    ref={(node) => {
+                      rowRefs.current[index] = node as unknown as View | null;
+                    }}
                     onPress={() => onSelect(item)}
+                    onFocus={() => setHighlightIndex(index)}
+                    // Android: rows must be focusable so DPAD ↑/↓ walk the list
+                    // (TextInput never emits Arrow keys to onKeyPress on hardware DPAD).
+                    focusable
+                    accessible
+                    accessibilityState={{ selected: highlighted }}
                     style={[
                       styles.row,
                       item.id === selectedId && styles.rowOn,
@@ -497,10 +567,10 @@ export function PartyPicker({
                     <Text style={[styles.rowCaret, !highlighted && styles.rowCaretHidden]}>
                       {highlighted ? ">" : " "}
                     </Text>
-                    <View style={styles.avatar}>
+                    <View style={styles.avatar} pointerEvents="none">
                       <Text style={styles.avatarText}>{item.name.charAt(0).toUpperCase()}</Text>
                     </View>
-                    <View style={{ flex: 1 }}>
+                    <View style={{ flex: 1 }} pointerEvents="none">
                       <Text style={[styles.rowTitle, highlighted && styles.rowTitleHighlight]}>
                         {item.name}
                       </Text>
@@ -717,10 +787,12 @@ const styles = StyleSheet.create({
   },
   rowOn: { borderColor: colors.brandPrimary, backgroundColor: colors.brandSecondary },
   rowHighlight: {
-    borderColor: colors.brand, borderWidth: 3, backgroundColor: colors.brandSecondary,
+    borderColor: colors.brand,
+    borderWidth: 3,
+    backgroundColor: colors.brandSecondary,
   },
   rowCaret: {
-    width: 16, fontSize: 16, fontWeight: "900", color: colors.brand,
+    width: 18, fontSize: 18, fontWeight: "900", color: colors.brand,
     fontFamily: font.mono, textAlign: "center",
   },
   rowCaretHidden: { color: "transparent" },
