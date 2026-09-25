@@ -543,7 +543,7 @@ def test_model_candidates_current_chain_only():
 
 
 def test_model_candidates_skips_obsolete_env_fallback():
-    """If Render still has shutdown fallback env vars, they must be ignored."""
+    """If Render still has shutdown fallback env vars, substitute current defaults in order."""
     with patch.dict(
         "os.environ",
         {
@@ -556,11 +556,13 @@ def test_model_candidates_skips_obsolete_env_fallback():
     ):
         with _patch_list_models(None):
             models = model_candidates()
+            from ocr_service import fallback_model, fallback_model_2
+
+            assert fallback_model() == DEFAULT_FALLBACK_MODEL
+            assert fallback_model_2() == DEFAULT_FALLBACK_MODEL_2
     assert "gemini-2.0-flash" not in models
     assert "gemini-1.5-flash" not in models
-    assert models[0] == "gemini-2.5-flash"
-    assert DEFAULT_FALLBACK_MODEL in models
-    assert DEFAULT_FALLBACK_MODEL_2 in models
+    assert models[:3] == list(CURRENT_CHAIN)
 
 
 def test_model_candidates_filters_via_list_models():

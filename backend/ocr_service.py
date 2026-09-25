@@ -531,15 +531,27 @@ _AVAILABLE_MODELS_TTL_SEC = 300.0
 
 
 def primary_model() -> str:
-    return (os.environ.get("GEMINI_OCR_MODEL") or DEFAULT_PRIMARY_MODEL).strip()
+    configured = (os.environ.get("GEMINI_OCR_MODEL") or DEFAULT_PRIMARY_MODEL).strip()
+    if configured in OBSOLETE_GEMINI_MODELS:
+        logger.warning("OCR_SKIP_OBSOLETE_PRIMARY model=%s → %s", configured, DEFAULT_PRIMARY_MODEL)
+        return DEFAULT_PRIMARY_MODEL
+    return configured or DEFAULT_PRIMARY_MODEL
 
 
 def fallback_model() -> str:
-    return (os.environ.get("GEMINI_OCR_FALLBACK_MODEL") or DEFAULT_FALLBACK_MODEL).strip()
+    configured = (os.environ.get("GEMINI_OCR_FALLBACK_MODEL") or DEFAULT_FALLBACK_MODEL).strip()
+    if configured in OBSOLETE_GEMINI_MODELS:
+        logger.warning("OCR_SKIP_OBSOLETE_FALLBACK model=%s → %s", configured, DEFAULT_FALLBACK_MODEL)
+        return DEFAULT_FALLBACK_MODEL
+    return configured or DEFAULT_FALLBACK_MODEL
 
 
 def fallback_model_2() -> str:
-    return (os.environ.get("GEMINI_OCR_FALLBACK_MODEL_2") or DEFAULT_FALLBACK_MODEL_2).strip()
+    configured = (os.environ.get("GEMINI_OCR_FALLBACK_MODEL_2") or DEFAULT_FALLBACK_MODEL_2).strip()
+    if configured in OBSOLETE_GEMINI_MODELS:
+        logger.warning("OCR_SKIP_OBSOLETE_FALLBACK_2 model=%s → %s", configured, DEFAULT_FALLBACK_MODEL_2)
+        return DEFAULT_FALLBACK_MODEL_2
+    return configured or DEFAULT_FALLBACK_MODEL_2
 
 
 def list_available_gemini_models(api_key: str) -> Optional[set]:
