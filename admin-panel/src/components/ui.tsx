@@ -12,6 +12,7 @@ export function Shell({ title, children, actions }: { title: string; children: R
         <NavLink href="/pattis">Pattis</NavLink>
         <NavLink href="/vendor-bills">Vendor Bills</NavLink>
         <NavLink href="/purchases">Purchases</NavLink>
+        <NavLink href="/free-bags">Free Bags</NavLink>
         <NavLink href="/reports">Reports</NavLink>
         <NavLink href="/settings">Settings</NavLink>
         <NavLink href="/audit">Audit</NavLink>

@@ -83,17 +83,32 @@ export function MerchantsPage() {
   );
 }
 
+type FreeSummary = {
+  shop_id: string;
+  allocated: number;
+  claimed: number;
+  used: number;
+  remaining: number;
+  available_to_claim: number;
+};
+
 export function MerchantDetailPage() {
   const { id } = useParams();
   const nav = useNavigate();
   const [date, setDate] = useState(istToday());
   const [data, setData] = useState<any>(null);
+  const [freeSummary, setFreeSummary] = useState<FreeSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
       try {
         setData(await api(`/admin/merchants/${id}${qs({ date })}`));
+        try {
+          setFreeSummary(await api<FreeSummary>(`/admin/billing/merchants/${id}/free-summary`));
+        } catch {
+          setFreeSummary(null);
+        }
       } catch (err) {
         const e = err as ApiError;
         if (e.status === 401) { setToken(null); nav("/login"); return; }
@@ -128,12 +143,26 @@ export function MerchantDetailPage() {
               <Kpi label="Purchased Bags" value={d.purchased_bags} />
             </div>
           ) : null}
+          {freeSummary ? (
+            <>
+              <h3 style={{ marginTop: 20, marginBottom: 8, letterSpacing: 1 }}>FREE BAG SUMMARY</h3>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }} data-testid="merchant-free-summary">
+                <Kpi label="Allocated Free Bags" value={freeSummary.allocated} />
+                <Kpi label="Claimed Free Bags" value={freeSummary.claimed} />
+                <Kpi label="Unclaimed Free Bags" value={freeSummary.available_to_claim} />
+                <Kpi label="Used Free Bags" value={freeSummary.used} />
+                <Kpi label="Remaining Free Bags" value={freeSummary.remaining} />
+              </div>
+            </>
+          ) : null}
           <p style={{ marginTop: 16 }}>
             <Link to={`/pattis?shop_id=${id}&date=${date}`}>View Pattis</Link>
             {" · "}
             <Link to={`/vendor-bills?shop_id=${id}&date=${date}`}>View Bills</Link>
             {" · "}
             <Link to={`/purchases?shop_id=${id}&date=${date}`}>View Purchases</Link>
+            {" · "}
+            <Link to="/free-bags">Give Free Bags</Link>
           </p>
         </>
       )}

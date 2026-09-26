@@ -269,6 +269,53 @@ export type BagWallet = {
   total_available: number;
   price_per_bag: number;
   low_balance: boolean;
+  /** Admin-allocated free bags not yet claimed (not in usable balance). */
+  free_available_to_claim?: number;
+};
+
+export type FreeBagAllocation = {
+  id: string;
+  shop_id: string;
+  shop_name?: string | null;
+  username?: string | null;
+  bags: number;
+  year: number;
+  month: number;
+  period_label: string;
+  status: "PENDING" | "AVAILABLE" | "CLAIMED" | "EXPIRED" | "CANCELLED" | string;
+  mobile?: string | null;
+  allocated_bags?: number;
+  claimed_bags?: number;
+  unclaimed_bags?: number;
+  reason?: string | null;
+  allocated_at: string;
+  claimed_at?: string | null;
+  claim_ref?: string | null;
+  claim_transaction_id?: string | null;
+  created_by_admin_username?: string | null;
+};
+
+export type FreeBagSummary = {
+  shop_id: string;
+  allocated: number;
+  claimed: number;
+  used: number;
+  remaining: number;
+  available_to_claim: number;
+};
+
+export type MerchantNotification = {
+  id: string;
+  shop_id: string;
+  kind: string;
+  title: string;
+  body: string;
+  action?: string | null;
+  allocation_id?: string | null;
+  bags?: number | null;
+  read: boolean;
+  created_at: string;
+  read_at?: string | null;
 };
 
 export type BagPurchase = {
@@ -298,19 +345,37 @@ export type BagInvoiceBillingTo = {
   pan_number?: string;
 };
 
+export type BagInvoiceSeller = {
+  brand?: string;
+  name?: string;
+  legal_name?: string;
+  address_lines?: string[];
+  gstin?: string;
+  /** @deprecated removed from supplier identity; ignored if present */
+  description?: string;
+};
+
 export type BagInvoice = {
   purchase_id: string;
   invoice_number: string;
   invoice_date: string;
   status: string;
   billing_to: BagInvoiceBillingTo;
-  seller: { name: string; description?: string };
+  seller: BagInvoiceSeller;
   service_hsn_code: string;
   bags: number;
   price_per_bag: number;
   base_amount: number;
   gst_percent: number;
   gst_amount: number;
+  cgst_percent?: number;
+  cgst_amount?: number;
+  sgst_percent?: number;
+  sgst_amount?: number;
+  igst_percent?: number;
+  igst_amount?: number;
+  gst_supply_type?: "INTRA" | "INTER" | string;
+  place_of_supply_state_code?: string;
   total_amount: number;
   line_description: string;
   payment_ref?: string | null;

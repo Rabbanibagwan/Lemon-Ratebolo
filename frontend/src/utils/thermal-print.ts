@@ -54,6 +54,11 @@ export function thermalMetrics(paperMm: number) {
     lotPct: w <= 58 ? 20 : 18,
     midPct: w <= 58 ? 48 : 50,
     rightPct: w <= 58 ? 32 : 32,
+    /** Vendor Bill 4-col: LOT | FARMER | BAGS×RATE | AMOUNT */
+    vLotPct: w <= 58 ? 14 : 14,
+    vFarmPct: w <= 58 ? 24 : 26,
+    vBagsPct: w <= 58 ? 34 : 34,
+    vAmtPct: w <= 58 ? 28 : 26,
     farmerFs: w <= 58 ? 20 : w <= 80 ? 24 : 28,
     /** Vendor name — one step under farmerFs, still bold/readable on the same row. */
     vendorFs: w <= 58 ? 16 : w <= 80 ? 18 : 22,
@@ -328,60 +333,68 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       box-sizing: border-box !important;
       border: 2px solid #000 !important;
     }
-    /* Preview header: shop + PATTI/BILL left, NO. box right */
-    #slip.patti .patti-head {
+    /* Preview header: shop + title left, NO./BILL box right — shared by Patti + Vendor */
+    #slip.patti .patti-head,
+    #slip.vendor .patti-head {
       display: flex;
       justify-content: space-between;
       align-items: flex-start;
       gap: 6px;
       width: 100%;
     }
-    #slip.patti .patti-head-main {
+    #slip.patti .patti-head-main,
+    #slip.vendor .patti-head-main {
       flex: 1;
       min-width: 0;
       text-align: left;
     }
-    #slip.patti .patti-head-main .shop {
+    #slip.patti .patti-head-main .shop,
+    #slip.vendor .patti-head-main .shop {
       text-align: left !important;
       margin: 0 0 2px 0;
     }
-    #slip.patti .patti-head-main .addr {
+    #slip.patti .patti-head-main .addr,
+    #slip.vendor .patti-head-main .addr {
       text-align: left !important;
     }
-    #slip.patti .kind {
+    #slip.patti .kind,
+    #slip.vendor .kind {
       font-size: ${Math.max(8, m.bodyFs - 2)}px !important;
       letter-spacing: 1.5px;
       font-weight: 800 !important;
       margin-top: 2px;
       text-transform: uppercase !important;
     }
-    #slip.patti .numBox {
+    #slip.patti .numBox,
+    #slip.vendor .numBox {
       flex: 0 0 auto;
       border: 2px solid #000 !important;
       padding: 3px 8px;
       text-align: right;
       min-width: ${m.w <= 58 ? 36 : 44}px;
     }
-    #slip.patti .numLabel {
+    #slip.patti .numLabel,
+    #slip.vendor .numLabel {
       font-size: ${Math.max(7, m.bodyFs - 3)}px !important;
       letter-spacing: 1px;
       font-weight: 800 !important;
       line-height: 1.1;
     }
-    #slip.patti .num {
+    #slip.patti .num,
+    #slip.vendor .num {
       font-size: ${m.bigFs}px !important;
       font-weight: 900 !important;
       line-height: 1.1;
     }
+    /* Master preview: dark fill + white text for major totals */
     #slip.patti .netbox {
-      /* White fill + black bold text; same border/size/padding as before */
-      background: #fff !important;
+      background: #000 !important;
       padding: 10px 10px;
       gap: 10px;
     }
     #slip.patti .netbox,
     #slip.patti .netbox * {
-      color: #000 !important;
+      color: #fff !important;
       -webkit-text-stroke: 0 !important;
     }
     #slip.patti .netbox .bold {
@@ -389,7 +402,7 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       flex-shrink: 0;
       text-transform: uppercase !important;
       font-weight: 900 !important;
-      color: #000 !important;
+      color: #fff !important;
     }
     #slip.patti .netbox .huge {
       letter-spacing: 0.04em;
@@ -398,7 +411,7 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       white-space: nowrap;
       text-align: right;
       font-weight: 900 !important;
-      color: #000 !important;
+      color: #fff !important;
     }
     /* QR row matches App Preview: code left, SCAN AT COUNTER + hint right */
     #slip.patti .qrbox {
@@ -466,6 +479,41 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       padding-left: ${m.pattiPadX}px !important;
       padding-right: ${m.pattiPadX}px !important;
       box-sizing: border-box !important;
+    }
+    /* Same 4-col geometry as on-screen Vendor Bill preview. */
+    #slip.vendor .row {
+      grid-template-columns:
+        minmax(0, ${m.vLotPct}fr)
+        minmax(0, ${m.vFarmPct}fr)
+        minmax(0, ${m.vBagsPct}fr)
+        minmax(0, ${m.vAmtPct}fr);
+    }
+    #slip.vendor .row .farm {
+      min-width: 0;
+      max-width: 100%;
+      text-align: left;
+      font-weight: 700 !important;
+      font-size: ${m.rowFs}px !important;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #slip.vendor .row .bags {
+      min-width: 0;
+      max-width: 100%;
+      text-align: right;
+      font-weight: 700 !important;
+      font-size: ${m.rowFs}px !important;
+      white-space: nowrap;
+      overflow: hidden;
+    }
+    #slip.vendor .row .right {
+      white-space: nowrap;
+      overflow: hidden;
+    }
+    #slip.vendor .row .lot {
+      font-size: ${m.lotFs}px !important;
+      font-weight: 900 !important;
     }
     /* Label left + name right on one row (not stacked). */
     #slip.vendor .kv.vendor {

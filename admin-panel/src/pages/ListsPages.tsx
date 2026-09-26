@@ -103,7 +103,14 @@ export function PurchasesPage() {
               <button onClick={() => setDetail(null)} style={{ border: "2px solid #111", padding: "4px 10px", fontWeight: 700 }}>Close</button>
             </div>
             <div style={{ fontSize: 13, lineHeight: 1.5 }}>
-              <div><b>Invoice:</b> {detail.invoice_number || "—"}</div>
+              <div style={{ fontWeight: 900, fontSize: 16 }}>{detail.seller?.brand || detail.seller?.name || "LEMON MANDI"}</div>
+              {detail.seller?.legal_name ? <div>{detail.seller.legal_name}</div> : null}
+              {(detail.seller?.address_lines || []).map((line: string, i: number) => (
+                <div key={`seller-addr-${i}`}>{line}</div>
+              ))}
+              {detail.seller?.gstin ? <div>GSTIN: {detail.seller.gstin}</div> : null}
+              <div style={{ marginTop: 8, letterSpacing: 1.5, fontWeight: 800, fontSize: 11, color: "#666" }}>TAX INVOICE — BAG BALANCE</div>
+              <div style={{ marginTop: 8 }}><b>Invoice:</b> {detail.invoice_number || "—"}</div>
               <div><b>Status:</b> {detail.status}</div>
               <div style={{ marginTop: 8 }}><b>Billing To</b></div>
               <div>{detail.billing_to?.shop_name || "—"} {detail.billing_to?.username ? `(@${detail.billing_to.username})` : ""}</div>
@@ -113,7 +120,25 @@ export function PurchasesPage() {
               {detail.billing_to?.gst_number ? <div>GSTIN: {detail.billing_to.gst_number}</div> : null}
               <div style={{ marginTop: 8 }}><b>Service HSN:</b> {detail.service_hsn_code || "—"}</div>
               <div><b>Bags × Price:</b> {detail.calculation?.bags ?? detail.bags} × ₹{detail.calculation?.price_per_bag ?? detail.price_per_bag} = ₹{detail.calculation?.base_amount ?? detail.base_amount}</div>
-              <div><b>GST ({detail.calculation?.gst_percent ?? detail.gst_percent}%):</b> ₹{detail.calculation?.gst_amount ?? detail.gst_amount}</div>
+              <div><b>Taxable Amount:</b> ₹{detail.calculation?.base_amount ?? detail.base_amount}</div>
+              {(detail.calculation?.gst_supply_type || detail.gst_supply_type || "").toUpperCase() === "INTER" ||
+              (detail.calculation?.igst_amount ?? detail.igst_amount ?? 0) > 0 ? (
+                <div>
+                  <b>IGST ({detail.calculation?.igst_percent ?? detail.igst_percent ?? detail.calculation?.gst_percent ?? detail.gst_percent}%):</b>{" "}
+                  ₹{detail.calculation?.igst_amount ?? detail.igst_amount ?? detail.calculation?.gst_amount ?? detail.gst_amount}
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <b>CGST ({detail.calculation?.cgst_percent ?? detail.cgst_percent ?? (detail.calculation?.gst_percent ?? detail.gst_percent) / 2}%):</b>{" "}
+                    ₹{detail.calculation?.cgst_amount ?? detail.cgst_amount ?? 0}
+                  </div>
+                  <div>
+                    <b>SGST ({detail.calculation?.sgst_percent ?? detail.sgst_percent ?? (detail.calculation?.gst_percent ?? detail.gst_percent) / 2}%):</b>{" "}
+                    ₹{detail.calculation?.sgst_amount ?? detail.sgst_amount ?? 0}
+                  </div>
+                </>
+              )}
               <div><b>Total Amount:</b> ₹{detail.calculation?.total_amount ?? detail.total_amount}</div>
               <div style={{ marginTop: 8, color: "#666" }}>Purchase ID: {detail.id} · Shop: {detail.shop_id}</div>
             </div>
