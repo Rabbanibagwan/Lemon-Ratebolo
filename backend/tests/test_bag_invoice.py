@@ -188,9 +188,41 @@ def test_bag_invoice_from_real_purchase():
     assert data["billing_to"]["username"] == "merchant1"
     assert data["invoice_number"].startswith("INV-")
     assert "fake" not in data["line_description"].lower()
+    # Supplier identity — brand + legal entity (not tagline / not merchant address)
+    assert data["seller"]["brand"] == "LEMON MANDI"
+    assert data["seller"]["legal_name"] == "Rbolo Info Services Private Limited"
+    assert data["seller"]["gstin"] == "29AAMCR3486L1ZI"
+    assert "MUJAWAR MOHALLA" in " ".join(data["seller"]["address_lines"])
+    assert "586101" in " ".join(data["seller"]["address_lines"])
+    assert data["seller"].get("description") in (None, "")
+    assert "Prepaid bag balance platform" not in str(data["seller"])
+    assert data["billing_to"]["address"] != " ".join(data["seller"]["address_lines"])
+    # Karnataka buyer GSTIN → CGST + SGST
+    assert data["gst_supply_type"] == "INTRA"
+    assert data["cgst_percent"] == 9.0
+    assert data["sgst_percent"] == 9.0
+    assert data["cgst_amount"] == 22.5
+    assert data["sgst_amount"] == 22.5
+    assert data["igst_amount"] == 0.0
     # Persisted on purchase
     stored = next(p for p in db.bag_purchases.rows if p["id"] == purchase_id)
     assert stored.get("invoice_number") == data["invoice_number"]
+
+
+def test_bag_invoice_igst_for_other_state_buyer():
+    import billing as billing_mod
+
+    parts = billing_mod.split_bag_gst(
+        gst_percent=18.0,
+        gst_amount=1800.0,
+        buyer_gstin="27AAAAA0000A1Z5",
+        buyer_state="MH",
+    )
+    assert parts["gst_supply_type"] == "INTER"
+    assert parts["igst_percent"] == 18.0
+    assert parts["igst_amount"] == 1800.0
+    assert parts["cgst_amount"] == 0.0
+    assert parts["sgst_amount"] == 0.0
 
 
 def test_default_gst_is_eighteen():
@@ -198,3 +230,6 @@ def test_default_gst_is_eighteen():
 
     assert billing_mod._DEFAULT_GST == 18.0
     assert billing_mod._DEFAULT_SERVICE_HSN == "998399"
+    seller = billing_mod.bag_invoice_seller()
+    assert seller["gstin"] == "29AAMCR3486L1ZI"
+    assert seller["legal_name"] == "Rbolo Info Services Private Limited"

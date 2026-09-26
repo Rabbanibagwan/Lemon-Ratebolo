@@ -31,6 +31,124 @@ _DEFAULT_FREE = 1000
 _DEFAULT_GST = 18.0
 _DEFAULT_SERVICE_HSN = "998399"  # Other information technology services (configurable)
 
+# Lemon Mandi product / Rbolo Info Services Pvt Ltd — GST-registered supplier.
+_SUPPLIER_BRAND = "LEMON MANDI"
+_SUPPLIER_LEGAL_NAME = "Rbolo Info Services Private Limited"
+_SUPPLIER_ADDRESS_LINES = (
+    "MUJAWAR MOHALLA BABALESHWAR NAKA IBRAHIM ROZA VIJAYPUR,",
+    "BIJAPUR - 586101",
+)
+_SUPPLIER_GSTIN = "29AAMCR3486L1ZI"
+_SUPPLIER_STATE_CODE = "29"  # Karnataka
+
+# Common Indian state / UT codes for place-of-supply (buyer without GSTIN).
+_STATE_NAME_TO_CODE = {
+    "AN": "35", "ANDAMAN": "35", "ANDAMAN AND NICOBAR": "35", "ANDAMAN & NICOBAR": "35",
+    "AP": "37", "ANDHRA PRADESH": "37",
+    "AR": "12", "ARUNACHAL PRADESH": "12",
+    "AS": "18", "ASSAM": "18",
+    "BR": "10", "BIHAR": "10",
+    "CH": "04", "CHANDIGARH": "04",
+    "CT": "22", "CG": "22", "CHHATTISGARH": "22",
+    "DN": "26", "DADRA": "26", "DADRA AND NAGAR HAVELI": "26", "DNHDD": "26",
+    "DD": "26", "DAMAN": "26", "DAMAN AND DIU": "26",
+    "DL": "07", "DELHI": "07", "NCT OF DELHI": "07",
+    "GA": "30", "GOA": "30",
+    "GJ": "24", "GUJARAT": "24",
+    "HR": "06", "HARYANA": "06",
+    "HP": "02", "HIMACHAL PRADESH": "02",
+    "JK": "01", "JAMMU AND KASHMIR": "01", "JAMMU & KASHMIR": "01",
+    "JH": "20", "JHARKHAND": "20",
+    "KA": "29", "KARNATAKA": "29",
+    "KL": "32", "KERALA": "32",
+    "LA": "38", "LADAKH": "38",
+    "LD": "31", "LAKSHADWEEP": "31",
+    "MP": "23", "MADHYA PRADESH": "23",
+    "MH": "27", "MAHARASHTRA": "27",
+    "MN": "14", "MANIPUR": "14",
+    "ML": "17", "MEGHALAYA": "17",
+    "MZ": "15", "MIZORAM": "15",
+    "NL": "13", "NAGALAND": "13",
+    "OR": "21", "OD": "21", "ODISHA": "21", "ORISSA": "21",
+    "PY": "34", "PUDUCHERRY": "34", "PONDICHERRY": "34",
+    "PB": "03", "PUNJAB": "03",
+    "RJ": "08", "RAJASTHAN": "08",
+    "SK": "11", "SIKKIM": "11",
+    "TN": "33", "TAMIL NADU": "33", "TAMILNADU": "33",
+    "TS": "36", "TG": "36", "TELANGANA": "36",
+    "TR": "16", "TRIPURA": "16",
+    "UP": "09", "UTTAR PRADESH": "09",
+    "UT": "05", "UK": "05", "UTTARAKHAND": "05", "UTTARANCHAL": "05",
+    "WB": "19", "WEST BENGAL": "19",
+}
+
+
+def bag_invoice_seller() -> dict:
+    """Canonical supplier block for Bag Balance tax invoices (brand ≠ legal entity)."""
+    return {
+        "brand": _SUPPLIER_BRAND,
+        "name": _SUPPLIER_BRAND,
+        "legal_name": _SUPPLIER_LEGAL_NAME,
+        "address_lines": list(_SUPPLIER_ADDRESS_LINES),
+        "gstin": _SUPPLIER_GSTIN,
+    }
+
+
+def _buyer_state_code(buyer_gstin: str = "", buyer_state: str = "") -> str:
+    gstin = (buyer_gstin or "").strip().upper()
+    if len(gstin) >= 2 and gstin[:2].isdigit():
+        return gstin[:2]
+    key = (buyer_state or "").strip().upper()
+    if not key:
+        return _SUPPLIER_STATE_CODE
+    if key in _STATE_NAME_TO_CODE:
+        return _STATE_NAME_TO_CODE[key]
+    # Tolerate "Vijayapura(KA)" / "Karnataka, India" style values.
+    for token, code in _STATE_NAME_TO_CODE.items():
+        if len(token) > 2 and token in key:
+            return code
+    if len(key) == 2 and key in _STATE_NAME_TO_CODE:
+        return _STATE_NAME_TO_CODE[key]
+    return _SUPPLIER_STATE_CODE
+
+
+def split_bag_gst(
+    *,
+    gst_percent: float,
+    gst_amount: float,
+    buyer_gstin: str = "",
+    buyer_state: str = "",
+) -> dict:
+    """Split total GST into CGST+SGST (intra-state) or IGST (inter-state)."""
+    pct = float(gst_percent or 0)
+    amt = _round2(gst_amount)
+    buyer_code = _buyer_state_code(buyer_gstin, buyer_state)
+    intra = buyer_code == _SUPPLIER_STATE_CODE
+    if intra:
+        half_pct = _round2(pct / 2.0)
+        cgst = _round2(amt / 2.0)
+        sgst = _round2(amt - cgst)
+        return {
+            "gst_supply_type": "INTRA",
+            "place_of_supply_state_code": buyer_code,
+            "cgst_percent": half_pct,
+            "cgst_amount": cgst,
+            "sgst_percent": half_pct,
+            "sgst_amount": sgst,
+            "igst_percent": 0.0,
+            "igst_amount": 0.0,
+        }
+    return {
+        "gst_supply_type": "INTER",
+        "place_of_supply_state_code": buyer_code,
+        "cgst_percent": 0.0,
+        "cgst_amount": 0.0,
+        "sgst_percent": 0.0,
+        "sgst_amount": 0.0,
+        "igst_percent": pct,
+        "igst_amount": amt,
+    }
+
 
 class PlatformBillingSettingsIn(BaseModel):
     price_per_bag: float = Field(ge=0, le=1000)
@@ -62,6 +180,8 @@ class WalletOut(BaseModel):
     total_available: int
     price_per_bag: float
     low_balance: bool
+    # Admin-allocated free bags not yet claimed by the merchant (not in usable balance).
+    free_available_to_claim: int = 0
 
 
 class PurchaseCreateIn(BaseModel):
@@ -97,6 +217,14 @@ class BagInvoiceOut(BaseModel):
     base_amount: float
     gst_percent: float
     gst_amount: float
+    cgst_percent: float = 0.0
+    cgst_amount: float = 0.0
+    sgst_percent: float = 0.0
+    sgst_amount: float = 0.0
+    igst_percent: float = 0.0
+    igst_amount: float = 0.0
+    gst_supply_type: str = "INTRA"
+    place_of_supply_state_code: str = _SUPPLIER_STATE_CODE
     total_amount: float
     line_description: str
     payment_ref: Optional[str] = None
@@ -115,6 +243,9 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
         await db.bag_usage.create_index([("shop_id", 1), ("at", -1)])
         await db.bag_usage.create_index([("shop_id", 1), ("patti_id", 1), ("status", 1)])
         await db.bag_usage.create_index("id", unique=True)
+        from free_bags import ensure_free_bag_indexes
+
+        await ensure_free_bag_indexes(db)
 
     def _admin_key() -> str:
         return (os.environ.get("ADMIN_API_KEY") or os.environ.get("BILLING_ADMIN_KEY") or "lemon-admin-dev").strip()
@@ -204,16 +335,19 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
             "gst_number": shop.get("gst_number") or "",
             "pan_number": shop.get("pan_number") or "",
         }
-        seller = {
-            "name": "Lemon Mandi",
-            "description": "Prepaid bag balance platform",
-        }
+        seller = bag_invoice_seller()
         bags = int(purchase.get("bags") or 0)
         price = float(purchase.get("price_per_bag") or 0)
         base = float(purchase.get("base_amount") if purchase.get("base_amount") is not None else _round2(bags * price))
         gst_pct = float(purchase.get("gst_percent") if purchase.get("gst_percent") is not None else float(settings.get("gst_percent") or _DEFAULT_GST))
         gst_amt = float(purchase.get("gst_amount") if purchase.get("gst_amount") is not None else _round2(base * gst_pct / 100.0))
         total = float(purchase.get("total_amount") if purchase.get("total_amount") is not None else _round2(base + gst_amt))
+        gst_parts = split_bag_gst(
+            gst_percent=gst_pct,
+            gst_amount=gst_amt,
+            buyer_gstin=str(billing_to.get("gst_number") or ""),
+            buyer_state=str(shop.get("state") or ""),
+        )
         hsn = (settings.get("service_hsn_code") or _DEFAULT_SERVICE_HSN).strip() or _DEFAULT_SERVICE_HSN
         inv_date = purchase.get("paid_at") or purchase.get("created_at") or _utc_now()
         return {
@@ -229,6 +363,7 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
             "base_amount": base,
             "gst_percent": gst_pct,
             "gst_amount": gst_amt,
+            **gst_parts,
             "total_amount": total,
             "line_description": f"Prepaid bag balance — {bags} bags",
             "payment_ref": purchase.get("payment_ref"),
@@ -757,7 +892,18 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
     async def get_wallet(user=Depends(owner_only)):
         settings = await get_platform_settings()
         w = await ensure_wallet(user["shop_id"])
-        return WalletOut(**(await _wallet_view(w, float(settings.get("price_per_bag") or 0))))
+        view = await _wallet_view(w, float(settings.get("price_per_bag") or 0))
+        try:
+            # PENDING = new status; AVAILABLE kept for legacy allocations.
+            unclaimed_q = {"shop_id": user["shop_id"], "status": {"$in": ["PENDING", "AVAILABLE"]}}
+            bags_to_claim = 0
+            cur = db.bag_free_allocations.find(unclaimed_q, {"_id": 0, "bags": 1})
+            async for row in cur:
+                bags_to_claim += int(row.get("bags") or 0)
+            view["free_available_to_claim"] = bags_to_claim
+        except Exception:
+            view["free_available_to_claim"] = 0
+        return WalletOut(**view)
 
     @api.get("/billing/price")
     async def get_current_price(user=Depends(current_user)):
@@ -882,3 +1028,20 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
             {"shop_id": user["shop_id"]}, {"_id": 0},
         ).sort("at", -1).limit(limit)
         return [d async for d in cur]
+
+    async def _get_wallet_free_used(shop_id: str) -> int:
+        settings = await get_platform_settings()
+        w = await ensure_wallet(shop_id)
+        view = await _wallet_view(w, float(settings.get("price_per_bag") or 0), sync_counters=False)
+        return int(view.get("free_used") or 0)
+
+    from free_bags import register_free_bag_routes
+
+    register_free_bag_routes(
+        api,
+        db=db,
+        admin_auth=admin_auth,
+        owner_only=owner_only,
+        ensure_wallet=ensure_wallet,
+        get_wallet_free_used=_get_wallet_free_used,
+    )

@@ -9,13 +9,22 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useFocusEffect, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
-import { api, apiErrorMessage, BagPurchase, BagUsageRow, BagWallet } from "@/src/api";
+import {
+  api,
+  apiErrorMessage,
+  BagPurchase,
+  BagUsageRow,
+  BagWallet,
+  FreeBagAllocation,
+  MerchantNotification,
+} from "@/src/api";
 import { useAuth } from "@/src/context/AuthContext";
 import { Button, Input } from "@/src/components/ui";
 import { colors, font, money, spacing } from "@/src/theme";
+import { routeParam } from "@/src/utils/route-params";
 
 function fmtDate(iso?: string | null): string {
   if (!iso) return "—";
@@ -30,18 +39,44 @@ function fmtDate(iso?: string | null): string {
   }
 }
 
+function fmtDateDMY(iso?: string | null): string {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "—";
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    return `${dd}/${mm}/${d.getFullYear()}`;
+  } catch {
+    return "—";
+  }
+}
+
+type BillingTab = "buy" | "purchases" | "usage" | "free";
+
 export default function BillingScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ tab?: string; allocationId?: string }>();
+  const initialTab = (routeParam(params.tab) || "").toLowerCase();
+  const highlightAllocationId = routeParam(params.allocationId);
   const { session } = useAuth();
   const isOwner = session?.role === "owner";
 
   const [wallet, setWallet] = useState<BagWallet | null>(null);
   const [purchases, setPurchases] = useState<BagPurchase[]>([]);
   const [usage, setUsage] = useState<BagUsageRow[]>([]);
+  const [freeAllocs, setFreeAllocs] = useState<FreeBagAllocation[]>([]);
+  const [notifications, setNotifications] = useState<MerchantNotification[]>([]);
   const [loading, setLoading] = useState(false);
   const [qty, setQty] = useState("1000");
   const [buying, setBuying] = useState(false);
-  const [tab, setTab] = useState<"buy" | "purchases" | "usage">("buy");
+  const [claimingId, setClaimingId] = useState<string | null>(null);
+  const [confirmClaim, setConfirmClaim] = useState<FreeBagAllocation | null>(null);
+  const [tab, setTab] = useState<BillingTab>(
+    initialTab === "free" || initialTab === "history" || initialTab === "usage" || initialTab === "purchase"
+      ? (initialTab === "history" ? "purchases" : initialTab === "purchase" ? "buy" : (initialTab as BillingTab))
+      : "buy",
+  );
 
   const load = useCallback(async () => {
     if (!isOwner) return;
@@ -55,6 +90,17 @@ export default function BillingScreen() {
       setWallet(w);
       setPurchases(p);
       setUsage(u);
+      // Free-bag APIs may be unavailable until backend deploy — keep PURCHASE/HISTORY/USAGE working.
+      try {
+        setFreeAllocs(await api.get<FreeBagAllocation[]>("/billing/free-allocations"));
+      } catch {
+        setFreeAllocs([]);
+      }
+      try {
+        setNotifications(await api.get<MerchantNotification[]>("/billing/notifications?limit=20"));
+      } catch {
+        setNotifications([]);
+      }
     } catch (e: any) {
       if (e?.status === 403) {
         Alert.alert("Merchant only", "Bag billing is for Merchant accounts.", [
@@ -74,9 +120,44 @@ export default function BillingScreen() {
         ]);
         return;
       }
+      const t = (routeParam(params.tab) || "").toLowerCase();
+      if (t === "free") setTab("free");
       load();
-    }, [isOwner, load, router]),
+    }, [isOwner, load, router, params.tab]),
   );
+
+  const openClaimConfirm = (alloc: FreeBagAllocation) => {
+    if ((alloc.status !== "PENDING" && alloc.status !== "AVAILABLE") || claimingId) return;
+    setConfirmClaim(alloc);
+  };
+
+  const performClaim = async (alloc: FreeBagAllocation) => {
+    try {
+      setClaimingId(alloc.id);
+      setConfirmClaim(null);
+      const claimed = await api.post<FreeBagAllocation>(
+        `/billing/free-allocations/${alloc.id}/claim`,
+        {},
+      );
+      Alert.alert(
+        "Claimed",
+        `${claimed.bags.toLocaleString()} free bags have been added to your Bag Balance.`,
+      );
+      const related = notifications.find((n) => n.allocation_id === alloc.id && !n.read);
+      if (related) {
+        try {
+          await api.post(`/billing/notifications/${related.id}/read`, {});
+        } catch {
+          /* ignore */
+        }
+      }
+      await load();
+    } catch (e) {
+      Alert.alert("Claim failed", apiErrorMessage(e, "Could not claim free bags"));
+    } finally {
+      setClaimingId(null);
+    }
+  };
 
   const bagsToBuy = useMemo(() => {
     const n = Math.floor(Number(qty));
@@ -172,16 +253,34 @@ export default function BillingScreen() {
           </View>
         ) : null}
 
+        {(wallet?.free_available_to_claim || 0) > 0 ? (
+          <Pressable
+            style={styles.freeBanner}
+            onPress={() => setTab("free")}
+            testID="billing-free-claim-banner"
+          >
+            <Text style={styles.freeBannerTitle}>
+              🎁 {(wallet?.free_available_to_claim || 0).toLocaleString()} free bags ready to claim
+            </Text>
+            <Text style={styles.freeBannerSub}>Open FREE tab · balance increases only after CLAIM NOW</Text>
+          </Pressable>
+        ) : null}
+
         <View style={styles.tabs}>
-          {(["buy", "purchases", "usage"] as const).map((t) => (
+          {([
+            ["buy", "PURCHASE"],
+            ["purchases", "HISTORY"],
+            ["usage", "USAGE"],
+            ["free", "FREE"],
+          ] as const).map(([key, label]) => (
             <Pressable
-              key={t}
-              onPress={() => setTab(t)}
-              style={[styles.tab, tab === t && styles.tabOn]}
-              testID={`billing-tab-${t}`}
+              key={key}
+              onPress={() => setTab(key)}
+              style={[styles.tab, tab === key && styles.tabOn]}
+              testID={`billing-tab-${key === "buy" ? "buy" : key}`}
             >
-              <Text style={[styles.tabText, tab === t && styles.tabTextOn]}>
-                {t === "buy" ? "PURCHASE" : t === "purchases" ? "HISTORY" : "USAGE"}
+              <Text style={[styles.tabText, tab === key && styles.tabTextOn]} numberOfLines={1}>
+                {label}
               </Text>
             </Pressable>
           ))}
@@ -290,6 +389,123 @@ export default function BillingScreen() {
             )}
           </View>
         ) : null}
+
+        {tab === "free" ? (
+          <View style={styles.card} testID="billing-free-tab">
+            <Text style={styles.cardLabel}>FREE BAGS</Text>
+            <Text style={styles.hint}>
+              Admin allocations appear here. Usable balance increases only after you tap CLAIM NOW.
+            </Text>
+            {freeAllocs.length === 0 ? (
+              <Text style={styles.hint} testID="billing-free-empty">No free bag allocations yet.</Text>
+            ) : (
+              freeAllocs.map((a) => {
+                const highlight = highlightAllocationId === a.id;
+                const pending = a.status === "PENDING" || a.status === "AVAILABLE";
+                return (
+                  <View
+                    key={a.id}
+                    style={[styles.freeCard, highlight && styles.freeCardHighlight]}
+                    testID={`free-alloc-${a.id}`}
+                  >
+                    <Text style={styles.freePeriod}>{a.period_label}</Text>
+                    <Text style={styles.freeBags}>Free Bags Received: {a.bags.toLocaleString()}</Text>
+                    {pending ? (
+                      <Text style={styles.freeBags} testID={`free-claimable-${a.id}`}>
+                        Available to Claim: {a.bags.toLocaleString()}
+                      </Text>
+                    ) : a.status === "CLAIMED" ? (
+                      <>
+                        <Text style={styles.histSub}>Claimed: {a.bags.toLocaleString()}</Text>
+                        <Text style={styles.histSub}>Available to Claim: 0</Text>
+                      </>
+                    ) : null}
+                    <Text style={styles.freeStatus} testID={`free-status-${a.id}`}>
+                      Status: {pending ? "PENDING" : a.status}
+                    </Text>
+                    {a.status === "CLAIMED" ? (
+                      <>
+                        <Text style={styles.histSub}>Claim date: {fmtDateDMY(a.claimed_at)}</Text>
+                        {a.claim_ref ? <Text style={styles.histSub}>Ref: {a.claim_ref}</Text> : null}
+                      </>
+                    ) : null}
+                    {a.reason ? <Text style={styles.histSub}>Note: {a.reason}</Text> : null}
+                    {pending ? (
+                      <Button
+                        label={claimingId === a.id ? "CLAIMING…" : "CLAIM NOW"}
+                        onPress={() => openClaimConfirm(a)}
+                        loading={claimingId === a.id}
+                        disabled={!!claimingId}
+                        testID={`free-claim-${a.id}`}
+                        style={{ marginTop: spacing.sm }}
+                      />
+                    ) : null}
+                  </View>
+                );
+              })
+            )}
+
+            {notifications.filter((n) => n.kind === "FREE_BAGS" && !n.read).length > 0 ? (
+              <>
+                <Text style={[styles.cardLabel, { marginTop: spacing.md }]}>NOTIFICATIONS</Text>
+                {notifications
+                  .filter((n) => n.kind === "FREE_BAGS" && !n.read)
+                  .map((n) => (
+                    <Pressable
+                      key={n.id}
+                      style={styles.notifRow}
+                      testID={`free-notif-${n.id}`}
+                      onPress={async () => {
+                        try {
+                          await api.post(`/billing/notifications/${n.id}/read`, {});
+                        } catch {
+                          /* ignore */
+                        }
+                        if (n.allocation_id) {
+                          const target = freeAllocs.find((a) => a.id === n.allocation_id);
+                          if (target && (target.status === "PENDING" || target.status === "AVAILABLE")) {
+                            openClaimConfirm(target);
+                          }
+                        }
+                        await load();
+                      }}
+                    >
+                      <Text style={styles.histTitle}>{n.title}</Text>
+                      <Text style={styles.histSub}>{n.body}</Text>
+                      <Text style={styles.claimLink}>CLAIM FREE BAGS →</Text>
+                    </Pressable>
+                  ))}
+              </>
+            ) : null}
+
+            {confirmClaim ? (
+              <View style={styles.confirmBox} testID="free-claim-confirm">
+                <Text style={styles.freePeriod}>Claim {confirmClaim.bags.toLocaleString()} free bags?</Text>
+                <Text style={styles.hint}>{confirmClaim.period_label}</Text>
+                <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm }}>
+                  <View style={{ flex: 1 }}>
+                    <Button
+                      label="CANCEL"
+                      variant="secondary"
+                      onPress={() => setConfirmClaim(null)}
+                      disabled={!!claimingId}
+                      testID="free-claim-cancel"
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Button
+                      label={claimingId ? "CLAIMING…" : "CLAIM NOW"}
+                      onPress={() => performClaim(confirmClaim)}
+                      loading={!!claimingId}
+                      disabled={!!claimingId}
+                      testID="free-claim-confirm-btn"
+                    />
+                  </View>
+                </View>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
@@ -337,17 +553,64 @@ const styles = StyleSheet.create({
   stat: { flex: 1, gap: 2 },
   statLabel: { fontSize: 10, letterSpacing: 1, color: colors.muted, fontFamily: font.display, fontWeight: "800" },
   statValue: { fontSize: 14, fontWeight: "800", fontFamily: font.mono, color: colors.onSurface },
-  tabs: { flexDirection: "row", gap: spacing.sm, marginBottom: spacing.md },
+  tabs: { flexDirection: "row", gap: 6, marginBottom: spacing.md },
   tab: {
     flex: 1,
     borderWidth: 2,
     borderColor: colors.borderStrong,
     paddingVertical: 10,
+    paddingHorizontal: 2,
     alignItems: "center",
+    minWidth: 0,
   },
   tabOn: { backgroundColor: colors.surfaceInverse, borderColor: colors.surfaceInverse },
-  tabText: { fontSize: 11, fontWeight: "800", fontFamily: font.display, letterSpacing: 1, color: colors.onSurface },
+  tabText: { fontSize: 10, fontWeight: "800", fontFamily: font.display, letterSpacing: 0.5, color: colors.onSurface },
   tabTextOn: { color: colors.onSurfaceInverse },
+  freeBanner: {
+    borderWidth: 2,
+    borderColor: colors.brandPrimary,
+    backgroundColor: colors.brandSecondary,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    gap: 4,
+  },
+  freeBannerTitle: { fontSize: 14, fontWeight: "900", fontFamily: font.display, color: colors.onBrandSecondary },
+  freeBannerSub: { fontSize: 12, fontFamily: font.display, color: colors.onBrandSecondary },
+  freeCard: {
+    borderWidth: 2,
+    borderColor: colors.borderStrong,
+    padding: spacing.md,
+    marginTop: spacing.sm,
+    gap: 4,
+    backgroundColor: colors.surfaceSecondary,
+  },
+  freeCardHighlight: { borderColor: colors.brandPrimary, backgroundColor: colors.brandSecondary },
+  freePeriod: { fontSize: 16, fontWeight: "900", fontFamily: font.display, color: colors.onSurface },
+  freeBags: { fontSize: 22, fontWeight: "900", fontFamily: font.mono, color: colors.brandPrimary },
+  freeStatus: { fontSize: 12, fontWeight: "800", fontFamily: font.display, color: colors.onSurface, marginTop: 2 },
+  notifRow: {
+    borderWidth: 2,
+    borderColor: colors.borderStrong,
+    padding: spacing.md,
+    marginTop: spacing.sm,
+    gap: 4,
+  },
+  claimLink: {
+    marginTop: 6,
+    fontSize: 12,
+    fontWeight: "900",
+    letterSpacing: 1,
+    fontFamily: font.display,
+    color: colors.brandPrimary,
+  },
+  confirmBox: {
+    borderWidth: 2,
+    borderColor: colors.brandPrimary,
+    backgroundColor: colors.surface,
+    padding: spacing.md,
+    marginTop: spacing.md,
+    gap: 4,
+  },
   hint: { fontSize: 13, color: colors.muted, fontFamily: font.display, marginBottom: 4 },
   quote: { fontSize: 16, fontWeight: "800", fontFamily: font.mono, marginVertical: spacing.sm },
   histRow: {

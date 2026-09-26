@@ -176,8 +176,31 @@ class ThermalBluetoothModule : Module() {
       if (socket?.isConnected != true) throw Exception("Printer disconnected.")
       val bytes = Base64.decode(payload, Base64.DEFAULT)
       try {
-        out.write(bytes)
-        out.flush()
+        // Chunk RFCOMM writes so small printer buffers do not drop the cut/Bank Details tail.
+        // Order preserved: all content chunks, then final chunk (includes feed+CUT), then settle.
+        val chunkSize = 512
+        var offset = 0
+        while (offset < bytes.size) {
+          val end = minOf(offset + chunkSize, bytes.size)
+          out.write(bytes, offset, end - offset)
+          out.flush()
+          offset = end
+          if (offset < bytes.size) {
+            try {
+              Thread.sleep(25)
+            } catch (_: InterruptedException) {
+              Thread.currentThread().interrupt()
+            }
+          }
+        }
+        // Brief settle so the printer drains its buffer (Bank Details + cut) before next job.
+        // Scales mildly with payload size — not an arbitrary multi-second delay.
+        val settleMs = (80 + bytes.size / 40).coerceIn(80, 400)
+        try {
+          Thread.sleep(settleMs.toLong())
+        } catch (_: InterruptedException) {
+          Thread.currentThread().interrupt()
+        }
       } catch (_: Exception) {
         closeSocket()
         throw Exception("Printing failed. Check the printer connection and try again.")

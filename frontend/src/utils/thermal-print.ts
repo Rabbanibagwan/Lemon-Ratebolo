@@ -29,7 +29,8 @@ export function thermalMetrics(paperMm: number) {
   /** Shared side inset (~1.5–2.5 mm) for Farmer Patti + Vendor Bill (not edge-to-edge). */
   const pattiPadX = w <= 58 ? 5 : w <= 80 ? 8 : 10;
   /** QR display px — slightly larger, still under (widthPx - 2*pattiPadX). */
-  const qrPx = w <= 58 ? 108 : w <= 80 ? 140 : 168;
+  // Compact QR display sizes so HTML thermal slips stay near ~6" with content.
+  const qrPx = w <= 58 ? 96 : w <= 80 ? 112 : 128;
   return {
     w,
     widthPx,
@@ -54,6 +55,11 @@ export function thermalMetrics(paperMm: number) {
     lotPct: w <= 58 ? 20 : 18,
     midPct: w <= 58 ? 48 : 50,
     rightPct: w <= 58 ? 32 : 32,
+    /** Vendor Bill 4-col: LOT | FARMER | BAGS×RATE | AMOUNT */
+    vLotPct: w <= 58 ? 14 : 14,
+    vFarmPct: w <= 58 ? 24 : 26,
+    vBagsPct: w <= 58 ? 34 : 34,
+    vAmtPct: w <= 58 ? 28 : 26,
     farmerFs: w <= 58 ? 20 : w <= 80 ? 24 : 28,
     /** Vendor name — one step under farmerFs, still bold/readable on the same row. */
     vendorFs: w <= 58 ? 16 : w <= 80 ? 18 : 22,
@@ -295,26 +301,28 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       word-break: break-word;
     }
     .netbox {
-      border: 3px solid #000 !important;
-      padding: 8px 6px; margin: 6px 0;
+      border: none !important;
+      padding: 8px 0; margin: 6px 0;
       display: flex; justify-content: space-between; align-items: center; gap: 6px;
-      background: #000 !important;
+      background: #fff !important;
       width: 100%;
       max-width: 100%;
       -webkit-print-color-adjust: exact !important;
       print-color-adjust: exact !important;
     }
-    /* Must beat #slip * color:#000 or TOTAL text vanishes on the black fill. */
-    #slip .netbox, #slip .netbox * { color: #fff !important; -webkit-text-stroke: 0 !important; }
+    /* White background + bold black text (no inverse / dark fill). */
+    #slip .netbox, #slip .netbox * { color: #000 !important; -webkit-text-stroke: 0 !important; }
     .netbox .bold {
       font-size: ${m.emphFs}px !important;
       font-weight: 900 !important;
       letter-spacing: 1px;
       text-transform: uppercase;
+      color: #000 !important;
     }
     .netbox .huge {
       font-size: ${m.hugeFs}px !important;
       font-weight: 900 !important;
+      color: #000 !important;
     }
     /* Farmer Patti only: Times Roman + clearer Net Payable spacing (size unchanged). */
     #slip.patti,
@@ -328,56 +336,84 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       box-sizing: border-box !important;
       border: 2px solid #000 !important;
     }
-    /* Preview header: shop + PATTI/BILL left, NO. box right */
-    #slip.patti .patti-head {
+    /* Preview header: shop + title left, NO./BILL box right — shared by Patti + Vendor */
+    #slip.patti .patti-head,
+    #slip.vendor .patti-head {
       display: flex;
       justify-content: space-between;
       align-items: flex-start;
       gap: 6px;
       width: 100%;
     }
-    #slip.patti .patti-head-main {
+    #slip.patti .patti-head-main,
+    #slip.vendor .patti-head-main {
       flex: 1;
       min-width: 0;
       text-align: left;
     }
-    #slip.patti .patti-head-main .shop {
+    /* Merchant shop / address / mobile centered; title+NO. / BILL unchanged */
+    #slip.patti .merchant-head,
+    #slip.vendor .merchant-head {
+      width: 100%;
+      text-align: center !important;
+      margin: 0 0 4px 0;
+    }
+    #slip.patti .merchant-head .shop,
+    #slip.patti .merchant-head .addr,
+    #slip.vendor .merchant-head .shop,
+    #slip.vendor .merchant-head .addr {
+      text-align: center !important;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    #slip.patti .patti-head-main .shop,
+    #slip.vendor .patti-head-main .shop {
       text-align: left !important;
       margin: 0 0 2px 0;
     }
-    #slip.patti .patti-head-main .addr {
+    #slip.patti .patti-head-main .addr,
+    #slip.vendor .patti-head-main .addr {
       text-align: left !important;
     }
-    #slip.patti .kind {
+    #slip.patti .merchant-head + .patti-head .patti-head-main .shop,
+    #slip.patti .merchant-head + .patti-head .patti-head-main .addr {
+      text-align: left !important;
+    }
+    #slip.patti .kind,
+    #slip.vendor .kind {
       font-size: ${Math.max(8, m.bodyFs - 2)}px !important;
       letter-spacing: 1.5px;
       font-weight: 800 !important;
       margin-top: 2px;
       text-transform: uppercase !important;
     }
-    #slip.patti .numBox {
+    #slip.patti .numBox,
+    #slip.vendor .numBox {
       flex: 0 0 auto;
       border: 2px solid #000 !important;
       padding: 3px 8px;
       text-align: right;
       min-width: ${m.w <= 58 ? 36 : 44}px;
     }
-    #slip.patti .numLabel {
+    #slip.patti .numLabel,
+    #slip.vendor .numLabel {
       font-size: ${Math.max(7, m.bodyFs - 3)}px !important;
       letter-spacing: 1px;
       font-weight: 800 !important;
       line-height: 1.1;
     }
-    #slip.patti .num {
+    #slip.patti .num,
+    #slip.vendor .num {
       font-size: ${m.bigFs}px !important;
       font-weight: 900 !important;
       line-height: 1.1;
     }
+    /* Farmer Patti: white bg + bold black NET PAYABLE (matches physical thermal) */
     #slip.patti .netbox {
-      /* White fill + black bold text; same border/size/padding as before */
       background: #fff !important;
-      padding: 10px 10px;
+      padding: 10px 0;
       gap: 10px;
+      border: none !important;
     }
     #slip.patti .netbox,
     #slip.patti .netbox * {
@@ -463,9 +499,47 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       font-family: "Times New Roman", Times, "Liberation Serif", Georgia, serif !important;
     }
     #slip.vendor {
-      padding-left: ${m.pattiPadX}px !important;
-      padding-right: ${m.pattiPadX}px !important;
+      /* Minimal side inset — content uses nearly full selected paper width */
+      padding-left: ${Math.max(2, Math.round(m.pattiPadX * 0.4))}px !important;
+      padding-right: ${Math.max(2, Math.round(m.pattiPadX * 0.4))}px !important;
       box-sizing: border-box !important;
+      width: 100% !important;
+      max-width: 100% !important;
+    }
+    /* Same 4-col geometry as on-screen Vendor Bill preview. */
+    #slip.vendor .row {
+      grid-template-columns:
+        minmax(0, ${m.vLotPct}fr)
+        minmax(0, ${m.vFarmPct}fr)
+        minmax(0, ${m.vBagsPct}fr)
+        minmax(0, ${m.vAmtPct}fr);
+    }
+    #slip.vendor .row .farm {
+      min-width: 0;
+      max-width: 100%;
+      text-align: left;
+      font-weight: 700 !important;
+      font-size: ${m.rowFs}px !important;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #slip.vendor .row .bags {
+      min-width: 0;
+      max-width: 100%;
+      text-align: right;
+      font-weight: 700 !important;
+      font-size: ${m.rowFs}px !important;
+      white-space: nowrap;
+      overflow: hidden;
+    }
+    #slip.vendor .row .right {
+      white-space: nowrap;
+      overflow: hidden;
+    }
+    #slip.vendor .row .lot {
+      font-size: ${m.lotFs}px !important;
+      font-weight: 900 !important;
     }
     /* Label left + name right on one row (not stacked). */
     #slip.vendor .kv.vendor {
@@ -487,12 +561,15 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       word-break: break-word;
     }
     #slip.vendor .netbox {
-      padding: 10px 10px;
+      padding: 10px 0;
       gap: 12px;
+      background: #fff !important;
+      border: none !important;
     }
     #slip.vendor .netbox .bold,
     #slip.vendor .netbox .huge {
-      color: #fff !important;
+      color: #000 !important;
+      font-weight: 900 !important;
     }
     .foot {
       font-size: ${Math.max(8, m.bodyFs - 1)}px; font-weight: 700 !important;
@@ -516,6 +593,8 @@ export function estimateThermalHeightMm(html: string, paperMm: number): number {
   const drvTr = (html.match(/class="drv-tr"/g) || []).length;
   const tableRows = rows > 0 || drvTr > 0 ? 0 : (html.match(/<tr[\s>]/gi) || []).length;
   const hasQr = /class="qr"/i.test(html);
+  // bankRow also has class=kv (already counted); use bankRows only for extra cutter margin.
+  const bankRows = (html.match(/class="[^"]*\bbankRow\b/g) || []).length;
   const lineMm = (m.rowFs + 3) * pxToMm;
   const compactRowMm = Math.max(2.4, (m.rowFs + 1) * pxToMm);
   const bigMm = (m.bigFs + 3) * pxToMm;
@@ -532,7 +611,8 @@ export function estimateThermalHeightMm(html: string, paperMm: number): number {
     hrs * 1.1 +
     nets * (m.hugeFs + 18) * pxToMm +
     (hasQr ? (m.qrPx + 14) * pxToMm : 0) +
-    10; // safety buffer: Android WebView line-height rounding + tear margin
+    // Content-driven: more Bank Details → taller page (kv count) + tear margin.
+    (bankRows > 0 ? 16 + bankRows * 0.5 : 10);
   return Math.max(28, Math.ceil(contentMm));
 }
 
