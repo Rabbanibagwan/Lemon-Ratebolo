@@ -29,7 +29,8 @@ export function thermalMetrics(paperMm: number) {
   /** Shared side inset (~1.5–2.5 mm) for Farmer Patti + Vendor Bill (not edge-to-edge). */
   const pattiPadX = w <= 58 ? 5 : w <= 80 ? 8 : 10;
   /** QR display px — slightly larger, still under (widthPx - 2*pattiPadX). */
-  const qrPx = w <= 58 ? 108 : w <= 80 ? 140 : 168;
+  // Compact QR display sizes so HTML thermal slips stay near ~6" with content.
+  const qrPx = w <= 58 ? 96 : w <= 80 ? 112 : 128;
   return {
     w,
     widthPx,
@@ -350,6 +351,18 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       min-width: 0;
       text-align: left;
     }
+    /* Farmer Patti: merchant shop / address / mobile centered; title+NO. unchanged */
+    #slip.patti .merchant-head {
+      width: 100%;
+      text-align: center !important;
+      margin: 0 0 4px 0;
+    }
+    #slip.patti .merchant-head .shop,
+    #slip.patti .merchant-head .addr {
+      text-align: center !important;
+      margin-left: auto;
+      margin-right: auto;
+    }
     #slip.patti .patti-head-main .shop,
     #slip.vendor .patti-head-main .shop {
       text-align: left !important;
@@ -357,6 +370,10 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
     }
     #slip.patti .patti-head-main .addr,
     #slip.vendor .patti-head-main .addr {
+      text-align: left !important;
+    }
+    #slip.patti .merchant-head + .patti-head .patti-head-main .shop,
+    #slip.patti .merchant-head + .patti-head .patti-head-main .addr {
       text-align: left !important;
     }
     #slip.patti .kind,

@@ -349,19 +349,21 @@ export default function PattiDetail() {
 
         {/* Patti body — NO vendor names */}
         <View style={styles.pattiCard} testID="patti-body">
+          <View style={styles.merchantHead}>
+            <Text style={styles.shopName} numberOfLines={2}>{(profile?.shop_name || session?.shop_name || "").toUpperCase()}</Text>
+            {(() => {
+              const addr = [profile?.address, profile?.village, profile?.taluk, profile?.district, profile?.state]
+                .filter(Boolean).join(", ");
+              return addr ? (
+                <Text style={styles.shopMeta} numberOfLines={3}>{addr}</Text>
+              ) : null;
+            })()}
+            {profile?.mobile ? (
+              <Text style={styles.shopMeta} numberOfLines={1}>Mobile: {profile.mobile}</Text>
+            ) : null}
+          </View>
           <View style={styles.pattiHeader}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.shopName} numberOfLines={2}>{(profile?.shop_name || session?.shop_name || "").toUpperCase()}</Text>
-              {(() => {
-                const addr = [profile?.address, profile?.village, profile?.taluk, profile?.district, profile?.state]
-                  .filter(Boolean).join(", ");
-                return addr ? (
-                  <Text style={styles.shopMeta} numberOfLines={3}>{addr}</Text>
-                ) : null;
-              })()}
-              {profile?.mobile ? (
-                <Text style={styles.shopMeta} numberOfLines={1}>Mobile: {profile.mobile}</Text>
-              ) : null}
               <Text style={styles.pattiKind}>PATTI / BILL</Text>
             </View>
             <View style={styles.pattiNumBox}>
@@ -532,9 +534,16 @@ const styles = StyleSheet.create({
   editReceiverText: { color: colors.onSurfaceInverse, fontFamily: font.display, fontWeight: "800", fontSize: 11, letterSpacing: 1 },
 
   pattiCard: { borderWidth: 2, borderColor: colors.borderStrong, padding: spacing.lg, backgroundColor: colors.surface },
+  merchantHead: { width: "100%", alignItems: "center", marginBottom: spacing.sm },
   pattiHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", gap: spacing.md },
-  shopName: { fontSize: 20, fontWeight: "900", color: colors.onSurface, fontFamily: font.display, letterSpacing: -0.5 },
-  shopMeta: { fontSize: 10.5, color: colors.muted, fontFamily: font.display, marginTop: 2, lineHeight: 14 },
+  shopName: {
+    fontSize: 20, fontWeight: "900", color: colors.onSurface, fontFamily: font.display, letterSpacing: -0.5,
+    textAlign: "center", width: "100%",
+  },
+  shopMeta: {
+    fontSize: 10.5, color: colors.muted, fontFamily: font.display, marginTop: 2, lineHeight: 14,
+    textAlign: "center", width: "100%",
+  },
   pattiKind: { fontSize: 10, letterSpacing: 2, color: colors.muted, fontWeight: "800", fontFamily: font.display, marginTop: 2 },
   pattiNumBox: { borderWidth: 2, borderColor: colors.borderStrong, paddingHorizontal: 10, paddingVertical: 4, alignItems: "flex-end" },
   pattiNumLabel: { fontSize: 9, letterSpacing: 1, color: colors.muted, fontWeight: "800", fontFamily: font.display },

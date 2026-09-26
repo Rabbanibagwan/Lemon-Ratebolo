@@ -187,6 +187,7 @@ function analyzeEscPos(b64: string): {
   lfAfterQrPrint: number;
   gsWDots: number | null;
   netPayableUsesReverse: boolean;
+  shopHeaderCentered: boolean;
 } {
   const bin = Buffer.from(b64, "base64");
   let reverseOnCount = 0;
@@ -198,9 +199,16 @@ function analyzeEscPos(b64: string): {
   let qrPrintAt = -1;
   let reverseState = false;
   let reverseOnDuringNet = false;
+  let alignState: 0 | 1 | 2 = 0;
+  let shopHeaderCentered = false;
   let i = 0;
   while (i < bin.length) {
     const b = bin[i];
+    if (b === 0x1b && bin[i + 1] === 0x61) {
+      alignState = (bin[i + 2] === 1 ? 1 : bin[i + 2] === 2 ? 2 : 0) as 0 | 1 | 2;
+      i += 3;
+      continue;
+    }
     if (b === 0x1d && bin[i + 1] === 0x42) {
       if (bin[i + 2] === 1) {
         reverseOnCount++;
@@ -253,6 +261,12 @@ function analyzeEscPos(b64: string): {
       i += 11;
       continue;
     }
+    // Shop name printed while center-aligned
+    if (b === 0x54 && bin.slice(i, i + 10).toString("ascii") === "TEST MANDI") {
+      if (alignState === 1) shopHeaderCentered = true;
+      i += 10;
+      continue;
+    }
     i++;
   }
 
@@ -273,6 +287,7 @@ function analyzeEscPos(b64: string): {
     lfAfterQrPrint,
     gsWDots,
     netPayableUsesReverse: reverseOnDuringNet,
+    shopHeaderCentered,
   };
 }
 
@@ -305,7 +320,7 @@ for (const mm of widths) {
   const mod = builder.qrModuleSize(mm);
   assert(mod * 49 <= cfg.contentDots, `${mm} QR width <= printable`);
 
-  const { b64: pattiB64 } = encodePatti(mm);
+  const { b64: pattiB64, builder: pattiBuilder } = encodePatti(mm);
   const pattiText = decodeEscPosText(pattiB64);
   for (const line of pattiText.split("\n")) {
     if (line && line.length > cfg.columns) throw new Error(`Patti ${mm} overflow: ${line.length} "${line}"`);
@@ -320,13 +335,17 @@ for (const mm of widths) {
   const analysis = analyzeEscPos(pattiB64);
   assert(analysis.hasCut, `${mm} has CUT`);
   assert(analysis.cutIsFeedAndCut, `${mm} uses feed-and-cut (GS V 65)`);
+  assert(analysis.shopHeaderCentered, `${mm} merchant header center-aligned`);
   assert(!analysis.netPayableUsesReverse, `${mm} NET PAYABLE must not use inverse`);
   assert(analysis.reverseOnCount === 0, `${mm} no GS B 1 (reverse ON) in Patti`);
   assert(analysis.boldOnCount > 0, `${mm} uses bold`);
   assert(analysis.gsWDots === cfg.contentDots, `${mm} GS W dots=${analysis.gsWDots} expected ${cfg.contentDots}`);
-  // QR clearance (6/8/10) + SCAN/hint lines + cut feed(3) → well above old feed(2)
-  const minLf = builder.qrClearanceFeed() + 3;
+  // QR clearance + SCAN/hint lines + cut feed(2)
+  const minLf = pattiBuilder.qrClearanceFeed() + 2;
   assert(analysis.lfAfterQrPrint >= minLf, `${mm} feed after QR: ${analysis.lfAfterQrPrint} < ${minLf}`);
+  // ~6 inches (152 mm); allow band for 1-lot sample (content must fit, not a blank flag)
+  const lengthMm = pattiBuilder.estimateLengthMm();
+  assert(lengthMm >= 110 && lengthMm <= 190, `${mm} length ~6in: ${lengthMm.toFixed(1)}mm out of 110–190`);
 
   const billText = decodeEscPosText(encodeBill(mm));
   for (const line of billText.split("\n")) {
@@ -341,8 +360,9 @@ for (const mm of widths) {
   const billAnalysis = analyzeEscPos(encodeBill(mm));
   assert(!billAnalysis.netPayableUsesReverse && billAnalysis.reverseOnCount === 0, `${mm} bill no inverse`);
 
-  results[`${mm}mm`] = `PASS cols=${cfg.columns} dots=${cfg.dots} qrMod=${mod} lfAfterQr=${analysis.lfAfterQrPrint}`;
-  console.log(`\n=== PATTI ${mm}mm (${cfg.columns} cols / ${cfg.dots} dots) ===\n${pattiText}`);
+  results[`${mm}mm`] =
+    `PASS cols=${cfg.columns} dots=${cfg.dots} qrMod=${mod} lfAfterQr=${analysis.lfAfterQrPrint} len≈${lengthMm.toFixed(0)}mm centerHeader=YES`;
+  console.log(`\n=== PATTI ${mm}mm (${cfg.columns} cols / ${cfg.dots} dots, ~${lengthMm.toFixed(0)}mm) ===\n${pattiText}`);
   console.log(`\n=== VENDOR ${mm}mm (${cfg.columns} cols) ===\n${billText}`);
 }
 
@@ -367,6 +387,10 @@ assert(/#slip\.patti \.netbox \{[\s\S]*?background:\s*#fff/m.test(thermalCss), "
 
 const pattiUi = readFileSync(join(__dirname, "../app/patti/[id].tsx"), "utf8");
 assert(/netBox:\s*\{[\s\S]*?backgroundColor:\s*colors\.surface/m.test(pattiUi), "preview netBox white");
+assert(pattiUi.includes("merchantHead"), "preview merchant head centered");
+
+const pattiPrint = readFileSync(join(__dirname, "../src/utils/patti-print.ts"), "utf8");
+assert(pattiPrint.includes('class="merchant-head"'), "thermal HTML merchant-head");
 
 const btMod = readFileSync(
   join(__dirname, "../modules/thermal-bluetooth/android/src/main/java/expo/modules/thermalbluetooth/ThermalBluetoothModule.kt"),
@@ -385,8 +409,10 @@ assert(!idSrc.includes("Goods (×"), "UI no Goods calc");
 
 console.log("\nRESULTS:");
 for (const [k, v] of Object.entries(results)) console.log(`  ${k}: ${v}`);
+console.log("  Merchant header centered: PASS");
 console.log("  Net Payable inverse: PASS (disabled)");
 console.log("  Net Payable bold black / white bg: PASS");
+console.log("  ~6-inch length band: PASS");
 console.log("  QR clearance + feed-and-cut: PASS");
 console.log("  BT chunked write: PASS");
 console.log("ALL WIDTHS OK");

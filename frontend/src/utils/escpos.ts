@@ -256,8 +256,8 @@ export class EscPosBuilder {
   }
 
   /**
-   * Shared shop header matching on-screen / thermal HTML preview:
-   * SHOP (uppercase, large, bold, full width) → address → mobile.
+   * Merchant shop header — CENTER aligned (name, address, mobile only).
+   * Restores left alignment afterward so Patti body layout is unchanged.
    */
   shopHeader(profile: {
     shop_name?: string | null;
@@ -269,12 +269,19 @@ export class EscPosBuilder {
     mobile?: string | null;
   } | null): this {
     const shop = slipText((profile?.shop_name || "").trim()).toUpperCase() || "LEMON MANDI";
-    this.init().align("left").bold(true).size("big").line(shop).size("normal").bold(false);
+    this.init().align("center").bold(true).size("big").line(shop).size("normal").bold(false);
     const addr = [profile?.address, profile?.village, profile?.taluk, profile?.district, profile?.state]
       .filter(Boolean)
       .join(", ");
-    if (addr) this.align("left").bold(false).size("normal").wrapped(slipText(addr));
-    if (profile?.mobile) this.align("left").bold(false).size("normal").line(`Mobile: ${slipText(profile.mobile)}`);
+    if (addr) {
+      this.align("center").bold(false).size("normal");
+      for (const row of this.wrap(slipText(addr))) this.line(row);
+    }
+    if (profile?.mobile) {
+      this.align("center").bold(false).size("normal").line(`Mobile: ${slipText(profile.mobile)}`);
+    }
+    // Body sections (title/NO., farmer, table, totals) stay left/right as designed.
+    this.align("left");
     return this;
   }
 
@@ -305,10 +312,10 @@ export class EscPosBuilder {
   majorTotalBox(left: string, right: string): this {
     const lab = String(left || "").toUpperCase();
     const amt = slipText(right || "");
-    // Hard-disable reverse in case a prior job/section left it on.
-    this.normalState().align("left").bold(true).size("tall");
+    // Hard-disable reverse — white paper + bold black (no tall: keeps ~6" length).
+    this.normalState().align("left").bold(true).size("normal");
     this.kv(lab, amt);
-    this.size("normal").bold(false).normalState();
+    this.bold(false).normalState();
     return this;
   }
 
@@ -426,12 +433,13 @@ export class EscPosBuilder {
   }
 
   /**
-   * QR module size that stays inside contentDots for a typical Patti URL token.
+   * QR module size that stays inside contentDots and keeps total slip ~6".
    * Model-2 ~ version 5–6 ≈ 37–41 modules (+ quiet zone ≈ 8) → ~49 modules worst case.
    */
   qrModuleSize(paperMm?: number): number {
     const w = paperMm != null ? clampPaperMm(paperMm) : this.paperMm;
-    const preferred = w <= 58 ? 3 : w <= 80 ? 4 : 5;
+    // Slightly compact vs prior 3/4/5 so content + QR + feed ≈ 6 inches.
+    const preferred = w <= 58 ? 3 : w <= 80 ? 3 : 4;
     const maxModules = 49;
     const maxByWidth = Math.max(2, Math.floor(this.printDots / maxModules));
     return Math.max(2, Math.min(8, preferred, maxByWidth));
@@ -439,10 +447,10 @@ export class EscPosBuilder {
 
   /** Lines to advance after QR so the full symbol clears the head before CUT. */
   qrClearanceFeed(): number {
-    // Head-to-cutter gap is typically 15–30 mm; Font-A line ≈ 3 mm.
-    if (this.paperMm <= 58) return 6;
-    if (this.paperMm <= 80) return 8;
-    return 10;
+    // Enough for head→cutter (~12–18 mm), without a long blank tail past ~6".
+    if (this.paperMm <= 58) return 4;
+    if (this.paperMm <= 80) return 5;
+    return 5;
   }
 
   /** Compact QR section: QR → SCAN label → hint → clearance feed (before finalize/cut). */
@@ -453,7 +461,7 @@ export class EscPosBuilder {
     this.normalState().align("center").qr(t, module);
     // Reset after QR — some firmwares leave alignment/size sticky after GS ( k.
     this.normalState().align("center").bold(true).line("SCAN AT COUNTER").bold(false);
-    this.size("normal").wrapped("Scan to open this Patti and enter/update the receiver name.");
+    this.align("center").size("normal").wrapped("Scan to open this Patti and enter/update the receiver name.");
     this.normalState();
     // Advance paper so the entire QR + footer text clears the cutter zone.
     this.feed(this.qrClearanceFeed());
@@ -477,15 +485,66 @@ export class EscPosBuilder {
 
   /**
    * End of document: restore normal state → short final feed → full cut.
-   * Uses GS V 65 n (feed-and-cut) so the last lines clear the cutter.
+   * Uses GS V 65 n (feed-and-cut). Keeps total slip near ~6" (no huge blank tail).
    */
   cut(): this {
     this.normalState();
-    // Extra blank lines after content/QR clearance (not huge — cutter gap only).
-    this.feed(3);
-    // GS V 65 n — feed n motion units then full cut (n≈96 ≈ 12 mm on many firmwares).
-    const n = this.paperMm <= 58 ? 64 : this.paperMm <= 80 ? 80 : 96;
+    this.feed(2);
+    // GS V 65 n — feed n motion units then full cut (~6–8 mm cutter clearance).
+    const n = this.paperMm <= 58 ? 48 : this.paperMm <= 80 ? 56 : 64;
     return this.raw(u8(0x1d, 0x56, 0x41, n & 0xff));
+  }
+
+  /**
+   * Estimate printed length in mm for a finished buffer (Font-A lines + QR).
+   * Target for a typical 1-lot Farmer Patti is ~6 inches (152 mm).
+   */
+  estimateLengthMm(opts?: { qrModules?: number }): number {
+    const bytes = this.toBytes();
+    let lf = 0;
+    let qrModule = 0;
+    let i = 0;
+    while (i < bytes.length) {
+      if (bytes[i] === 0x0a) {
+        lf++;
+        i++;
+        continue;
+      }
+      // GS ( k … 31 43 n  → QR module size
+      if (
+        bytes[i] === 0x1d &&
+        bytes[i + 1] === 0x28 &&
+        bytes[i + 2] === 0x6b &&
+        bytes[i + 3] === 0x03 &&
+        bytes[i + 4] === 0x00 &&
+        bytes[i + 5] === 0x31 &&
+        bytes[i + 6] === 0x43
+      ) {
+        qrModule = bytes[i + 7] || 0;
+        i += 8;
+        continue;
+      }
+      if (bytes[i] === 0x1d && bytes[i + 1] === 0x28 && bytes[i + 2] === 0x6b) {
+        const plen = bytes[i + 3] + (bytes[i + 4] << 8);
+        i += 5 + plen;
+        continue;
+      }
+      if (bytes[i] === 0x1d && bytes[i + 1] === 0x56) {
+        // feed-and-cut adds n vertical units (~1/180" or firmware-dependent); count ~n/8 mm
+        if (bytes[i + 2] >= 65) {
+          lf += Math.max(1, Math.round((bytes[i + 3] || 0) / 24));
+          i += 4;
+        } else {
+          i += 3;
+        }
+        continue;
+      }
+      i++;
+    }
+    const lineMm = 3.2; // Font-A ~24 dots @ 203 DPI
+    const modules = opts?.qrModules ?? 45;
+    const qrMm = qrModule > 0 ? (modules * qrModule) / 8 : 0;
+    return lf * lineMm + qrMm;
   }
 
   toBytes(): Uint8Array {

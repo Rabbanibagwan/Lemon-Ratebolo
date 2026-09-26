@@ -195,11 +195,13 @@ export function renderThermalPattiHtml(
   <title>Patti #${p.patti_no}</title>
   <style>${thermalBaseCss(m)}</style></head><body>
   <div id="slip" class="patti">
+    <div class="merchant-head">
+      ${shop ? `<div class="shop wrap">${escapeHtml(shop)}</div>` : ""}
+      ${addr ? `<div class="addr wrap">${escapeHtml(addr)}</div>` : ""}
+      ${mobile ? `<div class="addr">Mobile: ${escapeHtml(mobile)}</div>` : ""}
+    </div>
     <div class="patti-head">
       <div class="patti-head-main">
-        ${shop ? `<div class="shop wrap">${escapeHtml(shop)}</div>` : ""}
-        ${addr ? `<div class="addr wrap">${escapeHtml(addr)}</div>` : ""}
-        ${mobile ? `<div class="addr">Mobile: ${escapeHtml(mobile)}</div>` : ""}
         <div class="kind">PATTI / BILL</div>
       </div>
       <div class="numBox"><div class="numLabel">NO.</div><div class="num">${p.patti_no}</div></div>
