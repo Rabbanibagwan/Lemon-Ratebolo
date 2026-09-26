@@ -71,6 +71,7 @@ export default function BillingScreen() {
   const [qty, setQty] = useState("1000");
   const [buying, setBuying] = useState(false);
   const [claimingId, setClaimingId] = useState<string | null>(null);
+  const [confirmClaim, setConfirmClaim] = useState<FreeBagAllocation | null>(null);
   const [tab, setTab] = useState<BillingTab>(
     initialTab === "free" || initialTab === "history" || initialTab === "usage" || initialTab === "purchase"
       ? (initialTab === "history" ? "purchases" : initialTab === "purchase" ? "buy" : (initialTab as BillingTab))
@@ -125,45 +126,37 @@ export default function BillingScreen() {
     }, [isOwner, load, router, params.tab]),
   );
 
-  const claimFree = (alloc: FreeBagAllocation) => {
+  const openClaimConfirm = (alloc: FreeBagAllocation) => {
     if (alloc.status !== "AVAILABLE" || claimingId) return;
-    Alert.alert(
-      "Claim free bags?",
-      `Claim ${alloc.bags.toLocaleString()} free bags for ${alloc.period_label}?`,
-      [
-        { text: "CANCEL", style: "cancel" },
-        {
-          text: "CLAIM NOW",
-          onPress: async () => {
-            try {
-              setClaimingId(alloc.id);
-              const claimed = await api.post<FreeBagAllocation>(
-                `/billing/free-allocations/${alloc.id}/claim`,
-                {},
-              );
-              Alert.alert(
-                "Claimed",
-                `${claimed.bags.toLocaleString()} free bags have been added to your Bag Balance.`,
-              );
-              // Mark related notification read (best effort)
-              const related = notifications.find((n) => n.allocation_id === alloc.id && !n.read);
-              if (related) {
-                try {
-                  await api.post(`/billing/notifications/${related.id}/read`, {});
-                } catch {
-                  /* ignore */
-                }
-              }
-              await load();
-            } catch (e) {
-              Alert.alert("Claim failed", apiErrorMessage(e, "Could not claim free bags"));
-            } finally {
-              setClaimingId(null);
-            }
-          },
-        },
-      ],
-    );
+    setConfirmClaim(alloc);
+  };
+
+  const performClaim = async (alloc: FreeBagAllocation) => {
+    try {
+      setClaimingId(alloc.id);
+      setConfirmClaim(null);
+      const claimed = await api.post<FreeBagAllocation>(
+        `/billing/free-allocations/${alloc.id}/claim`,
+        {},
+      );
+      Alert.alert(
+        "Claimed",
+        `${claimed.bags.toLocaleString()} free bags have been added to your Bag Balance.`,
+      );
+      const related = notifications.find((n) => n.allocation_id === alloc.id && !n.read);
+      if (related) {
+        try {
+          await api.post(`/billing/notifications/${related.id}/read`, {});
+        } catch {
+          /* ignore */
+        }
+      }
+      await load();
+    } catch (e) {
+      Alert.alert("Claim failed", apiErrorMessage(e, "Could not claim free bags"));
+    } finally {
+      setClaimingId(null);
+    }
   };
 
   const bagsToBuy = useMemo(() => {
@@ -430,7 +423,7 @@ export default function BillingScreen() {
                     {available ? (
                       <Button
                         label={claimingId === a.id ? "CLAIMING…" : "CLAIM NOW"}
-                        onPress={() => claimFree(a)}
+                        onPress={() => openClaimConfirm(a)}
                         loading={claimingId === a.id}
                         disabled={!!claimingId}
                         testID={`free-claim-${a.id}`}
@@ -460,7 +453,7 @@ export default function BillingScreen() {
                         }
                         if (n.allocation_id) {
                           const target = freeAllocs.find((a) => a.id === n.allocation_id);
-                          if (target?.status === "AVAILABLE") claimFree(target);
+                          if (target?.status === "AVAILABLE") openClaimConfirm(target);
                         }
                         await load();
                       }}
@@ -471,6 +464,33 @@ export default function BillingScreen() {
                     </Pressable>
                   ))}
               </>
+            ) : null}
+
+            {confirmClaim ? (
+              <View style={styles.confirmBox} testID="free-claim-confirm">
+                <Text style={styles.freePeriod}>Claim {confirmClaim.bags.toLocaleString()} free bags?</Text>
+                <Text style={styles.hint}>{confirmClaim.period_label}</Text>
+                <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm }}>
+                  <View style={{ flex: 1 }}>
+                    <Button
+                      label="CANCEL"
+                      variant="secondary"
+                      onPress={() => setConfirmClaim(null)}
+                      disabled={!!claimingId}
+                      testID="free-claim-cancel"
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Button
+                      label={claimingId ? "CLAIMING…" : "CLAIM NOW"}
+                      onPress={() => performClaim(confirmClaim)}
+                      loading={!!claimingId}
+                      disabled={!!claimingId}
+                      testID="free-claim-confirm-btn"
+                    />
+                  </View>
+                </View>
+              </View>
             ) : null}
           </View>
         ) : null}
@@ -570,6 +590,14 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     fontFamily: font.display,
     color: colors.brandPrimary,
+  },
+  confirmBox: {
+    borderWidth: 2,
+    borderColor: colors.brandPrimary,
+    backgroundColor: colors.surface,
+    padding: spacing.md,
+    marginTop: spacing.md,
+    gap: 4,
   },
   hint: { fontSize: 13, color: colors.muted, fontFamily: font.display, marginBottom: 4 },
   quote: { fontSize: 16, fontWeight: "800", fontFamily: font.mono, marginVertical: spacing.sm },
