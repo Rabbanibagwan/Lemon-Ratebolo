@@ -58,12 +58,18 @@ export function encodeFarmerPattiEscPos(
     .kv("Total deduction", `- ${rupees(p.deductions_total)}`)
     .bold(false);
 
+  b.normalState();
   b.majorTotalBox("NET PAYABLE", rupees(p.net_payable));
+  b.normalState();
   b.infoRow("RECEIVER", p.receiver_name || "-");
 
   const token = (qrToken || p.qr_token || "").trim();
-  if (token) b.qrSection(token, paperMm);
+  if (token) {
+    b.normalState();
+    b.qrSection(token, paperMm);
+  }
 
+  // Finalize: state reset + feed + cut — new buffer ends here (no leftover).
   b.cut();
   return b.toBase64();
 }

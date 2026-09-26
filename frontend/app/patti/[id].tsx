@@ -568,11 +568,11 @@ const styles = StyleSheet.create({
   rowLabel: { fontSize: 13, color: colors.onSurfaceTertiary, fontFamily: font.display, flex: 1 },
   rowValue: { fontSize: 14, fontFamily: font.mono, color: colors.onSurface },
   netBox: {
-    backgroundColor: colors.surfaceInverse, padding: spacing.md, marginTop: spacing.md,
+    backgroundColor: colors.surface, paddingVertical: spacing.md, paddingHorizontal: 0, marginTop: spacing.md,
     flexDirection: "row", justifyContent: "space-between", alignItems: "center",
   },
-  netLabel: { color: colors.onSurfaceInverse, fontFamily: font.display, fontWeight: "900", letterSpacing: 1.5, fontSize: 13 },
-  netValue: { color: colors.onSurfaceInverse, fontFamily: font.mono, fontWeight: "900", fontSize: 24 },
+  netLabel: { color: colors.onSurface, fontFamily: font.display, fontWeight: "900", letterSpacing: 1.5, fontSize: 13 },
+  netValue: { color: colors.onSurface, fontFamily: font.mono, fontWeight: "900", fontSize: 24 },
 
   qrBox: {
     flexDirection: "row", alignItems: "center", gap: spacing.md,

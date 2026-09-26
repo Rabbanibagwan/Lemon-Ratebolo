@@ -300,26 +300,28 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       word-break: break-word;
     }
     .netbox {
-      border: 3px solid #000 !important;
-      padding: 8px 6px; margin: 6px 0;
+      border: none !important;
+      padding: 8px 0; margin: 6px 0;
       display: flex; justify-content: space-between; align-items: center; gap: 6px;
-      background: #000 !important;
+      background: #fff !important;
       width: 100%;
       max-width: 100%;
       -webkit-print-color-adjust: exact !important;
       print-color-adjust: exact !important;
     }
-    /* Must beat #slip * color:#000 or TOTAL text vanishes on the black fill. */
-    #slip .netbox, #slip .netbox * { color: #fff !important; -webkit-text-stroke: 0 !important; }
+    /* White background + bold black text (no inverse / dark fill). */
+    #slip .netbox, #slip .netbox * { color: #000 !important; -webkit-text-stroke: 0 !important; }
     .netbox .bold {
       font-size: ${m.emphFs}px !important;
       font-weight: 900 !important;
       letter-spacing: 1px;
       text-transform: uppercase;
+      color: #000 !important;
     }
     .netbox .huge {
       font-size: ${m.hugeFs}px !important;
       font-weight: 900 !important;
+      color: #000 !important;
     }
     /* Farmer Patti only: Times Roman + clearer Net Payable spacing (size unchanged). */
     #slip.patti,
@@ -386,15 +388,16 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       font-weight: 900 !important;
       line-height: 1.1;
     }
-    /* Master preview: dark fill + white text for major totals */
+    /* Farmer Patti: white bg + bold black NET PAYABLE (matches physical thermal) */
     #slip.patti .netbox {
-      background: #000 !important;
-      padding: 10px 10px;
+      background: #fff !important;
+      padding: 10px 0;
       gap: 10px;
+      border: none !important;
     }
     #slip.patti .netbox,
     #slip.patti .netbox * {
-      color: #fff !important;
+      color: #000 !important;
       -webkit-text-stroke: 0 !important;
     }
     #slip.patti .netbox .bold {
@@ -402,7 +405,7 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       flex-shrink: 0;
       text-transform: uppercase !important;
       font-weight: 900 !important;
-      color: #fff !important;
+      color: #000 !important;
     }
     #slip.patti .netbox .huge {
       letter-spacing: 0.04em;
@@ -411,7 +414,7 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       white-space: nowrap;
       text-align: right;
       font-weight: 900 !important;
-      color: #fff !important;
+      color: #000 !important;
     }
     /* QR row matches App Preview: code left, SCAN AT COUNTER + hint right */
     #slip.patti .qrbox {
@@ -535,12 +538,15 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       word-break: break-word;
     }
     #slip.vendor .netbox {
-      padding: 10px 10px;
+      padding: 10px 0;
       gap: 12px;
+      background: #fff !important;
+      border: none !important;
     }
     #slip.vendor .netbox .bold,
     #slip.vendor .netbox .huge {
-      color: #fff !important;
+      color: #000 !important;
+      font-weight: 900 !important;
     }
     .foot {
       font-size: ${Math.max(8, m.bodyFs - 1)}px; font-weight: 700 !important;

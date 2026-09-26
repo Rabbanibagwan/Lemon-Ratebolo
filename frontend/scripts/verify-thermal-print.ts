@@ -6,7 +6,14 @@
 import { readFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
-import { EscPosBuilder, escposCols, rupees, slipText } from "../src/utils/escpos";
+import {
+  EscPosBuilder,
+  escposCols,
+  escposPrintDots,
+  rupees,
+  slipText,
+  thermalWidthConfig,
+} from "../src/utils/escpos";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -21,7 +28,7 @@ const profile = {
 };
 
 /** Mirrors encodeFarmerPattiEscPos using the shared layout helpers. */
-function encodePatti(paperMm: number): string {
+function encodePatti(paperMm: number): { b64: string; builder: EscPosBuilder } {
   const b = new EscPosBuilder(paperMm);
   const p = {
     patti_no: 42,
@@ -64,11 +71,14 @@ function encodePatti(paperMm: number): string {
     .bold(true)
     .kv("Total deduction", `- ${rupees(p.deductions_total)}`)
     .bold(false);
+  b.normalState();
   b.majorTotalBox("NET PAYABLE", rupees(p.net_payable));
+  b.normalState();
   b.infoRow("RECEIVER", p.receiver_name);
+  b.normalState();
   b.qrSection(p.qr_token, paperMm);
   b.cut();
-  return b.toBase64();
+  return { b64: b.toBase64(), builder: b };
 }
 
 /** Mirrors encodeVendorBillEscPos using the shared layout helpers. */
@@ -124,11 +134,22 @@ function decodeEscPosText(b64: string): string {
         i += 2;
         continue;
       }
-      if ((b === 0x1b && bin[i + 1] === 0x61) || (b === 0x1b && bin[i + 1] === 0x45) || (b === 0x1d && bin[i + 1] === 0x21) || (b === 0x1d && bin[i + 1] === 0x42) || (b === 0x1d && bin[i + 1] === 0x56)) {
+      // ESC a / ESC E / ESC - / ESC M / GS ! / GS B — 3 bytes
+      if (
+        (b === 0x1b && (bin[i + 1] === 0x61 || bin[i + 1] === 0x45 || bin[i + 1] === 0x2d || bin[i + 1] === 0x4d)) ||
+        (b === 0x1d && (bin[i + 1] === 0x21 || bin[i + 1] === 0x42))
+      ) {
         i += 3;
         continue;
       }
-      if (b === 0x1d && bin[i + 1] === 0x57) {
+      // GS V m  OR  GS V m n (feed-and-cut when m >= 65)
+      if (b === 0x1d && bin[i + 1] === 0x56) {
+        const m = bin[i + 2];
+        i += m >= 65 ? 4 : 3;
+        continue;
+      }
+      // GS W nL nH / GS L nL nH
+      if (b === 0x1d && (bin[i + 1] === 0x57 || bin[i + 1] === 0x4c)) {
         i += 4;
         continue;
       }
@@ -156,26 +177,138 @@ function decodeEscPosText(b64: string): string {
   return out;
 }
 
+/** Scan raw ESC/POS for reverse ON (GS B 1) near NET PAYABLE and for cut/feed. */
+function analyzeEscPos(b64: string): {
+  hasCut: boolean;
+  cutIsFeedAndCut: boolean;
+  reverseOnCount: number;
+  reverseOffCount: number;
+  boldOnCount: number;
+  lfAfterQrPrint: number;
+  gsWDots: number | null;
+  netPayableUsesReverse: boolean;
+} {
+  const bin = Buffer.from(b64, "base64");
+  let reverseOnCount = 0;
+  let reverseOffCount = 0;
+  let boldOnCount = 0;
+  let hasCut = false;
+  let cutIsFeedAndCut = false;
+  let gsWDots: number | null = null;
+  let qrPrintAt = -1;
+  let reverseState = false;
+  let reverseOnDuringNet = false;
+  let i = 0;
+  while (i < bin.length) {
+    const b = bin[i];
+    if (b === 0x1d && bin[i + 1] === 0x42) {
+      if (bin[i + 2] === 1) {
+        reverseOnCount++;
+        reverseState = true;
+      } else {
+        reverseOffCount++;
+        reverseState = false;
+      }
+      i += 3;
+      continue;
+    }
+    if (b === 0x1b && bin[i + 1] === 0x45 && bin[i + 2] === 1) {
+      boldOnCount++;
+      i += 3;
+      continue;
+    }
+    if (b === 0x1d && bin[i + 1] === 0x57) {
+      gsWDots = bin[i + 2] + (bin[i + 3] << 8);
+      i += 4;
+      continue;
+    }
+    if (b === 0x1d && bin[i + 1] === 0x56) {
+      hasCut = true;
+      cutIsFeedAndCut = bin[i + 2] >= 65;
+      i += cutIsFeedAndCut ? 4 : 3;
+      continue;
+    }
+    // QR print command: GS ( k 03 00 31 51 30
+    if (
+      b === 0x1d &&
+      bin[i + 1] === 0x28 &&
+      bin[i + 2] === 0x6b &&
+      bin[i + 3] === 0x03 &&
+      bin[i + 4] === 0x00 &&
+      bin[i + 5] === 0x31 &&
+      bin[i + 6] === 0x51
+    ) {
+      qrPrintAt = i;
+      i += 8;
+      continue;
+    }
+    if (b === 0x1d && bin[i + 1] === 0x28 && bin[i + 2] === 0x6b) {
+      const plen = bin[i + 3] + (bin[i + 4] << 8);
+      i += 5 + plen;
+      continue;
+    }
+    // Detect "NET PAYABLE" ASCII while reverse is on
+    if (b === 0x4e && bin.slice(i, i + 11).toString("ascii") === "NET PAYABLE") {
+      if (reverseState) reverseOnDuringNet = true;
+      i += 11;
+      continue;
+    }
+    i++;
+  }
+
+  let lfAfterQrPrint = 0;
+  if (qrPrintAt >= 0) {
+    for (let j = qrPrintAt; j < bin.length; j++) {
+      if (bin[j] === 0x0a) lfAfterQrPrint++;
+      if (bin[j] === 0x1d && bin[j + 1] === 0x56) break;
+    }
+  }
+
+  return {
+    hasCut,
+    cutIsFeedAndCut,
+    reverseOnCount,
+    reverseOffCount,
+    boldOnCount,
+    lfAfterQrPrint,
+    gsWDots,
+    netPayableUsesReverse: reverseOnDuringNet,
+  };
+}
+
 function assert(cond: boolean, msg: string) {
   if (!cond) throw new Error(msg);
 }
 
 const widths = [58, 80, 100] as const;
+const expectedDots: Record<number, number> = { 58: 384, 80: 576, 100: 720 };
+const expectedCols: Record<number, number> = { 58: 32, 80: 48, 100: 60 };
 const results: Record<string, string> = {};
 
 for (const mm of widths) {
-  const cols = escposCols(mm);
-  const expected = mm <= 58 ? 32 : mm <= 80 ? 48 : 60;
-  assert(cols === expected, `${mm}mm cols`);
-  const builder = new EscPosBuilder(mm);
-  const [l, m, a] = builder.lineWidths();
-  assert(l + m + a === cols, `${mm} 3-col`);
-  const w4 = builder.lineWidths4();
-  assert(w4[0] + w4[1] + w4[2] + w4[3] === cols, `${mm} 4-col`);
+  const cfg = thermalWidthConfig(mm);
+  assert(cfg.dots === expectedDots[mm], `${mm}mm dots`);
+  assert(cfg.columns === expectedCols[mm], `${mm}mm cols cfg`);
+  assert(cfg.contentDots === cfg.dots - cfg.leftMarginDots - cfg.rightMarginDots, `${mm} contentDots`);
+  assert(escposCols(mm) === expectedCols[mm], `${mm}mm cols`);
+  assert(escposPrintDots(mm) === cfg.contentDots, `${mm}mm printDots`);
 
-  const pattiText = decodeEscPosText(encodePatti(mm));
+  const builder = new EscPosBuilder(mm);
+  assert(builder.cols === cfg.columns, `${mm} builder cols`);
+  assert(builder.printDots === cfg.contentDots, `${mm} builder dots`);
+  const [l, m, a] = builder.lineWidths();
+  assert(l + m + a === cfg.columns, `${mm} 3-col`);
+  const w4 = builder.lineWidths4();
+  assert(w4[0] + w4[1] + w4[2] + w4[3] === cfg.columns, `${mm} 4-col`);
+
+  // QR module fits content width
+  const mod = builder.qrModuleSize(mm);
+  assert(mod * 49 <= cfg.contentDots, `${mm} QR width <= printable`);
+
+  const { b64: pattiB64 } = encodePatti(mm);
+  const pattiText = decodeEscPosText(pattiB64);
   for (const line of pattiText.split("\n")) {
-    if (line && line.length > cols) throw new Error(`Patti ${mm} overflow: ${line.length} "${line}"`);
+    if (line && line.length > cfg.columns) throw new Error(`Patti ${mm} overflow: ${line.length} "${line}"`);
   }
   assert(pattiText.includes("TEST MANDI"), "shop");
   assert(pattiText.includes("PATTI / BILL"), "title");
@@ -184,9 +317,20 @@ for (const mm of widths) {
   assert(pattiText.includes("SCAN AT COUNTER"), "qr");
   assert(pattiText.includes(slipText("Gross total")) || pattiText.includes("Gross total"), "gross");
 
+  const analysis = analyzeEscPos(pattiB64);
+  assert(analysis.hasCut, `${mm} has CUT`);
+  assert(analysis.cutIsFeedAndCut, `${mm} uses feed-and-cut (GS V 65)`);
+  assert(!analysis.netPayableUsesReverse, `${mm} NET PAYABLE must not use inverse`);
+  assert(analysis.reverseOnCount === 0, `${mm} no GS B 1 (reverse ON) in Patti`);
+  assert(analysis.boldOnCount > 0, `${mm} uses bold`);
+  assert(analysis.gsWDots === cfg.contentDots, `${mm} GS W dots=${analysis.gsWDots} expected ${cfg.contentDots}`);
+  // QR clearance (6/8/10) + SCAN/hint lines + cut feed(3) → well above old feed(2)
+  const minLf = builder.qrClearanceFeed() + 3;
+  assert(analysis.lfAfterQrPrint >= minLf, `${mm} feed after QR: ${analysis.lfAfterQrPrint} < ${minLf}`);
+
   const billText = decodeEscPosText(encodeBill(mm));
   for (const line of billText.split("\n")) {
-    if (line && line.length > cols) throw new Error(`Bill ${mm} overflow: ${line.length} "${line}"`);
+    if (line && line.length > cfg.columns) throw new Error(`Bill ${mm} overflow: ${line.length} "${line}"`);
   }
   assert(billText.includes("Lemon"), "Lemon");
   assert(!billText.includes("Goods"), "no Goods");
@@ -194,9 +338,12 @@ for (const mm of widths) {
   assert(billText.includes("Cess / Other"), "cess");
   assert(billText.includes("FARMER"), "farmer col");
 
-  results[`${mm}mm`] = `PASS cols=${cols}`;
-  console.log(`\n=== PATTI ${mm}mm (${cols} cols) ===\n${pattiText}`);
-  console.log(`\n=== VENDOR ${mm}mm (${cols} cols) ===\n${billText}`);
+  const billAnalysis = analyzeEscPos(encodeBill(mm));
+  assert(!billAnalysis.netPayableUsesReverse && billAnalysis.reverseOnCount === 0, `${mm} bill no inverse`);
+
+  results[`${mm}mm`] = `PASS cols=${cfg.columns} dots=${cfg.dots} qrMod=${mod} lfAfterQr=${analysis.lfAfterQrPrint}`;
+  console.log(`\n=== PATTI ${mm}mm (${cfg.columns} cols / ${cfg.dots} dots) ===\n${pattiText}`);
+  console.log(`\n=== VENDOR ${mm}mm (${cfg.columns} cols) ===\n${billText}`);
 }
 
 // Source wiring checks
@@ -207,6 +354,25 @@ assert(docs.includes("tableHeader4"), "docs use tableHeader4");
 assert(docs.includes('kv("Lemon"'), "docs Lemon");
 assert(docs.includes("GRAND TOTAL"), "docs GRAND TOTAL");
 assert(docs.includes("qrSection"), "docs qrSection");
+assert(docs.includes("normalState"), "docs normalState");
+
+const escposSrc = readFileSync(join(__dirname, "../src/utils/escpos.ts"), "utf8");
+assert(escposSrc.includes("thermalWidthConfig"), "thermalWidthConfig exported");
+assert(escposSrc.includes("normalState"), "normalState present");
+assert(!/reverse\(true\)/.test(escposSrc.match(/majorTotalBox[\s\S]*?^  \}/m)?.[0] || ""), "majorTotalBox no reverse(true)");
+
+const thermalCss = readFileSync(join(__dirname, "../src/utils/thermal-print.ts"), "utf8");
+assert(thermalCss.includes("#slip.patti .netbox"), "patti netbox css");
+assert(/#slip\.patti \.netbox \{[\s\S]*?background:\s*#fff/m.test(thermalCss), "patti netbox white bg");
+
+const pattiUi = readFileSync(join(__dirname, "../app/patti/[id].tsx"), "utf8");
+assert(/netBox:\s*\{[\s\S]*?backgroundColor:\s*colors\.surface/m.test(pattiUi), "preview netBox white");
+
+const btMod = readFileSync(
+  join(__dirname, "../modules/thermal-bluetooth/android/src/main/java/expo/modules/thermalbluetooth/ThermalBluetoothModule.kt"),
+  "utf8",
+);
+assert(btMod.includes("chunkSize"), "BT write is chunked");
 
 const vendorPrint = readFileSync(join(__dirname, "../src/utils/vendor-bill-print.ts"), "utf8");
 assert(vendorPrint.includes('class="farm"'), "thermal HTML 4-col");
@@ -219,4 +385,8 @@ assert(!idSrc.includes("Goods (×"), "UI no Goods calc");
 
 console.log("\nRESULTS:");
 for (const [k, v] of Object.entries(results)) console.log(`  ${k}: ${v}`);
+console.log("  Net Payable inverse: PASS (disabled)");
+console.log("  Net Payable bold black / white bg: PASS");
+console.log("  QR clearance + feed-and-cut: PASS");
+console.log("  BT chunked write: PASS");
 console.log("ALL WIDTHS OK");

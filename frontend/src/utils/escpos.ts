@@ -12,22 +12,55 @@ function clampPaperMm(n: unknown, fallback = 80): number {
   return Math.max(40, Math.min(120, Math.round(v)));
 }
 
-export function escposCols(paperMm: number): number {
+/** Single width config for an entire thermal document (Patti / Vendor Bill). */
+export type ThermalWidthConfig = {
+  paperMm: number;
+  /** Max printable dots at 203 DPI (GS W). */
+  dots: number;
+  /** Font-A / 12-dot columns — all sections must stay within this. */
+  columns: number;
+  /** Left margin in dots (GS L). */
+  leftMarginDots: number;
+  /** Right margin in dots (implicit: dots - left - content). */
+  rightMarginDots: number;
+  /** Usable content dots after margins. */
+  contentDots: number;
+};
+
+/**
+ * Canonical printable widths (paper → printable area at 203 DPI):
+ *  58mm → 384 dots / 32 cols  (~48 mm printable)
+ *  80mm → 576 dots / 48 cols  (~72 mm printable)
+ * 100mm → 720 dots / 60 cols  (~90 mm printable)
+ *
+ * `dots` is MAX_PRINTABLE for the roll. Left margin is forced to 0 so every
+ * section shares one fixed content width (= dots / columns).
+ */
+export function thermalWidthConfig(paperMm: number): ThermalWidthConfig {
   const w = clampPaperMm(paperMm);
-  if (w <= 58) return 32;
-  if (w <= 80) return 48;
-  return 60; // 100 mm Font-A/12-dot planning (not 64)
+  const dots = w <= 58 ? 384 : w <= 80 ? 576 : 720;
+  const columns = w <= 58 ? 32 : w <= 80 ? 48 : 60;
+  const leftMarginDots = 0;
+  const rightMarginDots = 0;
+  return {
+    paperMm: w,
+    dots,
+    columns,
+    leftMarginDots,
+    rightMarginDots,
+    contentDots: dots - leftMarginDots - rightMarginDots,
+  };
+}
+
+export function escposCols(paperMm: number): number {
+  return thermalWidthConfig(paperMm).columns;
 }
 
 /**
- * Printable width in dots at 203 DPI (8 dots/mm).
- * Uses the full printable area for each roll so content spans the selected paper.
+ * Printable width in dots at 203 DPI (8 dots/mm) — equals ThermalWidthConfig.contentDots.
  */
 export function escposPrintDots(paperMm: number): number {
-  const w = clampPaperMm(paperMm);
-  if (w <= 58) return 384; // ~48 mm printable on 58 mm roll
-  if (w <= 80) return 576; // ~72 mm printable on 80 mm roll
-  return 720; // ~90 mm printable on 100 mm roll
+  return thermalWidthConfig(paperMm).contentDots;
 }
 
 function concat(parts: Uint8Array[]): Uint8Array {
@@ -69,11 +102,13 @@ export class EscPosBuilder {
   readonly cols: number;
   readonly printDots: number;
   readonly paperMm: number;
+  readonly width: ThermalWidthConfig;
 
   constructor(paperMm: number) {
-    this.paperMm = clampPaperMm(paperMm);
-    this.cols = escposCols(this.paperMm);
-    this.printDots = escposPrintDots(this.paperMm);
+    this.width = thermalWidthConfig(paperMm);
+    this.paperMm = this.width.paperMm;
+    this.cols = this.width.columns;
+    this.printDots = this.width.contentDots;
   }
 
   /** 3-col widths (lot / mid / amount) that always sum to this.cols. */
@@ -101,7 +136,25 @@ export class EscPosBuilder {
 
   init(): this {
     const n = this.printDots;
-    return this.raw(u8(0x1b, 0x40)).raw(u8(0x1d, 0x57, n & 0xff, (n >> 8) & 0xff));
+    const lm = this.width.leftMarginDots;
+    // ESC @ reset → left margin → print area width → clear sticky styles.
+    return this.raw(u8(0x1b, 0x40))
+      .raw(u8(0x1d, 0x4c, lm & 0xff, (lm >> 8) & 0xff))
+      .raw(u8(0x1d, 0x57, n & 0xff, (n >> 8) & 0xff))
+      .normalState();
+  }
+
+  /**
+   * Explicitly clear styles that can leak across sections / print jobs:
+   * inverse, bold, underline, character size, left alignment, Font A.
+   */
+  normalState(): this {
+    return this.raw(u8(0x1d, 0x42, 0x00)) // reverse OFF
+      .raw(u8(0x1b, 0x45, 0x00)) // bold OFF
+      .raw(u8(0x1b, 0x2d, 0x00)) // underline OFF
+      .raw(u8(0x1d, 0x21, 0x00)) // normal size
+      .raw(u8(0x1b, 0x4d, 0x00)) // Font A
+      .raw(u8(0x1b, 0x61, 0x00)); // left align
   }
 
   align(dir: "left" | "center" | "right"): this {
@@ -246,16 +299,16 @@ export class EscPosBuilder {
   }
 
   /**
-   * Preview-style major total (NET PAYABLE / GRAND TOTAL).
-   * Reverse + tall when supported — no ASCII box, no extra blank feeds.
+   * Major total (NET PAYABLE / GRAND TOTAL).
+   * WHITE background, BOLD BLACK text — never inverse/reverse fill.
    */
   majorTotalBox(left: string, right: string): this {
     const lab = String(left || "").toUpperCase();
     const amt = slipText(right || "");
-    this.align("left");
-    this.reverse(true).bold(true).size("tall");
+    // Hard-disable reverse in case a prior job/section left it on.
+    this.normalState().align("left").bold(true).size("tall");
     this.kv(lab, amt);
-    this.size("normal").bold(false).reverse(false);
+    this.size("normal").bold(false).normalState();
     return this;
   }
 
@@ -372,15 +425,38 @@ export class EscPosBuilder {
     return this;
   }
 
-  /** Compact QR section matching Preview qrbox. */
-  qrSection(token: string, paperMm: number): this {
+  /**
+   * QR module size that stays inside contentDots for a typical Patti URL token.
+   * Model-2 ~ version 5–6 ≈ 37–41 modules (+ quiet zone ≈ 8) → ~49 modules worst case.
+   */
+  qrModuleSize(paperMm?: number): number {
+    const w = paperMm != null ? clampPaperMm(paperMm) : this.paperMm;
+    const preferred = w <= 58 ? 3 : w <= 80 ? 4 : 5;
+    const maxModules = 49;
+    const maxByWidth = Math.max(2, Math.floor(this.printDots / maxModules));
+    return Math.max(2, Math.min(8, preferred, maxByWidth));
+  }
+
+  /** Lines to advance after QR so the full symbol clears the head before CUT. */
+  qrClearanceFeed(): number {
+    // Head-to-cutter gap is typically 15–30 mm; Font-A line ≈ 3 mm.
+    if (this.paperMm <= 58) return 6;
+    if (this.paperMm <= 80) return 8;
+    return 10;
+  }
+
+  /** Compact QR section: QR → SCAN label → hint → clearance feed (before finalize/cut). */
+  qrSection(token: string, paperMm?: number): this {
     const t = (token || "").trim();
     if (!t) return this;
-    const module = paperMm <= 58 ? 3 : paperMm <= 80 ? 4 : 5;
-    this.align("center").qr(t, module);
-    this.size("normal").bold(true).line("SCAN AT COUNTER").bold(false);
+    const module = this.qrModuleSize(paperMm ?? this.paperMm);
+    this.normalState().align("center").qr(t, module);
+    // Reset after QR — some firmwares leave alignment/size sticky after GS ( k.
+    this.normalState().align("center").bold(true).line("SCAN AT COUNTER").bold(false);
     this.size("normal").wrapped("Scan to open this Patti and enter/update the receiver name.");
-    this.align("left");
+    this.normalState();
+    // Advance paper so the entire QR + footer text clears the cutter zone.
+    this.feed(this.qrClearanceFeed());
     return this;
   }
 
@@ -399,8 +475,17 @@ export class EscPosBuilder {
     return this;
   }
 
+  /**
+   * End of document: restore normal state → short final feed → full cut.
+   * Uses GS V 65 n (feed-and-cut) so the last lines clear the cutter.
+   */
   cut(): this {
-    return this.feed(2).raw(u8(0x1d, 0x56, 0x00));
+    this.normalState();
+    // Extra blank lines after content/QR clearance (not huge — cutter gap only).
+    this.feed(3);
+    // GS V 65 n — feed n motion units then full cut (n≈96 ≈ 12 mm on many firmwares).
+    const n = this.paperMm <= 58 ? 64 : this.paperMm <= 80 ? 80 : 96;
+    return this.raw(u8(0x1d, 0x56, 0x41, n & 0xff));
   }
 
   toBytes(): Uint8Array {
