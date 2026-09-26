@@ -3,3 +3,39 @@ html, body, #root { margin: 0; min-height: 100%; }
 body { background: #f4f4f0; }
 a { color: #111; font-weight: 700; }
 button { cursor: pointer; }
+
+/* Mobile admin shell — hamburger + drawer nav for iPhone Admin Panel */
+@media (max-width: 768px) {
+  .admin-menu-btn {
+    display: block !important;
+  }
+  .admin-sidebar {
+    position: fixed !important;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 50;
+    transform: translateX(-105%);
+    transition: transform 0.2s ease;
+    overflow-y: auto;
+    width: min(260px, 86vw) !important;
+  }
+  .admin-sidebar.is-open {
+    transform: translateX(0);
+  }
+  .admin-nav-backdrop {
+    display: block !important;
+  }
+  .admin-main {
+    padding: 56px 12px 24px !important;
+  }
+  .admin-main h1 {
+    font-size: 22px !important;
+  }
+}
+
+@media (min-width: 769px) {
+  .admin-nav-backdrop {
+    display: none !important;
+  }
+}
