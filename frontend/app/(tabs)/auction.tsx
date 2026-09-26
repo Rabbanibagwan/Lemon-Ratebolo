@@ -8,7 +8,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
-import { api, AuctionDay, DriverRange, Patti } from "@/src/api";
+import { api, apiErrorMessage, AuctionDay, DriverRange, Patti } from "@/src/api";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
 import { Button, Empty, Input } from "@/src/components/ui";
 import { colors, font, money, spacing } from "@/src/theme";
@@ -119,7 +119,7 @@ export default function Auction() {
       await load();
       closeDriverModal({ returnHome: fromSetDriverShortcut });
     } catch (e: any) {
-      setSaveDriverError(e?.detail || "Failed to save");
+      setSaveDriverError(apiErrorMessage(e, "Failed to save"));
     } finally { setSavingDrivers(false); }
   };
 
