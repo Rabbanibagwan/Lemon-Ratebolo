@@ -119,12 +119,12 @@ export class EscPosBuilder {
     return [lot, mid, amt];
   }
 
-  /** 4-col widths (lot / farmer / bags×rate / amount) — Vendor Bill table geometry. */
+  /** 4-col widths (lot / farmer / bags×rate / amount) — always sum to this.cols. */
   lineWidths4(): [number, number, number, number] {
-    // Prefer bags×rate + amount readability; farmer truncates with ellipsis.
-    const lot = Math.max(4, Math.floor(this.cols * 0.12));
-    const amt = Math.max(10, Math.floor(this.cols * 0.28));
-    const bags = Math.max(10, Math.floor(this.cols * 0.34));
+    // Amount flush to the right content boundary; bags×rate readable; farmer flexes.
+    const lot = Math.max(4, Math.floor(this.cols * 0.1));
+    const amt = Math.max(10, Math.floor(this.cols * 0.26));
+    const bags = Math.max(10, Math.floor(this.cols * 0.32));
     const farm = Math.max(5, this.cols - lot - bags - amt);
     return [lot, farm, bags, amt];
   }
@@ -451,6 +451,32 @@ export class EscPosBuilder {
     if (this.paperMm <= 58) return 4;
     if (this.paperMm <= 80) return 5;
     return 5;
+  }
+
+  /**
+   * Lines after the last text content (e.g. Bank Details) so the cutter does not
+   * slice mid-section. Content-driven docs call this before cut(); not a fixed page height.
+   */
+  contentClearanceFeed(): number {
+    if (this.paperMm <= 58) return 5;
+    if (this.paperMm <= 80) return 6;
+    return 6;
+  }
+
+  /**
+   * Bank Details block — every line is emitted before the caller finalizes/cuts.
+   * Does not cut. Caller must feed + cut after this returns.
+   */
+  bankDetailsSection(lines: string[]): this {
+    const rows = (lines || []).map((x) => slipText(x)).filter((x) => x.trim());
+    if (!rows.length) return this;
+    this.normalState().align("left");
+    this.hr().bold(true).size("normal").line("BANK DETAILS").bold(false);
+    for (const row of rows) {
+      this.align("left").size("normal").wrapped(row);
+    }
+    this.normalState();
+    return this;
   }
 
   /** Compact QR section: QR → SCAN label → hint → clearance feed (before finalize/cut). */

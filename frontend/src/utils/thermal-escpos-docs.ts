@@ -80,8 +80,10 @@ export function encodeFarmerPattiEscPos(
  * No QR. Calculations unchanged.
  */
 export function encodeVendorBillEscPos(bill: VendorBill, profile: ShopProfile, paperMm: number): string {
+  // Fresh builder per print — never reuse a prior ESC/POS buffer.
   const b = new EscPosBuilder(paperMm);
 
+  // Merchant header centered (shop/address/mobile); body stays left/right.
   b.shopHeader(profile);
   b.docTitleAndNo("VENDOR BILL", bill.bill_code, "BILL");
   b.hr();
@@ -101,23 +103,29 @@ export function encodeVendorBillEscPos(bill: VendorBill, profile: ShopProfile, p
     .kv("Hamali", rupees(bill.hamali));
   if (bill.cess > 0) b.kv("Cess / Other", rupees(bill.cess));
 
+  b.normalState();
   b.majorTotalBox("GRAND TOTAL", rupees(bill.grand_total));
+  b.normalState();
 
   b.kv("Paid", rupees(bill.paid));
   b.bold(true).kv("Balance Due", rupees(bill.balance)).bold(false);
 
+  // Complete Bank Details BEFORE any feed/cut (content-driven length).
   const bank: string[] = [];
   if (profile.bank_account_holder) bank.push(`A/c Name: ${profile.bank_account_holder}`);
   if (profile.bank_account_number) bank.push(`A/c No: ${profile.bank_account_number}`);
   if (profile.bank_ifsc) bank.push(`IFSC: ${profile.bank_ifsc}`);
   if (profile.bank_name) bank.push(`Bank: ${profile.bank_name}`);
-  if (bank.length) {
-    b.hr().align("left").bold(true).size("normal").line("BANK DETAILS").bold(false);
-    bank.forEach((x) => b.size("normal").wrapped(slipText(x)));
-  }
+  if (profile.bank_branch) bank.push(`Branch: ${profile.bank_branch}`);
+  b.bankDetailsSection(bank);
+
   if (bill.notes) {
     b.hr().align("left").size("normal").wrapped(slipText(bill.notes));
   }
+
+  // Finalize only after last content line — clearance for head→cutter, then cut.
+  b.normalState();
+  b.feed(b.contentClearanceFeed());
   b.cut();
   return b.toBase64();
 }

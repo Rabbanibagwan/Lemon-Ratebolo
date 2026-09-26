@@ -20,13 +20,14 @@ function escapeHtml(s: string): string {
   return String(s || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
 }
 
-/** Shop Profile bank block — same fields as Vendor Bill screen. */
+/** Shop Profile bank block — same fields as Vendor Bill screen + ESC/POS. */
 function bankLines(profile: ShopProfile): { label: string; value: string }[] {
   const rows: { label: string; value: string }[] = [];
   if (profile.bank_account_holder) rows.push({ label: "A/c Name", value: profile.bank_account_holder });
   if (profile.bank_account_number) rows.push({ label: "A/c No", value: profile.bank_account_number });
   if (profile.bank_ifsc) rows.push({ label: "IFSC", value: profile.bank_ifsc });
   if (profile.bank_name) rows.push({ label: "Bank", value: profile.bank_name });
+  if (profile.bank_branch) rows.push({ label: "Branch", value: profile.bank_branch });
   return rows;
 }
 
@@ -45,8 +46,8 @@ function renderBankThermalHtml(profile: ShopProfile): string {
   if (!rows.length) return "";
   return `
     <div class="hr"></div>
-    <div class="center bold">BANK DETAILS</div>
-    ${rows.map((r) => `<div class="kv"><span class="k">${escapeHtml(r.label)}</span><span class="v wrap">${escapeHtml(r.value)}</span></div>`).join("")}
+    <div class="center bold bankTitle">BANK DETAILS</div>
+    ${rows.map((r) => `<div class="kv bankRow"><span class="k">${escapeHtml(r.label)}</span><span class="v wrap">${escapeHtml(r.value)}</span></div>`).join("")}
   `;
 }
 
@@ -141,11 +142,13 @@ export function renderThermalVendorBillHtml(b: VendorBill, profile: ShopProfile,
   <title>${escapeHtml(b.bill_code)}</title>
   <style>${thermalBaseCss(m)}</style></head><body>
   <div id="slip" class="vendor">
+    <div class="merchant-head">
+      ${shop ? `<div class="shop wrap">${escapeHtml(shop)}</div>` : ""}
+      ${addr ? `<div class="addr wrap">${escapeHtml(addr)}</div>` : ""}
+      ${mobile ? `<div class="addr">Mobile: ${escapeHtml(mobile)}</div>` : ""}
+    </div>
     <div class="patti-head">
       <div class="patti-head-main">
-        ${shop ? `<div class="shop wrap">${escapeHtml(shop)}</div>` : ""}
-        ${addr ? `<div class="addr wrap">${escapeHtml(addr)}</div>` : ""}
-        ${mobile ? `<div class="addr">Mobile: ${escapeHtml(mobile)}</div>` : ""}
         <div class="kind">VENDOR BILL</div>
       </div>
       <div class="numBox"><div class="numLabel">BILL</div><div class="num">${escapeHtml(b.bill_code)}</div></div>

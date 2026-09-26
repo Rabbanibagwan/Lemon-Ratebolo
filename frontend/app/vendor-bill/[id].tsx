@@ -168,17 +168,18 @@ export default function VendorBillDetail() {
 
       <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 140 }}>
         <View style={styles.card}>
+          <View style={styles.merchantHead}>
+            <Text style={styles.shopName}>{(profile?.shop_name || session?.shop_name || "").toUpperCase()}</Text>
+            {(() => {
+              const addr = [profile?.address, profile?.village, profile?.taluk, profile?.district, profile?.state]
+                .filter(Boolean)
+                .join(", ");
+              return addr ? <Text style={styles.shopMeta}>{addr}</Text> : null;
+            })()}
+            {profile?.mobile ? <Text style={styles.shopMeta}>Mobile: {profile.mobile}</Text> : null}
+          </View>
           <View style={styles.rowSpread}>
-            <View>
-              <Text style={styles.shopName}>{(profile?.shop_name || session?.shop_name || "").toUpperCase()}</Text>
-              {(() => {
-                const addr = [profile?.address, profile?.village, profile?.taluk, profile?.district, profile?.state]
-                  .filter(Boolean)
-                  .join(", ");
-                return addr ? <Text style={styles.subInfo}>{addr}</Text> : null;
-              })()}
-              {profile?.mobile ? <Text style={styles.subInfo}>Mobile: {profile.mobile}</Text> : null}
-            </View>
+            <Text style={styles.kindLbl}>VENDOR BILL</Text>
             <View style={styles.billBox}>
               <Text style={styles.billBoxLbl}>BILL</Text>
               <Text style={styles.billBoxNo}>{b.bill_code}</Text>
@@ -217,7 +218,7 @@ export default function VendorBillDetail() {
           <Row label="Paid" value={money(b.paid)} />
           <Row label="Balance Due" value={money(b.balance)} strong />
 
-          {profile?.bank_account_holder || profile?.bank_account_number ? (
+          {profile?.bank_account_holder || profile?.bank_account_number || profile?.bank_ifsc || profile?.bank_name || profile?.bank_branch ? (
             <>
               <View style={styles.divider} />
               <Text style={styles.section}>Bank</Text>
@@ -225,6 +226,7 @@ export default function VendorBillDetail() {
               {profile?.bank_account_number ? <Text style={styles.subInfo}>A/c No: {profile.bank_account_number}</Text> : null}
               {profile?.bank_ifsc ? <Text style={styles.subInfo}>IFSC: {profile.bank_ifsc}</Text> : null}
               {profile?.bank_name ? <Text style={styles.subInfo}>Bank: {profile.bank_name}</Text> : null}
+              {profile?.bank_branch ? <Text style={styles.subInfo}>Branch: {profile.bank_branch}</Text> : null}
             </>
           ) : null}
 
@@ -311,9 +313,18 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 20, fontWeight: "900", color: colors.onSurface, fontFamily: font.display, letterSpacing: -0.3 },
   headerSub: { fontSize: 11, color: colors.muted, letterSpacing: 1, fontWeight: "700" },
   card: { borderWidth: 2, borderColor: colors.borderStrong, padding: spacing.lg, backgroundColor: colors.surface },
+  merchantHead: { width: "100%", alignItems: "center", marginBottom: spacing.sm },
   rowSpread: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
-  shopName: { fontSize: 20, fontWeight: "900", color: colors.onSurface, fontFamily: font.display, letterSpacing: -0.5 },
+  shopName: {
+    fontSize: 20, fontWeight: "900", color: colors.onSurface, fontFamily: font.display, letterSpacing: -0.5,
+    textAlign: "center", width: "100%",
+  },
+  shopMeta: {
+    fontSize: 11, color: colors.muted, marginTop: 2, fontFamily: font.display,
+    textAlign: "center", width: "100%",
+  },
   subInfo: { fontSize: 11, color: colors.muted, marginTop: 2, fontFamily: font.display },
+  kindLbl: { fontSize: 10, letterSpacing: 2, color: colors.muted, fontWeight: "800", fontFamily: font.display, marginTop: 2 },
   billBox: { borderWidth: 2, borderColor: colors.borderStrong, paddingHorizontal: 10, paddingVertical: 6, alignItems: "flex-end" },
   billBoxLbl: { fontSize: 9, letterSpacing: 1, color: colors.muted, fontWeight: "800" },
   billBoxNo: { fontSize: 15, fontFamily: font.mono, fontWeight: "800", color: colors.onSurface },

@@ -81,8 +81,8 @@ function encodePatti(paperMm: number): { b64: string; builder: EscPosBuilder } {
   return { b64: b.toBase64(), builder: b };
 }
 
-/** Mirrors encodeVendorBillEscPos using the shared layout helpers. */
-function encodeBill(paperMm: number): string {
+/** Mirrors encodeVendorBillEscPos — bankLines drive document length before cut. */
+function encodeBill(paperMm: number, bankLines: string[]): { b64: string; builder: EscPosBuilder } {
   const b = new EscPosBuilder(paperMm);
   const bill = {
     bill_code: "VB-001",
@@ -111,11 +111,82 @@ function encodeBill(paperMm: number): string {
     .kv("Commission", rupees(bill.commission_total))
     .kv("Hamali", rupees(bill.hamali))
     .kv("Cess / Other", rupees(bill.cess));
+  b.normalState();
   b.majorTotalBox("GRAND TOTAL", rupees(bill.grand_total));
+  b.normalState();
   b.kv("Paid", rupees(bill.paid));
   b.bold(true).kv("Balance Due", rupees(bill.balance)).bold(false);
+  b.bankDetailsSection(bankLines);
+  b.normalState();
+  b.feed(b.contentClearanceFeed());
   b.cut();
-  return b.toBase64();
+  return { b64: b.toBase64(), builder: b };
+}
+
+const SHORT_BANK = ["A/c Name: MKB CO.", "A/c No: 1234567895"];
+const LONG_BANK = [
+  "A/c Name: MKB CO.",
+  "A/c No: 1234567895",
+  "IFSC: HDFC0001234",
+  "Bank: HDFC Bank",
+  "Branch: Vijayapura",
+];
+
+/** True when every needle appears in decoded text before the first CUT in the buffer. */
+function contentBeforeCut(b64: string, needles: string[]): boolean {
+  const bin = Buffer.from(b64, "base64");
+  let cutAt = bin.length;
+  for (let i = 0; i < bin.length - 1; i++) {
+    if (bin[i] === 0x1d && bin[i + 1] === 0x56) {
+      cutAt = i;
+      break;
+    }
+  }
+  const slice = bin.slice(0, cutAt);
+  let out = "";
+  let i = 0;
+  while (i < slice.length) {
+    const b = slice[i];
+    if (b === 0x0a) {
+      out += "\n";
+      i++;
+      continue;
+    }
+    if (b === 0x1b || b === 0x1d) {
+      if (b === 0x1b && slice[i + 1] === 0x40) {
+        i += 2;
+        continue;
+      }
+      if (
+        (b === 0x1b && (slice[i + 1] === 0x61 || slice[i + 1] === 0x45 || slice[i + 1] === 0x2d || slice[i + 1] === 0x4d)) ||
+        (b === 0x1d && (slice[i + 1] === 0x21 || slice[i + 1] === 0x42))
+      ) {
+        i += 3;
+        continue;
+      }
+      if (b === 0x1d && (slice[i + 1] === 0x57 || slice[i + 1] === 0x4c)) {
+        i += 4;
+        continue;
+      }
+      if (b === 0x1d && slice[i + 1] === 0x28 && slice[i + 2] === 0x6b) {
+        const plen = slice[i + 3] + (slice[i + 4] << 8);
+        i += 5 + plen;
+        continue;
+      }
+      i += 2;
+      continue;
+    }
+    if (b >= 32 && b < 127) {
+      out += String.fromCharCode(b);
+      i++;
+      continue;
+    }
+    i++;
+  }
+  // No printable content after CUT either.
+  const after = bin.slice(cutAt + (bin[cutAt + 2] >= 65 ? 4 : 3));
+  const afterHasText = [...after].some((c) => c >= 32 && c < 127);
+  return !afterHasText && needles.every((n) => out.includes(n));
 }
 
 function decodeEscPosText(b64: string): string {
@@ -347,23 +418,44 @@ for (const mm of widths) {
   const lengthMm = pattiBuilder.estimateLengthMm();
   assert(lengthMm >= 110 && lengthMm <= 190, `${mm} length ~6in: ${lengthMm.toFixed(1)}mm out of 110–190`);
 
-  const billText = decodeEscPosText(encodeBill(mm));
+  const shortEnc = encodeBill(mm, SHORT_BANK);
+  const longEnc = encodeBill(mm, LONG_BANK);
+  const billText = decodeEscPosText(longEnc.b64);
   for (const line of billText.split("\n")) {
     if (line && line.length > cfg.columns) throw new Error(`Bill ${mm} overflow: ${line.length} "${line}"`);
   }
+  // Separators / full-width rows must reach the right content boundary
+  const hrLine = billText.split("\n").find((ln) => /^-+$/.test(ln));
+  assert(!!hrLine && hrLine!.length === cfg.columns, `${mm} vendor hr width ${hrLine?.length} != ${cfg.columns}`);
+
   assert(billText.includes("Lemon"), "Lemon");
   assert(!billText.includes("Goods"), "no Goods");
   assert(billText.includes("GRAND TOTAL"), "grand");
   assert(billText.includes("Cess / Other"), "cess");
   assert(billText.includes("FARMER"), "farmer col");
+  assert(billText.includes("BANK DETAILS"), "bank title");
+  for (const row of LONG_BANK) assert(billText.includes(row), `long bank: ${row}`);
 
-  const billAnalysis = analyzeEscPos(encodeBill(mm));
+  const billAnalysis = analyzeEscPos(longEnc.b64);
+  assert(billAnalysis.shopHeaderCentered, `${mm} vendor merchant header centered`);
   assert(!billAnalysis.netPayableUsesReverse && billAnalysis.reverseOnCount === 0, `${mm} bill no inverse`);
+  assert(billAnalysis.hasCut && billAnalysis.cutIsFeedAndCut, `${mm} vendor cut`);
+  assert(billAnalysis.gsWDots === cfg.contentDots, `${mm} vendor GS W`);
+  assert(contentBeforeCut(longEnc.b64, ["BANK DETAILS", ...LONG_BANK]), `${mm} long bank before CUT`);
+  assert(contentBeforeCut(shortEnc.b64, ["BANK DETAILS", ...SHORT_BANK]), `${mm} short bank before CUT`);
+  // Long bank doc must be taller than short (content-driven, not fixed height)
+  assert(
+    longEnc.builder.estimateLengthMm() > shortEnc.builder.estimateLengthMm(),
+    `${mm} long bank taller than short`,
+  );
+
+  const [vl, vf, vb, va] = longEnc.builder.lineWidths4();
+  assert(vl + vf + vb + va === cfg.columns, `${mm} vendor 4-col fill`);
 
   results[`${mm}mm`] =
-    `PASS cols=${cfg.columns} dots=${cfg.dots} qrMod=${mod} lfAfterQr=${analysis.lfAfterQrPrint} len≈${lengthMm.toFixed(0)}mm centerHeader=YES`;
+    `PASS cols=${cfg.columns} dots=${cfg.dots} qrMod=${mod} lfAfterQr=${analysis.lfAfterQrPrint} len≈${lengthMm.toFixed(0)}mm centerHeader=YES vendorBank=COMPLETE`;
   console.log(`\n=== PATTI ${mm}mm (${cfg.columns} cols / ${cfg.dots} dots, ~${lengthMm.toFixed(0)}mm) ===\n${pattiText}`);
-  console.log(`\n=== VENDOR ${mm}mm (${cfg.columns} cols) ===\n${billText}`);
+  console.log(`\n=== VENDOR ${mm}mm LONG BANK (${cfg.columns} cols) ===\n${billText}`);
 }
 
 // Source wiring checks
@@ -375,6 +467,9 @@ assert(docs.includes('kv("Lemon"'), "docs Lemon");
 assert(docs.includes("GRAND TOTAL"), "docs GRAND TOTAL");
 assert(docs.includes("qrSection"), "docs qrSection");
 assert(docs.includes("normalState"), "docs normalState");
+assert(docs.includes("bankDetailsSection"), "docs bankDetailsSection");
+assert(docs.includes("contentClearanceFeed"), "docs contentClearanceFeed");
+assert(docs.includes("bank_branch"), "docs bank_branch");
 
 const escposSrc = readFileSync(join(__dirname, "../src/utils/escpos.ts"), "utf8");
 assert(escposSrc.includes("thermalWidthConfig"), "thermalWidthConfig exported");
@@ -397,22 +492,28 @@ const btMod = readFileSync(
   "utf8",
 );
 assert(btMod.includes("chunkSize"), "BT write is chunked");
+assert(btMod.includes("settleMs"), "BT settle after full payload");
 
 const vendorPrint = readFileSync(join(__dirname, "../src/utils/vendor-bill-print.ts"), "utf8");
 assert(vendorPrint.includes('class="farm"'), "thermal HTML 4-col");
 assert(vendorPrint.includes("GRAND TOTAL"), "thermal HTML grand");
 assert(vendorPrint.includes("Lemon"), "thermal HTML Lemon");
+assert(vendorPrint.includes('class="merchant-head"'), "vendor HTML merchant-head");
+assert(vendorPrint.includes("bankRow"), "vendor HTML bankRow");
+assert(vendorPrint.includes("bank_branch"), "vendor HTML bank_branch");
 
 const idSrc = readFileSync(join(__dirname, "../app/vendor-bill/[id].tsx"), "utf8");
 assert(idSrc.includes('label="Lemon"'), "UI Lemon");
 assert(!idSrc.includes("Goods (×"), "UI no Goods calc");
+assert(idSrc.includes("merchantHead"), "UI merchantHead");
 
 console.log("\nRESULTS:");
 for (const [k, v] of Object.entries(results)) console.log(`  ${k}: ${v}`);
-console.log("  Merchant header centered: PASS");
-console.log("  Net Payable inverse: PASS (disabled)");
-console.log("  Net Payable bold black / white bg: PASS");
-console.log("  ~6-inch length band: PASS");
+console.log("  Merchant header centered (Patti + Vendor): PASS");
+console.log("  Net Payable / Grand Total inverse: PASS (disabled)");
+console.log("  Net Payable / Grand Total bold black / white bg: PASS");
+console.log("  Short + long Bank Details before CUT: PASS");
+console.log("  Content-driven Vendor Bill length: PASS");
 console.log("  QR clearance + feed-and-cut: PASS");
-console.log("  BT chunked write: PASS");
+console.log("  BT chunked write + settle: PASS");
 console.log("ALL WIDTHS OK");

@@ -351,14 +351,17 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       min-width: 0;
       text-align: left;
     }
-    /* Farmer Patti: merchant shop / address / mobile centered; title+NO. unchanged */
-    #slip.patti .merchant-head {
+    /* Merchant shop / address / mobile centered; title+NO. / BILL unchanged */
+    #slip.patti .merchant-head,
+    #slip.vendor .merchant-head {
       width: 100%;
       text-align: center !important;
       margin: 0 0 4px 0;
     }
     #slip.patti .merchant-head .shop,
-    #slip.patti .merchant-head .addr {
+    #slip.patti .merchant-head .addr,
+    #slip.vendor .merchant-head .shop,
+    #slip.vendor .merchant-head .addr {
       text-align: center !important;
       margin-left: auto;
       margin-right: auto;
@@ -496,9 +499,12 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       font-family: "Times New Roman", Times, "Liberation Serif", Georgia, serif !important;
     }
     #slip.vendor {
-      padding-left: ${m.pattiPadX}px !important;
-      padding-right: ${m.pattiPadX}px !important;
+      /* Minimal side inset — content uses nearly full selected paper width */
+      padding-left: ${Math.max(2, Math.round(m.pattiPadX * 0.4))}px !important;
+      padding-right: ${Math.max(2, Math.round(m.pattiPadX * 0.4))}px !important;
       box-sizing: border-box !important;
+      width: 100% !important;
+      max-width: 100% !important;
     }
     /* Same 4-col geometry as on-screen Vendor Bill preview. */
     #slip.vendor .row {
@@ -587,6 +593,8 @@ export function estimateThermalHeightMm(html: string, paperMm: number): number {
   const drvTr = (html.match(/class="drv-tr"/g) || []).length;
   const tableRows = rows > 0 || drvTr > 0 ? 0 : (html.match(/<tr[\s>]/gi) || []).length;
   const hasQr = /class="qr"/i.test(html);
+  // bankRow also has class=kv (already counted); use bankRows only for extra cutter margin.
+  const bankRows = (html.match(/class="[^"]*\bbankRow\b/g) || []).length;
   const lineMm = (m.rowFs + 3) * pxToMm;
   const compactRowMm = Math.max(2.4, (m.rowFs + 1) * pxToMm);
   const bigMm = (m.bigFs + 3) * pxToMm;
@@ -603,7 +611,8 @@ export function estimateThermalHeightMm(html: string, paperMm: number): number {
     hrs * 1.1 +
     nets * (m.hugeFs + 18) * pxToMm +
     (hasQr ? (m.qrPx + 14) * pxToMm : 0) +
-    10; // safety buffer: Android WebView line-height rounding + tear margin
+    // Content-driven: more Bank Details → taller page (kv count) + tear margin.
+    (bankRows > 0 ? 16 + bankRows * 0.5 : 10);
   return Math.max(28, Math.ceil(contentMm));
 }
 
