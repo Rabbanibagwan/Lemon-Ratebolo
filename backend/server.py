@@ -22,6 +22,9 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from passlib.context import CryptContext
 from pydantic import BaseModel, Field
 
+from driver_ranges import pick_driver as _pick_driver
+from driver_ranges import validate_driver_ranges as _validate_driver_ranges
+
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -186,19 +189,6 @@ def _ist_date_str(when: Optional[datetime] = None) -> str:
     if d.tzinfo is None:
         d = d.replace(tzinfo=timezone.utc)
     return d.astimezone(_IST).strftime("%Y-%m-%d")
-
-
-def _lot_first_num(lot_no: str) -> Optional[int]:
-    """Extract the first integer before '/' in a lot number like '35/2'. Returns None if not parseable."""
-    if not lot_no:
-        return None
-    m = re.match(r"^\s*(\d+)", lot_no.strip())
-    if not m:
-        return None
-    try:
-        return int(m.group(1))
-    except ValueError:
-        return None
 
 
 def _parse_lot_no_str(s: str) -> tuple[Optional[int], Optional[int]]:
@@ -1062,16 +1052,6 @@ async def _day_stats(day: dict) -> dict:
     }
 
 
-def _pick_driver(drivers: List[dict], lot_no: str) -> tuple[Optional[str], Optional[str], Optional[float]]:
-    n = _lot_first_num(lot_no)
-    if n is None:
-        return None, None, None
-    for d in drivers:
-        if d["range_from"] <= n <= d["range_to"]:
-            return d["name"], d.get("place"), float(d["bhada_per_bag"])
-    return None, None, None
-
-
 @api.get("/auction-days/today", response_model=AuctionDayOut)
 async def today_day(user=Depends(current_user), date: Optional[str] = None):
     d = date or _today_str()
@@ -1083,17 +1063,10 @@ async def today_day(user=Depends(current_user), date: Optional[str] = None):
 
 @api.put("/auction-days/{day_id}", response_model=AuctionDayOut)
 async def update_day(day_id: str, body: AuctionDayIn, user=Depends(current_user)):
-    # validate ranges + non-overlap
-    for d in body.drivers:
-        if d.range_from > d.range_to:
-            raise HTTPException(400, f"Driver {d.name}: range_from > range_to")
-    sorted_d = sorted(body.drivers, key=lambda x: x.range_from)
-    for i in range(1, len(sorted_d)):
-        if sorted_d[i].range_from <= sorted_d[i - 1].range_to:
-            raise HTTPException(
-                400,
-                f"Driver ranges overlap: {sorted_d[i - 1].name} ({sorted_d[i - 1].range_from}-{sorted_d[i - 1].range_to}) and {sorted_d[i].name} ({sorted_d[i].range_from}-{sorted_d[i].range_to})",
-            )
+    # validate ranges + non-overlap (shared helper — same rules as Driver Day Setup UI)
+    range_err = _validate_driver_ranges(body.drivers)
+    if range_err:
+        raise HTTPException(400, range_err)
     day = await db.auction_days.find_one_and_update(
         {"id": day_id, "shop_id": user["shop_id"]},
         {"$set": {"drivers": [d.model_dump() for d in body.drivers], "date": body.date, "updated_at": utc_now()}},

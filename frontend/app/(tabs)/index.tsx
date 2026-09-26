@@ -158,6 +158,20 @@ export default function Home() {
           </>
         )}
 
+        <Text style={[styles.sectionLabel, { marginTop: spacing.xl }]}>Driver</Text>
+        <Pressable
+          style={({ pressed }) => [styles.setDriverBtn, pressed && { opacity: 0.9 }]}
+          onPress={() => router.push({ pathname: "/(tabs)/auction", params: { editDrivers: "1" } })}
+          testID="quick-set-driver"
+        >
+          <Ionicons name="car-outline" size={22} color={colors.onBrandPrimary} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.setDriverTitle}>SET DRIVER</Text>
+            <Text style={styles.setDriverSub}>Driver Day Setup · lot ranges for {displayDate}</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={colors.onBrandPrimary} />
+        </Pressable>
+
         <Text style={[styles.sectionLabel, { marginTop: spacing.xl }]}>Quick Actions</Text>
         <View style={styles.quickRow}>
           <QuickTile icon="search-outline" label="Search" onPress={() => router.push("/search")} testID="quick-search" />
@@ -229,6 +243,32 @@ const styles = StyleSheet.create({
   kpiLabel: { fontSize: 11, letterSpacing: 1.5, textTransform: "uppercase", color: colors.muted, fontFamily: font.display, fontWeight: "800" },
   kpiValue: { fontSize: 22, fontWeight: "800", color: colors.onSurface, fontFamily: font.mono },
   kpiValueBig: { fontSize: 32 },
+  setDriverBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    backgroundColor: colors.brandPrimary,
+    borderWidth: 2,
+    borderColor: colors.brand,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    minHeight: 64,
+  },
+  setDriverTitle: {
+    color: colors.onBrandPrimary,
+    fontFamily: font.display,
+    fontWeight: "900",
+    letterSpacing: 1.2,
+    fontSize: 15,
+  },
+  setDriverSub: {
+    color: colors.onBrandPrimary,
+    opacity: 0.9,
+    fontFamily: font.display,
+    fontWeight: "600",
+    fontSize: 12,
+    marginTop: 2,
+  },
   quickRow: { flexDirection: "row", gap: spacing.sm, flexWrap: "wrap" },
   quickTile: {
     flexBasis: "31%", flexGrow: 1, borderWidth: 2, borderColor: colors.borderStrong, padding: spacing.md,
