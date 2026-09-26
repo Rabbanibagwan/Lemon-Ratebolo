@@ -7,6 +7,7 @@ import { ShopProfile, VendorBill } from "@/src/api";
 import { printThermalDocument } from "@/src/utils/thermal-connection";
 import { encodeVendorBillEscPos } from "@/src/utils/thermal-escpos-docs";
 import { resolvePrintPaperMm } from "@/src/utils/printer-prefs";
+import { buildVendorBillPrintDocument, logPrintDocument } from "@/src/utils/print-document";
 import {
   thermalBaseCss,
   thermalMetrics,
@@ -176,6 +177,8 @@ export async function thermalPrintVendorBill(
   paperMm?: number,
 ): Promise<void> {
   const mm = await resolvePrintPaperMm(paperMm);
+  // Canonical document — shared values for HTML + ESC/POS (no dual total math).
+  logPrintDocument(buildVendorBillPrintDocument(b, profile, { paperMm: mm }));
   const html = renderThermalVendorBillHtml(b, profile, mm);
   await printThermalDocument({
     html,

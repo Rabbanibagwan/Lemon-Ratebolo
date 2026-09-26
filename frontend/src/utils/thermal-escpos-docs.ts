@@ -1,5 +1,6 @@
 import { LedgerDetail, Patti, ShopProfile, VendorBill } from "@/src/api";
 import { EscPosBuilder, rupees, slipText } from "@/src/utils/escpos";
+import { pattiDisplayAmount, pattiDisplayRate } from "@/src/utils/print-document";
 import { thermalBaseCss, thermalMetrics } from "@/src/utils/thermal-print";
 
 export type CashBookLine = { side: "JAMMA" | "KHAR"; amount: number; details: string };
@@ -40,8 +41,8 @@ export function encodeFarmerPattiEscPos(
   for (const lot of p.lots) {
     lot.sales.forEach((s, i) => {
       const lotNo = i === 0 ? String(lot.lot_no || `${lot.lot_serial_no}/${lot.total_bags}`) : "";
-      const mid = `${s.bags} x ${rupees(s.rate_per_bag * p.payment_factor)}`;
-      b.itemRowLotEmph(lotNo, mid, rupees(s.bags * s.rate_per_bag * p.payment_factor));
+      const mid = `${s.bags} x ${rupees(pattiDisplayRate(s.rate_per_bag, p.payment_factor))}`;
+      b.itemRowLotEmph(lotNo, mid, rupees(pattiDisplayAmount(s.bags, s.rate_per_bag, p.payment_factor)));
     });
   }
 

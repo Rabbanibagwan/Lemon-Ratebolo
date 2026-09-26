@@ -14,6 +14,7 @@ import { colors, font, money, spacing } from "@/src/theme";
 import { Button, Input } from "@/src/components/ui";
 import { qrDataUri } from "@/src/utils/qr";
 import { thermalPrintAndMark, sharePattiPdf, canUserPrintPatti, canUserSharePatti, staffPrintBlockedMessage, staffShareBlockedMessage } from "@/src/utils/patti-print";
+import { pattiDisplayAmount, pattiDisplayRate } from "@/src/utils/print-document";
 import { clampPaperMm, thermalPrintUserMessage } from "@/src/utils/thermal-print";
 import { routeParam } from "@/src/utils/route-params";
 
@@ -401,10 +402,10 @@ export default function PattiDetail() {
                   <Text style={[styles.lineCell, styles.mono, { flex: 1.6, textAlign: "right" }]}>
                     <Text style={styles.lineBags}>{s.bags}</Text>
                     {" × "}
-                    {money(s.rate_per_bag * p.payment_factor)}
+                    {money(pattiDisplayRate(s.rate_per_bag, p.payment_factor))}
                   </Text>
                   <Text style={[styles.lineCell, styles.mono, { flex: 1, textAlign: "right" }]}>
-                    {money(s.bags * s.rate_per_bag * p.payment_factor)}
+                    {money(pattiDisplayAmount(s.bags, s.rate_per_bag, p.payment_factor))}
                   </Text>
                 </View>
               ))}
