@@ -269,6 +269,49 @@ export type BagWallet = {
   total_available: number;
   price_per_bag: number;
   low_balance: boolean;
+  /** Admin-allocated free bags not yet claimed (not in usable balance). */
+  free_available_to_claim?: number;
+};
+
+export type FreeBagAllocation = {
+  id: string;
+  shop_id: string;
+  shop_name?: string | null;
+  username?: string | null;
+  bags: number;
+  year: number;
+  month: number;
+  period_label: string;
+  status: "AVAILABLE" | "CLAIMED" | "EXPIRED" | "CANCELLED" | string;
+  reason?: string | null;
+  allocated_at: string;
+  claimed_at?: string | null;
+  claim_ref?: string | null;
+  claim_transaction_id?: string | null;
+  created_by_admin_username?: string | null;
+};
+
+export type FreeBagSummary = {
+  shop_id: string;
+  allocated: number;
+  claimed: number;
+  used: number;
+  remaining: number;
+  available_to_claim: number;
+};
+
+export type MerchantNotification = {
+  id: string;
+  shop_id: string;
+  kind: string;
+  title: string;
+  body: string;
+  action?: string | null;
+  allocation_id?: string | null;
+  bags?: number | null;
+  read: boolean;
+  created_at: string;
+  read_at?: string | null;
 };
 
 export type BagPurchase = {

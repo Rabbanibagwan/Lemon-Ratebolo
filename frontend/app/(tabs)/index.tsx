@@ -107,6 +107,19 @@ export default function Home() {
         {isOwner && wallet ? (
           <>
             <Text style={[styles.sectionLabel, { marginTop: spacing.xl }]}>Bag Balance</Text>
+            {(wallet.free_available_to_claim || 0) > 0 ? (
+              <Pressable
+                style={styles.freeClaimHome}
+                onPress={() => router.push({ pathname: "/billing", params: { tab: "free" } })}
+                testID="home-free-bags-claim"
+              >
+                <Text style={styles.freeClaimHomeTitle}>
+                  🎁 You have received {wallet.free_available_to_claim!.toLocaleString()} free bags
+                </Text>
+                <Text style={styles.freeClaimHomeSub}>Claim them now to add them to your Bag Balance.</Text>
+                <Text style={styles.freeClaimHomeCta}>CLAIM FREE BAGS →</Text>
+              </Pressable>
+            ) : null}
             <Pressable
               style={styles.bagCard}
               onPress={() => router.push("/billing")}
@@ -230,6 +243,24 @@ const styles = StyleSheet.create({
   fabText: { color: colors.onBrandPrimary, fontFamily: font.display, fontWeight: "900", letterSpacing: 1, fontSize: 14 },
   bagCard: {
     borderWidth: 2, borderColor: colors.borderStrong, padding: spacing.md, gap: 4, backgroundColor: colors.surface,
+  },
+  freeClaimHome: {
+    borderWidth: 2,
+    borderColor: colors.brandPrimary,
+    backgroundColor: colors.brandSecondary,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+    gap: 4,
+  },
+  freeClaimHomeTitle: { fontSize: 14, fontWeight: "900", fontFamily: font.display, color: colors.onBrandSecondary },
+  freeClaimHomeSub: { fontSize: 12, fontFamily: font.display, color: colors.onBrandSecondary },
+  freeClaimHomeCta: {
+    marginTop: 6,
+    fontSize: 12,
+    letterSpacing: 1,
+    fontWeight: "900",
+    fontFamily: font.display,
+    color: colors.brandPrimary,
   },
   bagAvailLabel: { fontSize: 11, letterSpacing: 1.5, color: colors.muted, fontFamily: font.display, fontWeight: "800" },
   bagAvailValue: { fontSize: 26, fontWeight: "900", fontFamily: font.mono, color: colors.onSurface },
