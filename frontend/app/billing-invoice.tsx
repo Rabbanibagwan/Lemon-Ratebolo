@@ -7,7 +7,12 @@ import { Ionicons } from "@expo/vector-icons";
 import { api, apiErrorMessage, BagInvoice } from "@/src/api";
 import { Button } from "@/src/components/ui";
 import { colors, font, money, spacing } from "@/src/theme";
-import { previewBagInvoice, shareBagInvoicePdf } from "@/src/utils/bag-invoice-print";
+import {
+  previewBagInvoice,
+  resolveBagInvoiceGst,
+  resolveBagInvoiceSeller,
+  shareBagInvoicePdf,
+} from "@/src/utils/bag-invoice-print";
 
 function routeParam(v: string | string[] | undefined): string {
   if (Array.isArray(v)) return v[0] || "";
@@ -84,6 +89,8 @@ export default function BillingInvoiceScreen() {
   };
 
   const to = inv?.billing_to;
+  const seller = inv ? resolveBagInvoiceSeller(inv.seller) : null;
+  const gst = inv ? resolveBagInvoiceGst(inv) : null;
 
   return (
     <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
@@ -98,30 +105,24 @@ export default function BillingInvoiceScreen() {
       </View>
 
       <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 48 }} testID="billing-invoice-scroll">
-        {loading || !inv ? (
+        {loading || !inv || !seller || !gst ? (
           <Text style={styles.hint}>{loading ? "Loading invoice…" : "Invoice not found."}</Text>
         ) : (
           <View style={styles.card} testID="billing-invoice-card">
             <Text style={styles.brand} testID="invoice-seller-brand">
-              {(inv.seller?.brand || inv.seller?.name || "LEMON MANDI").trim()}
+              {seller.brand}
             </Text>
-            {inv.seller?.legal_name ? (
-              <Text style={styles.legal} testID="invoice-seller-legal">
-                {inv.seller.legal_name}
+            <Text style={styles.legal} testID="invoice-seller-legal">
+              {seller.legal_name}
+            </Text>
+            {seller.address_lines.map((line, i) => (
+              <Text key={`seller-addr-${i}`} style={styles.meta} testID={`invoice-seller-addr-${i}`}>
+                {line}
               </Text>
-            ) : null}
-            {(inv.seller?.address_lines || []).map((line, i) =>
-              line ? (
-                <Text key={`seller-addr-${i}`} style={styles.meta} testID={`invoice-seller-addr-${i}`}>
-                  {line}
-                </Text>
-              ) : null,
-            )}
-            {inv.seller?.gstin ? (
-              <Text style={styles.meta} testID="invoice-seller-gstin">
-                GSTIN: {inv.seller.gstin}
-              </Text>
-            ) : null}
+            ))}
+            <Text style={styles.meta} testID="invoice-seller-gstin">
+              GSTIN: {seller.gstin}
+            </Text>
             <Text style={styles.kind}>TAX INVOICE — BAG BALANCE</Text>
 
             <View style={styles.hr} />
@@ -152,30 +153,13 @@ export default function BillingInvoiceScreen() {
               testID="invoice-calc"
             />
             <Row label="Taxable Amount" value={money(inv.base_amount)} mono testID="invoice-taxable" />
-            {(inv.gst_supply_type || "").toUpperCase() === "INTER" || (inv.igst_amount || 0) > 0 ? (
-              <Row
-                label={`IGST (${inv.igst_percent ?? inv.gst_percent}%)`}
-                value={money(inv.igst_amount ?? inv.gst_amount)}
-                mono
-                testID="invoice-igst"
-              />
-            ) : (inv.cgst_amount || 0) > 0 || (inv.sgst_amount || 0) > 0 || (inv.gst_supply_type || "").toUpperCase() === "INTRA" ? (
-              <>
-                <Row
-                  label={`CGST (${inv.cgst_percent ?? inv.gst_percent / 2}%)`}
-                  value={money(inv.cgst_amount || 0)}
-                  mono
-                  testID="invoice-cgst"
-                />
-                <Row
-                  label={`SGST (${inv.sgst_percent ?? inv.gst_percent / 2}%)`}
-                  value={money(inv.sgst_amount || 0)}
-                  mono
-                  testID="invoice-sgst"
-                />
-              </>
+            {gst.supply === "INTER" ? (
+              <Row label={`IGST (${gst.igstPct}%)`} value={money(gst.igstAmt)} mono testID="invoice-igst" />
             ) : (
-              <Row label={`GST (${inv.gst_percent}%)`} value={money(inv.gst_amount)} mono testID="invoice-gst" />
+              <>
+                <Row label={`CGST (${gst.cgstPct}%)`} value={money(gst.cgstAmt)} mono testID="invoice-cgst" />
+                <Row label={`SGST (${gst.sgstPct}%)`} value={money(gst.sgstAmt)} mono testID="invoice-sgst" />
+              </>
             )}
             <View style={styles.totalBox} testID="invoice-total">
               <Text style={styles.totalLabel}>TOTAL AMOUNT</Text>

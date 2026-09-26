@@ -3,8 +3,23 @@ import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import { Platform, Share } from "react-native";
 
-import type { BagInvoice } from "@/src/api";
+import type { BagInvoice, BagInvoiceSeller } from "@/src/api";
 import { showInPageThermalPreview } from "@/src/utils/thermal-print";
+
+/** Canonical Lemon Mandi / Rbolo GST supplier — kept in sync with backend.billing. */
+export const BAG_INVOICE_SUPPLIER: Required<
+  Pick<BagInvoiceSeller, "brand" | "legal_name" | "address_lines" | "gstin">
+> = {
+  brand: "LEMON MANDI",
+  legal_name: "Rbolo Info Services Private Limited",
+  address_lines: [
+    "MUJAWAR MOHALLA BABALESHWAR NAKA IBRAHIM ROZA VIJAYPUR,",
+    "BIJAPUR - 586101",
+  ],
+  gstin: "29AAMCR3486L1ZI",
+};
+
+const SUPPLIER_STATE_CODE = "29";
 
 function fmt(n: number): string {
   return "₹" + (Number.isFinite(n) ? n : 0).toLocaleString("en-IN", {
@@ -32,39 +47,108 @@ function fmtDate(iso?: string | null): string {
   }
 }
 
-function gstRowsHtml(inv: BagInvoice): string {
-  const supply = (inv.gst_supply_type || "").toUpperCase();
-  const cgstAmt = Number(inv.cgst_amount) || 0;
-  const sgstAmt = Number(inv.sgst_amount) || 0;
-  const igstAmt = Number(inv.igst_amount) || 0;
-  const cgstPct = Number(inv.cgst_percent) || 0;
-  const sgstPct = Number(inv.sgst_percent) || 0;
-  const igstPct = Number(inv.igst_percent) || 0;
+function round2(n: number): number {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
+export function resolveBagInvoiceSeller(seller?: BagInvoiceSeller | null): typeof BAG_INVOICE_SUPPLIER {
+  const addr = Array.isArray(seller?.address_lines)
+    ? seller!.address_lines!.map((l) => String(l || "").trim()).filter(Boolean)
+    : [];
+  return {
+    brand: (seller?.brand || seller?.name || BAG_INVOICE_SUPPLIER.brand).trim() || BAG_INVOICE_SUPPLIER.brand,
+    legal_name: (seller?.legal_name || BAG_INVOICE_SUPPLIER.legal_name).trim(),
+    address_lines: addr.length ? addr : [...BAG_INVOICE_SUPPLIER.address_lines],
+    gstin: (seller?.gstin || BAG_INVOICE_SUPPLIER.gstin).trim(),
+  };
+}
+
+/** Prefer API GST split; if missing (older backend), derive CGST/SGST vs IGST. */
+export function resolveBagInvoiceGst(inv: BagInvoice): {
+  supply: "INTRA" | "INTER";
+  cgstPct: number;
+  cgstAmt: number;
+  sgstPct: number;
+  sgstAmt: number;
+  igstPct: number;
+  igstAmt: number;
+  gstPct: number;
+  gstAmt: number;
+} {
   const gstPct = Number(inv.gst_percent) || 0;
   const gstAmt = Number(inv.gst_amount) || 0;
+  const hasSplit =
+    (inv.gst_supply_type || "").length > 0 ||
+    (Number(inv.cgst_amount) || 0) > 0 ||
+    (Number(inv.sgst_amount) || 0) > 0 ||
+    (Number(inv.igst_amount) || 0) > 0;
 
-  if (supply === "INTER" || igstAmt > 0) {
-    return `<div class="trow"><span>IGST (${igstPct || gstPct}%)</span><span class="mono">${fmt(igstAmt || gstAmt)}</span></div>`;
+  if (hasSplit) {
+    const supply = (inv.gst_supply_type || "").toUpperCase() === "INTER" || (Number(inv.igst_amount) || 0) > 0
+      ? "INTER"
+      : "INTRA";
+    return {
+      supply,
+      cgstPct: Number(inv.cgst_percent) || (supply === "INTRA" ? gstPct / 2 : 0),
+      cgstAmt: Number(inv.cgst_amount) || 0,
+      sgstPct: Number(inv.sgst_percent) || (supply === "INTRA" ? gstPct / 2 : 0),
+      sgstAmt: Number(inv.sgst_amount) || 0,
+      igstPct: Number(inv.igst_percent) || (supply === "INTER" ? gstPct : 0),
+      igstAmt: Number(inv.igst_amount) || (supply === "INTER" ? gstAmt : 0),
+      gstPct,
+      gstAmt,
+    };
   }
-  if (cgstAmt > 0 || sgstAmt > 0 || supply === "INTRA") {
-    return (
-      `<div class="trow"><span>CGST (${cgstPct || gstPct / 2}%)</span><span class="mono">${fmt(cgstAmt)}</span></div>` +
-      `<div class="trow"><span>SGST (${sgstPct || gstPct / 2}%)</span><span class="mono">${fmt(sgstAmt)}</span></div>`
-    );
+
+  const buyerGstin = (inv.billing_to?.gst_number || "").trim().toUpperCase();
+  const buyerCode = buyerGstin.length >= 2 && /^\d{2}/.test(buyerGstin) ? buyerGstin.slice(0, 2) : SUPPLIER_STATE_CODE;
+  const intra = buyerCode === SUPPLIER_STATE_CODE;
+  if (intra) {
+    const halfPct = round2(gstPct / 2);
+    const cgstAmt = round2(gstAmt / 2);
+    return {
+      supply: "INTRA",
+      cgstPct: halfPct,
+      cgstAmt,
+      sgstPct: halfPct,
+      sgstAmt: round2(gstAmt - cgstAmt),
+      igstPct: 0,
+      igstAmt: 0,
+      gstPct,
+      gstAmt,
+    };
   }
-  // Legacy payloads without split fields.
-  return `<div class="trow"><span>GST (${gstPct}%)</span><span class="mono">${fmt(gstAmt)}</span></div>`;
+  return {
+    supply: "INTER",
+    cgstPct: 0,
+    cgstAmt: 0,
+    sgstPct: 0,
+    sgstAmt: 0,
+    igstPct: gstPct,
+    igstAmt: gstAmt,
+    gstPct,
+    gstAmt,
+  };
+}
+
+function gstRowsHtml(inv: BagInvoice): string {
+  const g = resolveBagInvoiceGst(inv);
+  if (g.supply === "INTER") {
+    return `<div class="trow"><span>IGST (${g.igstPct}%)</span><span class="mono">${fmt(g.igstAmt)}</span></div>`;
+  }
+  return (
+    `<div class="trow"><span>CGST (${g.cgstPct}%)</span><span class="mono">${fmt(g.cgstAmt)}</span></div>` +
+    `<div class="trow"><span>SGST (${g.sgstPct}%)</span><span class="mono">${fmt(g.sgstAmt)}</span></div>`
+  );
 }
 
 export function renderBagInvoiceHtml(inv: BagInvoice): string {
   const to = inv.billing_to || ({} as BagInvoice["billing_to"]);
-  const seller = inv.seller || {};
-  const brand = (seller.brand || seller.name || "LEMON MANDI").trim() || "LEMON MANDI";
-  const legal = (seller.legal_name || "").trim();
-  const addrLines = Array.isArray(seller.address_lines)
-    ? seller.address_lines.map((l) => String(l || "").trim()).filter(Boolean)
-    : [];
-  const gstin = (seller.gstin || "").trim();
+  const seller = resolveBagInvoiceSeller(inv.seller);
+  const brand = seller.brand;
+  const legal = seller.legal_name;
+  const addrLines = seller.address_lines;
+  const gstin = seller.gstin;
   const bags = Number(inv.bags) || 0;
   const price = Number(inv.price_per_bag) || 0;
   const base = Number(inv.base_amount) || 0;
