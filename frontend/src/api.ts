@@ -298,19 +298,37 @@ export type BagInvoiceBillingTo = {
   pan_number?: string;
 };
 
+export type BagInvoiceSeller = {
+  brand?: string;
+  name?: string;
+  legal_name?: string;
+  address_lines?: string[];
+  gstin?: string;
+  /** @deprecated removed from supplier identity; ignored if present */
+  description?: string;
+};
+
 export type BagInvoice = {
   purchase_id: string;
   invoice_number: string;
   invoice_date: string;
   status: string;
   billing_to: BagInvoiceBillingTo;
-  seller: { name: string; description?: string };
+  seller: BagInvoiceSeller;
   service_hsn_code: string;
   bags: number;
   price_per_bag: number;
   base_amount: number;
   gst_percent: number;
   gst_amount: number;
+  cgst_percent?: number;
+  cgst_amount?: number;
+  sgst_percent?: number;
+  sgst_amount?: number;
+  igst_percent?: number;
+  igst_amount?: number;
+  gst_supply_type?: "INTRA" | "INTER" | string;
+  place_of_supply_state_code?: string;
   total_amount: number;
   line_description: string;
   payment_ref?: string | null;

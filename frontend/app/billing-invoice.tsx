@@ -102,6 +102,30 @@ export default function BillingInvoiceScreen() {
           <Text style={styles.hint}>{loading ? "Loading invoice…" : "Invoice not found."}</Text>
         ) : (
           <View style={styles.card} testID="billing-invoice-card">
+            <Text style={styles.brand} testID="invoice-seller-brand">
+              {(inv.seller?.brand || inv.seller?.name || "LEMON MANDI").trim()}
+            </Text>
+            {inv.seller?.legal_name ? (
+              <Text style={styles.legal} testID="invoice-seller-legal">
+                {inv.seller.legal_name}
+              </Text>
+            ) : null}
+            {(inv.seller?.address_lines || []).map((line, i) =>
+              line ? (
+                <Text key={`seller-addr-${i}`} style={styles.meta} testID={`invoice-seller-addr-${i}`}>
+                  {line}
+                </Text>
+              ) : null,
+            )}
+            {inv.seller?.gstin ? (
+              <Text style={styles.meta} testID="invoice-seller-gstin">
+                GSTIN: {inv.seller.gstin}
+              </Text>
+            ) : null}
+            <Text style={styles.kind}>TAX INVOICE — BAG BALANCE</Text>
+
+            <View style={styles.hr} />
+
             <Text style={styles.cardLabel}>BILLING TO</Text>
             <Text style={styles.shop} testID="invoice-billing-to">
               {(to?.shop_name || "—").toUpperCase()}
@@ -127,7 +151,32 @@ export default function BillingInvoiceScreen() {
               mono
               testID="invoice-calc"
             />
-            <Row label={`GST (${inv.gst_percent}%)`} value={money(inv.gst_amount)} mono testID="invoice-gst" />
+            <Row label="Taxable Amount" value={money(inv.base_amount)} mono testID="invoice-taxable" />
+            {(inv.gst_supply_type || "").toUpperCase() === "INTER" || (inv.igst_amount || 0) > 0 ? (
+              <Row
+                label={`IGST (${inv.igst_percent ?? inv.gst_percent}%)`}
+                value={money(inv.igst_amount ?? inv.gst_amount)}
+                mono
+                testID="invoice-igst"
+              />
+            ) : (inv.cgst_amount || 0) > 0 || (inv.sgst_amount || 0) > 0 || (inv.gst_supply_type || "").toUpperCase() === "INTRA" ? (
+              <>
+                <Row
+                  label={`CGST (${inv.cgst_percent ?? inv.gst_percent / 2}%)`}
+                  value={money(inv.cgst_amount || 0)}
+                  mono
+                  testID="invoice-cgst"
+                />
+                <Row
+                  label={`SGST (${inv.sgst_percent ?? inv.gst_percent / 2}%)`}
+                  value={money(inv.sgst_amount || 0)}
+                  mono
+                  testID="invoice-sgst"
+                />
+              </>
+            ) : (
+              <Row label={`GST (${inv.gst_percent}%)`} value={money(inv.gst_amount)} mono testID="invoice-gst" />
+            )}
             <View style={styles.totalBox} testID="invoice-total">
               <Text style={styles.totalLabel}>TOTAL AMOUNT</Text>
               <Text style={styles.totalValue}>{money(inv.total_amount)}</Text>
@@ -186,6 +235,16 @@ const styles = StyleSheet.create({
     borderColor: colors.borderStrong,
     padding: spacing.md,
     gap: spacing.sm,
+  },
+  brand: { fontSize: 22, fontWeight: "900", fontFamily: font.display, color: colors.onSurface, letterSpacing: 0.5 },
+  legal: { fontSize: 13, fontWeight: "700", fontFamily: font.display, color: colors.onSurface, marginTop: 2 },
+  kind: {
+    fontSize: 11,
+    letterSpacing: 2,
+    fontWeight: "800",
+    color: colors.muted,
+    fontFamily: font.display,
+    marginTop: spacing.sm,
   },
   cardLabel: {
     fontSize: 11,

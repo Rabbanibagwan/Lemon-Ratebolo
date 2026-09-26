@@ -11,6 +11,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from admin_panel.auth import admin_bearer, require_platform_admin
 from admin_panel.dates import ist_range_utc_window, resolve_date_range
 from admin_panel import queries
+import billing as billing_mod
 from admin_panel.schemas import (
     ActivityListOut,
     ActivityRow,
@@ -415,10 +416,20 @@ def register_admin_routes(api: APIRouter, db) -> None:
             d["invoice_number"] = inv
         addr_parts = [shop.get("address"), shop.get("village"), shop.get("taluk"), shop.get("district"), shop.get("state")]
         address = ", ".join(str(p).strip() for p in addr_parts if p and str(p).strip())
+        gst_pct = float(d.get("gst_percent") or 0)
+        gst_amt = float(d.get("gst_amount") or 0)
+        gst_parts = billing_mod.split_bag_gst(
+            gst_percent=gst_pct,
+            gst_amount=gst_amt,
+            buyer_gstin=str(shop.get("gst_number") or ""),
+            buyer_state=str(shop.get("state") or ""),
+        )
+        seller = billing_mod.bag_invoice_seller()
         return {
             **d,
             "service_hsn_code": hsn,
             "invoice_number": d.get("invoice_number") or inv,
+            "seller": seller,
             "billing_to": {
                 "shop_id": shop.get("id") or d.get("shop_id"),
                 "shop_name": shop.get("shop_name") or "",
@@ -433,10 +444,12 @@ def register_admin_routes(api: APIRouter, db) -> None:
                 "bags": int(d.get("bags") or 0),
                 "price_per_bag": float(d.get("price_per_bag") or 0),
                 "base_amount": float(d.get("base_amount") or 0),
-                "gst_percent": float(d.get("gst_percent") or 0),
-                "gst_amount": float(d.get("gst_amount") or 0),
+                "gst_percent": gst_pct,
+                "gst_amount": gst_amt,
                 "total_amount": float(d.get("total_amount") or 0),
+                **gst_parts,
             },
+            **gst_parts,
         }
 
     # ----- Reports -----

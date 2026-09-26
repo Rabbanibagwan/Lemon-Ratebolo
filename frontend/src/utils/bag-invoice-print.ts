@@ -32,14 +32,42 @@ function fmtDate(iso?: string | null): string {
   }
 }
 
+function gstRowsHtml(inv: BagInvoice): string {
+  const supply = (inv.gst_supply_type || "").toUpperCase();
+  const cgstAmt = Number(inv.cgst_amount) || 0;
+  const sgstAmt = Number(inv.sgst_amount) || 0;
+  const igstAmt = Number(inv.igst_amount) || 0;
+  const cgstPct = Number(inv.cgst_percent) || 0;
+  const sgstPct = Number(inv.sgst_percent) || 0;
+  const igstPct = Number(inv.igst_percent) || 0;
+  const gstPct = Number(inv.gst_percent) || 0;
+  const gstAmt = Number(inv.gst_amount) || 0;
+
+  if (supply === "INTER" || igstAmt > 0) {
+    return `<div class="trow"><span>IGST (${igstPct || gstPct}%)</span><span class="mono">${fmt(igstAmt || gstAmt)}</span></div>`;
+  }
+  if (cgstAmt > 0 || sgstAmt > 0 || supply === "INTRA") {
+    return (
+      `<div class="trow"><span>CGST (${cgstPct || gstPct / 2}%)</span><span class="mono">${fmt(cgstAmt)}</span></div>` +
+      `<div class="trow"><span>SGST (${sgstPct || gstPct / 2}%)</span><span class="mono">${fmt(sgstAmt)}</span></div>`
+    );
+  }
+  // Legacy payloads without split fields.
+  return `<div class="trow"><span>GST (${gstPct}%)</span><span class="mono">${fmt(gstAmt)}</span></div>`;
+}
+
 export function renderBagInvoiceHtml(inv: BagInvoice): string {
   const to = inv.billing_to || ({} as BagInvoice["billing_to"]);
-  const seller = inv.seller || { name: "Lemon Mandi", description: "" };
+  const seller = inv.seller || {};
+  const brand = (seller.brand || seller.name || "LEMON MANDI").trim() || "LEMON MANDI";
+  const legal = (seller.legal_name || "").trim();
+  const addrLines = Array.isArray(seller.address_lines)
+    ? seller.address_lines.map((l) => String(l || "").trim()).filter(Boolean)
+    : [];
+  const gstin = (seller.gstin || "").trim();
   const bags = Number(inv.bags) || 0;
   const price = Number(inv.price_per_bag) || 0;
   const base = Number(inv.base_amount) || 0;
-  const gstPct = Number(inv.gst_percent) || 0;
-  const gstAmt = Number(inv.gst_amount) || 0;
   const total = Number(inv.total_amount) || 0;
   const hsn = (inv.service_hsn_code || "").trim() || "—";
   const addr = (to.address || "").trim();
@@ -51,9 +79,10 @@ export function renderBagInvoiceHtml(inv: BagInvoice): string {
     @page { margin: 18mm; }
     body { font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color:#111827; margin:0; }
     .card { border: 2px solid #111827; padding: 18px; max-width: 720px; margin: 0 auto; }
-    .brand { font-size: 22px; font-weight: 900; }
+    .brand { font-size: 22px; font-weight: 900; letter-spacing: 0.5px; }
+    .legal { font-size: 12px; font-weight: 700; margin-top: 4px; }
     .metaMuted { font-size: 11px; color:#374151; margin-top:2px; }
-    .kind { font-size:11px; letter-spacing:2px; color:#6B7280; font-weight:800; margin-top:8px; }
+    .kind { font-size:11px; letter-spacing:2px; color:#6B7280; font-weight:800; margin-top:10px; }
     .hr { border-top: 2px solid #111827; margin: 12px 0; }
     .grid { display:flex; gap:16px; }
     .col { flex:1; }
@@ -72,8 +101,10 @@ export function renderBagInvoiceHtml(inv: BagInvoice): string {
     button, .no-print { display:none !important; }
   </style></head><body>
   <div class="card">
-    <div class="brand">${escapeHtml(seller.name || "Lemon Mandi")}</div>
-    ${seller.description ? `<div class="metaMuted">${escapeHtml(seller.description)}</div>` : ""}
+    <div class="brand">${escapeHtml(brand)}</div>
+    ${legal ? `<div class="legal">${escapeHtml(legal)}</div>` : ""}
+    ${addrLines.map((l) => `<div class="metaMuted">${escapeHtml(l)}</div>`).join("")}
+    ${gstin ? `<div class="metaMuted">GSTIN: ${escapeHtml(gstin)}</div>` : ""}
     <div class="kind">TAX INVOICE — BAG BALANCE</div>
     <div class="hr"></div>
     <div class="grid">
@@ -117,7 +148,7 @@ export function renderBagInvoiceHtml(inv: BagInvoice): string {
     <div class="totals">
       <div class="trow"><span>Bags × Price</span><span class="mono">${bags.toLocaleString("en-IN")} × ${fmt(price)} = ${fmt(base)}</span></div>
       <div class="trow"><span>Taxable Amount</span><span class="mono">${fmt(base)}</span></div>
-      <div class="trow"><span>GST (${gstPct}%)</span><span class="mono">${fmt(gstAmt)}</span></div>
+      ${gstRowsHtml(inv)}
       <div class="net"><span class="netl">TOTAL AMOUNT</span><span class="netv">${fmt(total)}</span></div>
     </div>
     <div class="foot">Generated from Bag Balance purchase ${escapeHtml(inv.purchase_id || "")}. Status: ${escapeHtml(inv.status || "")}.</div>
