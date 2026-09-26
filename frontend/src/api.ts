@@ -282,7 +282,11 @@ export type FreeBagAllocation = {
   year: number;
   month: number;
   period_label: string;
-  status: "AVAILABLE" | "CLAIMED" | "EXPIRED" | "CANCELLED" | string;
+  status: "PENDING" | "AVAILABLE" | "CLAIMED" | "EXPIRED" | "CANCELLED" | string;
+  mobile?: string | null;
+  allocated_bags?: number;
+  claimed_bags?: number;
+  unclaimed_bags?: number;
   reason?: string | null;
   allocated_at: string;
   claimed_at?: string | null;

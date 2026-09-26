@@ -147,11 +147,11 @@ export function MerchantDetailPage() {
             <>
               <h3 style={{ marginTop: 20, marginBottom: 8, letterSpacing: 1 }}>FREE BAG SUMMARY</h3>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }} data-testid="merchant-free-summary">
-                <Kpi label="Allocated" value={freeSummary.allocated} />
-                <Kpi label="Claimed" value={freeSummary.claimed} />
-                <Kpi label="Used" value={freeSummary.used} />
-                <Kpi label="Remaining" value={freeSummary.remaining} />
-                <Kpi label="Available to Claim" value={freeSummary.available_to_claim} />
+                <Kpi label="Allocated Free Bags" value={freeSummary.allocated} />
+                <Kpi label="Claimed Free Bags" value={freeSummary.claimed} />
+                <Kpi label="Unclaimed Free Bags" value={freeSummary.available_to_claim} />
+                <Kpi label="Used Free Bags" value={freeSummary.used} />
+                <Kpi label="Remaining Free Bags" value={freeSummary.remaining} />
               </div>
             </>
           ) : null}

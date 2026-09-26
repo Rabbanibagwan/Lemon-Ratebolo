@@ -134,7 +134,8 @@ class FakeDB:
         self.merchant_bag_wallets = FakeColl()
         self.bag_purchases = FakeColl()
         self.bag_usage = FakeColl(unique_keys=[("shop_id", "allocation_id", "kind")])
-        self.bag_free_allocations = FakeColl()
+        self.bag_free_allocations = FakeColl(unique_keys=[("client_request_id",)])
+        self.bag_free_bulk_requests = FakeColl(unique_keys=[("client_request_id",)])
         self.merchant_notifications = FakeColl()
         self.shops = FakeColl()
         self.pattis = FakeColl()
@@ -215,7 +216,7 @@ def test_admin_allocate_does_not_increase_wallet():
         )
     )
     data = result.model_dump()
-    assert data["status"] == "AVAILABLE"
+    assert data["status"] == "PENDING"
     assert data["bags"] == 100
     assert data["period_label"] == "September 2026"
     assert len(db.bag_free_allocations.rows) == 1
@@ -224,8 +225,9 @@ def test_admin_allocate_does_not_increase_wallet():
     assert notif["kind"] == "FREE_BAGS"
     assert notif["action"] == "CLAIM_FREE_BAGS"
     assert "100" in notif["body"]
+    assert "Claim them now" in notif["body"]
     assert notif["read"] is False
-    # Wallet unchanged
+    # Wallet unchanged until claim
     w = db.merchant_bag_wallets.rows[0]
     assert w["free_allocated"] == 1000
 
@@ -293,10 +295,10 @@ def test_multiple_months_independent():
     user = {"id": "user-1", "shop_id": shop_id, "role": "owner"}
     asyncio.run(claim.endpoint(a2.id, user=user))
     assert db.merchant_bag_wallets.rows[0]["free_allocated"] == 1100
-    # Jan still AVAILABLE
+    # Jan still PENDING
     jan = next(r for r in db.bag_free_allocations.rows if r["id"] == a1.id)
     feb = next(r for r in db.bag_free_allocations.rows if r["id"] == a2.id)
-    assert jan["status"] == "AVAILABLE"
+    assert jan["status"] == "PENDING"
     assert feb["status"] == "CLAIMED"
 
     summary = route("/billing/free-summary", "GET")
@@ -327,12 +329,79 @@ def test_admin_free_summary_and_list_filters():
     FreeAllocationCreateIn = __import__("free_bags", fromlist=["FreeAllocationCreateIn"]).FreeAllocationCreateIn
     asyncio.run(create.endpoint(FreeAllocationCreateIn(shop_id=shop_id, bags=100, year=2026, month=5), admin=admin))
     lst = route("/admin/billing/free-allocations", "GET")
-    rows = asyncio.run(lst.endpoint(admin=admin, shop_id=shop_id, status="AVAILABLE", year=2026, month=5, q=None, limit=50))
+    rows = asyncio.run(lst.endpoint(admin=admin, shop_id=shop_id, status="PENDING", year=2026, month=5, q=None, limit=50))
     assert len(rows) == 1
+    assert rows[0].status == "PENDING"
     summary = route("/admin/billing/merchants/{shop_id}/free-summary", "GET")
     s = asyncio.run(summary.endpoint(shop_id, admin=admin))
     assert s.available_to_claim == 100
+    assert s.unclaimed == 100
     assert s.claimed == 0
+
+
+def test_bulk_allocate_each_merchant_and_idempotent_request():
+    db, shop_id, api, route, _ = _setup()
+    shop2 = "shop-free-2"
+    db.shops.rows.append(
+        {
+            "id": shop2,
+            "shop_name": "Second Mandi",
+            "username": "second",
+            "mobile": "9000000002",
+            "active": True,
+        }
+    )
+    db.merchant_bag_wallets.rows.append(
+        {
+            "id": "w2",
+            "shop_id": shop2,
+            "free_allocated": 0,
+            "free_used": 0,
+            "purchased_total": 0,
+            "purchased_used": 0,
+            "version": 1,
+        }
+    )
+    admin = {"id": "adm-1", "username": "superadmin"}
+    FreeAllocationBulkIn = __import__("free_bags", fromlist=["FreeAllocationBulkIn"]).FreeAllocationBulkIn
+    bulk = route("/admin/billing/free-allocations/bulk", "POST")
+    payload = FreeAllocationBulkIn(
+        shop_ids=[shop_id, shop2, shop_id],  # duplicate id ignored
+        bags=100,
+        year=2026,
+        month=9,
+        reason="Multi gift",
+        client_request_id="bulk-req-1",
+    )
+    first = asyncio.run(bulk.endpoint(payload, admin=admin))
+    assert first.count == 2
+    assert first.bags_each == 100
+    assert len(db.bag_free_allocations.rows) == 2
+    assert all(r["status"] == "PENDING" for r in db.bag_free_allocations.rows)
+    assert len(db.merchant_notifications.rows) == 2
+    # Wallet unchanged for both
+    assert db.merchant_bag_wallets.rows[0]["free_allocated"] == 1000
+    assert db.merchant_bag_wallets.rows[1]["free_allocated"] == 0
+
+    # Idempotent bulk retry
+    second = asyncio.run(bulk.endpoint(payload, admin=admin))
+    assert second.count == 2
+    assert len(db.bag_free_allocations.rows) == 2
+    assert len(db.merchant_notifications.rows) == 2
+
+
+def test_allocate_client_request_id_prevents_double_click():
+    db, shop_id, api, route, _ = _setup()
+    admin = {"id": "adm-1", "username": "superadmin"}
+    create = route("/admin/billing/free-allocations", "POST")
+    FreeAllocationCreateIn = __import__("free_bags", fromlist=["FreeAllocationCreateIn"]).FreeAllocationCreateIn
+    payload = FreeAllocationCreateIn(
+        shop_id=shop_id, bags=200, year=2026, month=9, client_request_id="single-req-1"
+    )
+    a1 = asyncio.run(create.endpoint(payload, admin=admin))
+    a2 = asyncio.run(create.endpoint(payload, admin=admin))
+    assert a1.id == a2.id
+    assert len(db.bag_free_allocations.rows) == 1
 
 
 def test_period_label_helper():

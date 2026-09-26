@@ -10,6 +10,10 @@ type MerchantHit = {
   username?: string;
   owner_name?: string;
   mobile?: string;
+  total_available?: number;
+  free_remaining?: number;
+  purchased_remaining?: number;
+  unclaimed_free_bags?: number;
 };
 
 type FreeAllocation = {
@@ -17,6 +21,7 @@ type FreeAllocation = {
   shop_id: string;
   shop_name?: string;
   username?: string;
+  mobile?: string | null;
   bags: number;
   year: number;
   month: number;
@@ -27,6 +32,9 @@ type FreeAllocation = {
   claimed_at?: string | null;
   claim_ref?: string | null;
   created_by_admin_username?: string | null;
+  allocated_bags?: number;
+  claimed_bags?: number;
+  unclaimed_bags?: number;
 };
 
 const MONTHS = [
@@ -55,12 +63,17 @@ function fmt(iso?: string | null) {
   }
 }
 
+function newClientRequestId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  return `req-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export default function FreeBagsPage() {
   const nav = useNavigate();
   const now = new Date();
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<MerchantHit[]>([]);
-  const [selected, setSelected] = useState<MerchantHit | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bags, setBags] = useState("100");
   const [year, setYear] = useState(String(now.getFullYear()));
   const [month, setMonth] = useState(String(now.getMonth() + 1));
@@ -76,10 +89,24 @@ export default function FreeBagsPage() {
   const [filterMonth, setFilterMonth] = useState("");
   const [rows, setRows] = useState<FreeAllocation[]>([]);
 
+  const selectedMerchants = useMemo(
+    () => hits.filter((h) => selectedIds.has(h.shop_id)),
+    [hits, selectedIds],
+  );
+
   async function searchMerchants(term: string) {
     try {
-      const res = await api<MerchantHit[]>(`/admin/billing/merchant-search${qs({ q: term || undefined, limit: 30 })}`);
+      const res = await api<MerchantHit[]>(`/admin/billing/merchant-search${qs({ q: term || undefined, limit: 80 })}`);
       setHits(res);
+      // Drop selections that are no longer in the filtered list only when searching empty→keep? Keep IDs that still exist in new hits.
+      setSelectedIds((prev) => {
+        const next = new Set<string>();
+        const ids = new Set(res.map((h) => h.shop_id));
+        prev.forEach((id) => {
+          if (ids.has(id)) next.add(id);
+        });
+        return next;
+      });
     } catch (err) {
       const e = err as ApiError;
       if (e.status === 401) {
@@ -134,43 +161,95 @@ export default function FreeBagsPage() {
     return `${m?.l || "—"} ${year}`;
   }, [month, year]);
 
+  function toggleMerchant(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function selectAllFiltered() {
+    setSelectedIds(new Set(hits.map((h) => h.shop_id)));
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set());
+  }
+
   function onGiveClick(e: FormEvent) {
     e.preventDefault();
     setOkMsg(null);
     setError(null);
-    if (!selected) {
-      setError("Select a merchant first.");
+    if (!selectedIds.size) {
+      setError("Select at least one merchant.");
       return;
     }
     if (!bagsN) {
       setError("Enter free bags (> 0).");
       return;
     }
+    const y = Number(year);
+    const m = Number(month);
+    if (!Number.isFinite(y) || y < 2020 || y > 2100) {
+      setError("Enter a valid year.");
+      return;
+    }
+    if (!Number.isFinite(m) || m < 1 || m > 12) {
+      setError("Select a valid month.");
+      return;
+    }
     setConfirmOpen(true);
   }
 
   async function confirmGive() {
-    if (!selected || !bagsN) return;
+    if (!selectedIds.size || !bagsN || busy) return;
     setBusy(true);
     setError(null);
+    const client_request_id = newClientRequestId();
+    const shop_ids = Array.from(selectedIds);
     try {
-      const created = await api<FreeAllocation>("/admin/billing/free-allocations", {
-        method: "POST",
-        body: JSON.stringify({
-          shop_id: selected.shop_id,
-          bags: bagsN,
-          year: Number(year),
-          month: Number(month),
-          reason: reason.trim() || null,
-        }),
-      });
-      setOkMsg(
-        `Allocated ${created.bags} free bags to ${created.shop_name || created.username} for ${created.period_label}. Status: AVAILABLE (merchant must claim).`,
-      );
+      if (shop_ids.length === 1) {
+        const created = await api<FreeAllocation>("/admin/billing/free-allocations", {
+          method: "POST",
+          body: JSON.stringify({
+            shop_id: shop_ids[0],
+            bags: bagsN,
+            year: Number(year),
+            month: Number(month),
+            reason: reason.trim() || null,
+            client_request_id,
+          }),
+        });
+        setOkMsg(
+          `Allocated ${created.bags} free bags to ${created.shop_name || created.username} for ${created.period_label}. Status: PENDING (merchant must claim).`,
+        );
+      } else {
+        const res = await api<{ created: FreeAllocation[]; count: number; bags_each: number }>(
+          "/admin/billing/free-allocations/bulk",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              shop_ids,
+              bags: bagsN,
+              year: Number(year),
+              month: Number(month),
+              reason: reason.trim() || null,
+              client_request_id,
+            }),
+          },
+        );
+        setOkMsg(
+          `Allocated ${res.bags_each} free bags to ${res.count} merchants for ${periodLabel}. Status: PENDING (each merchant must claim).`,
+        );
+      }
       setConfirmOpen(false);
       setReason("");
       setBags("100");
+      clearSelection();
       await loadHistory();
+      await searchMerchants(q);
     } catch (err) {
       const e = err as ApiError;
       if (e.status === 401) {
@@ -187,14 +266,14 @@ export default function FreeBagsPage() {
   return (
     <Shell title="Free Bags">
       {error ? <ErrorBanner message={error} /> : null}
-      {okMsg ? <div style={okBox}>{okMsg}</div> : null}
+      {okMsg ? <div style={okBox} data-testid="free-bags-ok">{okMsg}</div> : null}
 
       <section style={card}>
-        <h2 style={h2}>FREE BAG ALLOCATION</h2>
+        <h2 style={h2}>GIVE FREE BAGS</h2>
         <p style={hint}>
           Giving free bags does <strong>not</strong> increase the merchant wallet until they tap CLAIM NOW in the app.
         </p>
-        <form onSubmit={onGiveClick} style={{ display: "grid", gap: 12, maxWidth: 640 }}>
+        <form onSubmit={onGiveClick} style={{ display: "grid", gap: 12 }}>
           <label style={label}>
             Search merchant
             <input
@@ -205,37 +284,59 @@ export default function FreeBagsPage() {
               data-testid="free-merchant-search"
             />
           </label>
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <button type="button" onClick={selectAllFiltered} disabled={!hits.length} data-testid="free-select-all">
+              Select all filtered ({hits.length})
+            </button>
+            <button type="button" onClick={clearSelection} disabled={!selectedIds.size} data-testid="free-clear-selection">
+              Clear selection
+            </button>
+            <span style={{ fontWeight: 700, fontSize: 13 }} data-testid="free-selected-count">
+              Selected: {selectedIds.size}
+            </span>
+          </div>
+
           {hits.length ? (
             <div style={hitList} data-testid="free-merchant-hits">
-              {hits.map((h) => (
-                <button
-                  key={h.shop_id}
-                  type="button"
-                  onClick={() => setSelected(h)}
-                  style={{
-                    ...hitBtn,
-                    ...(selected?.shop_id === h.shop_id ? hitBtnOn : {}),
-                  }}
-                  data-testid={`free-merchant-${h.shop_id}`}
-                >
-                  <strong>{h.shop_name || "—"}</strong>
-                  <span>
-                    @{h.username || "—"}
-                    {h.owner_name ? ` · ${h.owner_name}` : ""}
-                    {h.mobile ? ` · ${h.mobile}` : ""}
-                  </span>
-                </button>
-              ))}
+              {hits.map((h) => {
+                const on = selectedIds.has(h.shop_id);
+                return (
+                  <label
+                    key={h.shop_id}
+                    style={{
+                      ...hitBtn,
+                      ...(on ? hitBtnOn : {}),
+                    }}
+                    data-testid={`free-merchant-${h.shop_id}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      onChange={() => toggleMerchant(h.shop_id)}
+                      style={{ width: 18, height: 18, marginTop: 2 }}
+                      data-testid={`free-merchant-check-${h.shop_id}`}
+                    />
+                    <span style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1 }}>
+                      <strong>{h.shop_name || "—"}</strong>
+                      <span style={{ fontSize: 12, color: "#333" }}>
+                        @{h.username || "—"}
+                        {h.mobile ? ` · ${h.mobile}` : ""}
+                      </span>
+                      <span style={{ fontSize: 12, color: "#555" }}>
+                        Usable balance: {(h.total_available ?? 0).toLocaleString()}
+                        {(h.unclaimed_free_bags || 0) > 0
+                          ? ` · Unclaimed free: ${h.unclaimed_free_bags!.toLocaleString()}`
+                          : ""}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
             </div>
-          ) : null}
-          {selected ? (
-            <div style={selectedBox} data-testid="free-merchant-selected">
-              Selected: <strong>{selected.shop_name}</strong> (@{selected.username})
-              <button type="button" onClick={() => setSelected(null)} style={{ marginLeft: 8 }}>
-                Clear
-              </button>
-            </div>
-          ) : null}
+          ) : (
+            <Empty message="No merchants match this search." />
+          )}
 
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
             <label style={{ ...label, flex: 1, minWidth: 140 }}>
@@ -267,19 +368,25 @@ export default function FreeBagsPage() {
             Reason / note (optional)
             <input value={reason} onChange={(e) => setReason(e.target.value)} style={input} data-testid="free-bags-reason" />
           </label>
-          <button type="submit" style={primaryBtn} data-testid="free-bags-give-open">
+          <button type="submit" style={primaryBtn} data-testid="free-bags-give-open" disabled={busy}>
             GIVE FREE BAGS
           </button>
         </form>
       </section>
 
       <section style={{ ...card, marginTop: 20 }}>
-        <h2 style={h2}>ALLOCATION HISTORY</h2>
+        <h2 style={h2}>FREE BAG HISTORY</h2>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-          <input placeholder="Merchant search" value={filterQ} onChange={(e) => setFilterQ(e.target.value)} style={input} />
-          <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} style={input}>
+          <input
+            placeholder="Search merchant / mobile"
+            value={filterQ}
+            onChange={(e) => setFilterQ(e.target.value)}
+            style={input}
+            data-testid="free-history-search"
+          />
+          <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} style={input} data-testid="free-history-status">
             <option value="">All statuses</option>
-            <option value="AVAILABLE">AVAILABLE</option>
+            <option value="PENDING">PENDING</option>
             <option value="CLAIMED">CLAIMED</option>
             <option value="EXPIRED">EXPIRED</option>
             <option value="CANCELLED">CANCELLED</option>
@@ -297,57 +404,91 @@ export default function FreeBagsPage() {
         {!rows.length ? (
           <Empty message="No free bag allocations." />
         ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={table}>
-              <thead>
-                <tr>
-                  <th style={th}>Merchant</th>
-                  <th style={th}>Month</th>
-                  <th style={th}>Bags</th>
-                  <th style={th}>Allocated</th>
-                  <th style={th}>Status</th>
-                  <th style={th}>Claimed</th>
-                  <th style={th}>Claim Ref</th>
-                  <th style={th}>Admin</th>
-                  <th style={th}>Note</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => (
-                  <tr key={r.id}>
-                    <td style={td}>
-                      <Link to={`/merchants/${r.shop_id}`}>{r.shop_name || r.shop_id}</Link>
-                      <div style={{ fontSize: 12, color: "#555" }}>@{r.username}</div>
-                    </td>
-                    <td style={td}>{r.period_label}</td>
-                    <td style={td}>{r.bags}</td>
-                    <td style={td}>{fmt(r.allocated_at)}</td>
-                    <td style={td}>{r.status}</td>
-                    <td style={td}>{fmt(r.claimed_at)}</td>
-                    <td style={td}>{r.claim_ref || "—"}</td>
-                    <td style={td}>{r.created_by_admin_username || "—"}</td>
-                    <td style={td}>{r.reason || "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div style={historyCards} data-testid="free-history-cards">
+            {rows.map((r) => {
+              const allocated = r.allocated_bags ?? r.bags;
+              const claimed = r.claimed_bags ?? (r.status === "CLAIMED" ? r.bags : 0);
+              const unclaimed = r.unclaimed_bags ?? Math.max(0, allocated - claimed);
+              return (
+                <article key={r.id} style={historyCard} data-testid={`free-history-${r.id}`}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                    <div>
+                      <Link to={`/merchants/${r.shop_id}`} style={{ fontWeight: 900, color: "#111" }}>
+                        {r.shop_name || r.shop_id}
+                      </Link>
+                      <div style={{ fontSize: 12, color: "#555" }}>
+                        @{r.username || "—"}
+                        {r.mobile ? ` · ${r.mobile}` : ""}
+                      </div>
+                    </div>
+                    <span style={statusPill(r.status)}>{r.status}</span>
+                  </div>
+                  <div style={metaGrid}>
+                    <div>
+                      <div style={metaLabel}>Date</div>
+                      <div>{fmt(r.allocated_at)}</div>
+                    </div>
+                    <div>
+                      <div style={metaLabel}>Month</div>
+                      <div>{r.period_label}</div>
+                    </div>
+                    <div>
+                      <div style={metaLabel}>Allocated</div>
+                      <div>{allocated.toLocaleString()}</div>
+                    </div>
+                    <div>
+                      <div style={metaLabel}>Claimed</div>
+                      <div>{claimed.toLocaleString()}</div>
+                    </div>
+                    <div>
+                      <div style={metaLabel}>Unclaimed</div>
+                      <div>{unclaimed.toLocaleString()}</div>
+                    </div>
+                    <div>
+                      <div style={metaLabel}>Claim date</div>
+                      <div>{fmt(r.claimed_at)}</div>
+                    </div>
+                    <div>
+                      <div style={metaLabel}>Admin</div>
+                      <div>{r.created_by_admin_username || "—"}</div>
+                    </div>
+                    <div>
+                      <div style={metaLabel}>Note</div>
+                      <div>{r.reason || "—"}</div>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
           </div>
         )}
       </section>
 
-      {confirmOpen && selected ? (
+      {confirmOpen && selectedIds.size ? (
         <div style={modalRoot} data-testid="free-bags-confirm-modal">
           <div style={modalCard}>
-            <h3 style={{ marginTop: 0 }}>Confirm free bag allocation</h3>
-            <p>
-              Merchant: <strong>{selected.shop_name}</strong> (@{selected.username})
-            </p>
-            <p>
-              Free Bags: <strong>{bagsN.toLocaleString()}</strong>
+            <h3 style={{ marginTop: 0 }}>Confirm Give</h3>
+            <p data-testid="free-bags-confirm-text">
+              You are giving <strong>{bagsN.toLocaleString()}</strong> free bags to{" "}
+              <strong>{selectedIds.size}</strong> merchant{selectedIds.size === 1 ? "" : "s"}.
             </p>
             <p>
               Month: <strong>{periodLabel}</strong>
             </p>
+            {selectedMerchants.length <= 8 ? (
+              <ul style={{ margin: "8px 0", paddingLeft: 18, fontSize: 13 }}>
+                {selectedMerchants.map((m) => (
+                  <li key={m.shop_id}>
+                    {m.shop_name} (@{m.username})
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p style={{ fontSize: 13, color: "#444" }}>
+                Including {selectedMerchants.slice(0, 3).map((m) => m.shop_name).join(", ")} and{" "}
+                {selectedIds.size - 3} more…
+              </p>
+            )}
             {reason.trim() ? (
               <p>
                 Note: <strong>{reason.trim()}</strong>
@@ -356,12 +497,12 @@ export default function FreeBagsPage() {
             <p style={{ color: "#555", fontSize: 13 }}>
               Merchant usable balance will NOT increase until they claim in the app.
             </p>
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button type="button" onClick={() => setConfirmOpen(false)} disabled={busy}>
-                CANCEL
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+              <button type="button" onClick={() => setConfirmOpen(false)} disabled={busy} data-testid="free-bags-cancel">
+                Cancel
               </button>
               <button type="button" style={primaryBtn} onClick={confirmGive} disabled={busy} data-testid="free-bags-confirm">
-                {busy ? "GIVING…" : "GIVE FREE BAGS"}
+                {busy ? "GIVING…" : "Confirm Give"}
               </button>
             </div>
           </div>
@@ -375,7 +516,7 @@ const card: CSSProperties = { border: "2px solid #111", background: "#fff", padd
 const h2: CSSProperties = { margin: "0 0 8px", fontSize: 16, letterSpacing: 1 };
 const hint: CSSProperties = { marginTop: 0, color: "#444", fontSize: 13 };
 const label: CSSProperties = { display: "flex", flexDirection: "column", gap: 6, fontWeight: 700, fontSize: 12 };
-const input: CSSProperties = { border: "2px solid #111", padding: 8, fontSize: 14 };
+const input: CSSProperties = { border: "2px solid #111", padding: 8, fontSize: 14, width: "100%", boxSizing: "border-box" };
 const primaryBtn: CSSProperties = {
   background: "#15803d",
   color: "#fff",
@@ -385,19 +526,19 @@ const primaryBtn: CSSProperties = {
   letterSpacing: 1,
   cursor: "pointer",
 };
-const hitList: CSSProperties = { display: "flex", flexDirection: "column", gap: 6, maxHeight: 220, overflow: "auto" };
+const hitList: CSSProperties = { display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflow: "auto" };
 const hitBtn: CSSProperties = {
   textAlign: "left",
   border: "2px solid #111",
   background: "#fff",
   padding: 10,
   display: "flex",
-  flexDirection: "column",
-  gap: 2,
+  flexDirection: "row",
+  alignItems: "flex-start",
+  gap: 10,
   cursor: "pointer",
 };
 const hitBtnOn: CSSProperties = { background: "#dcfce7" };
-const selectedBox: CSSProperties = { border: "2px solid #15803d", background: "#f0fdf4", padding: 10 };
 const okBox: CSSProperties = {
   background: "#dcfce7",
   border: "2px solid #15803d",
@@ -406,9 +547,35 @@ const okBox: CSSProperties = {
   marginBottom: 12,
   fontWeight: 700,
 };
-const table: CSSProperties = { width: "100%", borderCollapse: "collapse", background: "#fff" };
-const th: CSSProperties = { border: "1px solid #111", padding: 8, textAlign: "left", fontSize: 11, letterSpacing: 1 };
-const td: CSSProperties = { border: "1px solid #ccc", padding: 8, verticalAlign: "top", fontSize: 13 };
+const historyCards: CSSProperties = { display: "grid", gap: 10 };
+const historyCard: CSSProperties = {
+  border: "2px solid #111",
+  padding: 12,
+  background: "#fff",
+  display: "grid",
+  gap: 10,
+};
+const metaGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+  gap: 8,
+  fontSize: 13,
+};
+const metaLabel: CSSProperties = { fontSize: 10, letterSpacing: 1, textTransform: "uppercase", color: "#666", fontWeight: 800 };
+function statusPill(status: string): CSSProperties {
+  const s = (status || "").toUpperCase();
+  const bg = s === "CLAIMED" ? "#dcfce7" : s === "PENDING" || s === "AVAILABLE" ? "#fef9c3" : "#f3f4f6";
+  return {
+    display: "inline-block",
+    padding: "4px 8px",
+    border: "2px solid #111",
+    background: bg,
+    fontWeight: 900,
+    fontSize: 11,
+    letterSpacing: 1,
+    height: "fit-content",
+  };
+}
 const modalRoot: CSSProperties = {
   position: "fixed",
   inset: 0,

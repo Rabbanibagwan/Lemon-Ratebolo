@@ -764,19 +764,13 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
         w = await ensure_wallet(user["shop_id"])
         view = await _wallet_view(w, float(settings.get("price_per_bag") or 0))
         try:
-            available = await db.bag_free_allocations.count_documents(
-                {"shop_id": user["shop_id"], "status": "AVAILABLE"}
-            )
-            # Sum bags available to claim (not just count of rows)
+            # PENDING = new status; AVAILABLE kept for legacy allocations.
+            unclaimed_q = {"shop_id": user["shop_id"], "status": {"$in": ["PENDING", "AVAILABLE"]}}
             bags_to_claim = 0
-            cur = db.bag_free_allocations.find(
-                {"shop_id": user["shop_id"], "status": "AVAILABLE"},
-                {"_id": 0, "bags": 1},
-            )
+            cur = db.bag_free_allocations.find(unclaimed_q, {"_id": 0, "bags": 1})
             async for row in cur:
                 bags_to_claim += int(row.get("bags") or 0)
             view["free_available_to_claim"] = bags_to_claim
-            _ = available
         except Exception:
             view["free_available_to_claim"] = 0
         return WalletOut(**view)

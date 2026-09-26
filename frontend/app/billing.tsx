@@ -127,7 +127,7 @@ export default function BillingScreen() {
   );
 
   const openClaimConfirm = (alloc: FreeBagAllocation) => {
-    if (alloc.status !== "AVAILABLE" || claimingId) return;
+    if ((alloc.status !== "PENDING" && alloc.status !== "AVAILABLE") || claimingId) return;
     setConfirmClaim(alloc);
   };
 
@@ -401,7 +401,7 @@ export default function BillingScreen() {
             ) : (
               freeAllocs.map((a) => {
                 const highlight = highlightAllocationId === a.id;
-                const available = a.status === "AVAILABLE";
+                const pending = a.status === "PENDING" || a.status === "AVAILABLE";
                 return (
                   <View
                     key={a.id}
@@ -409,9 +409,19 @@ export default function BillingScreen() {
                     testID={`free-alloc-${a.id}`}
                   >
                     <Text style={styles.freePeriod}>{a.period_label}</Text>
-                    <Text style={styles.freeBags}>{a.bags.toLocaleString()} BAGS</Text>
+                    <Text style={styles.freeBags}>Free Bags Received: {a.bags.toLocaleString()}</Text>
+                    {pending ? (
+                      <Text style={styles.freeBags} testID={`free-claimable-${a.id}`}>
+                        Available to Claim: {a.bags.toLocaleString()}
+                      </Text>
+                    ) : a.status === "CLAIMED" ? (
+                      <>
+                        <Text style={styles.histSub}>Claimed: {a.bags.toLocaleString()}</Text>
+                        <Text style={styles.histSub}>Available to Claim: 0</Text>
+                      </>
+                    ) : null}
                     <Text style={styles.freeStatus} testID={`free-status-${a.id}`}>
-                      Status: {available ? "AVAILABLE TO CLAIM" : a.status}
+                      Status: {pending ? "PENDING" : a.status}
                     </Text>
                     {a.status === "CLAIMED" ? (
                       <>
@@ -420,7 +430,7 @@ export default function BillingScreen() {
                       </>
                     ) : null}
                     {a.reason ? <Text style={styles.histSub}>Note: {a.reason}</Text> : null}
-                    {available ? (
+                    {pending ? (
                       <Button
                         label={claimingId === a.id ? "CLAIMING…" : "CLAIM NOW"}
                         onPress={() => openClaimConfirm(a)}
@@ -453,7 +463,9 @@ export default function BillingScreen() {
                         }
                         if (n.allocation_id) {
                           const target = freeAllocs.find((a) => a.id === n.allocation_id);
-                          if (target?.status === "AVAILABLE") openClaimConfirm(target);
+                          if (target && (target.status === "PENDING" || target.status === "AVAILABLE")) {
+                            openClaimConfirm(target);
+                          }
                         }
                         await load();
                       }}
