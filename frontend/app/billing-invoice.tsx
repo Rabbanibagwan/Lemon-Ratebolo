@@ -7,7 +7,12 @@ import { Ionicons } from "@expo/vector-icons";
 import { api, apiErrorMessage, BagInvoice } from "@/src/api";
 import { Button } from "@/src/components/ui";
 import { colors, font, money, spacing } from "@/src/theme";
-import { previewBagInvoice, shareBagInvoicePdf } from "@/src/utils/bag-invoice-print";
+import {
+  previewBagInvoice,
+  resolveBagInvoiceGst,
+  resolveBagInvoiceSeller,
+  shareBagInvoicePdf,
+} from "@/src/utils/bag-invoice-print";
 
 function routeParam(v: string | string[] | undefined): string {
   if (Array.isArray(v)) return v[0] || "";
@@ -84,6 +89,8 @@ export default function BillingInvoiceScreen() {
   };
 
   const to = inv?.billing_to;
+  const seller = inv ? resolveBagInvoiceSeller(inv.seller) : null;
+  const gst = inv ? resolveBagInvoiceGst(inv) : null;
 
   return (
     <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
@@ -98,10 +105,28 @@ export default function BillingInvoiceScreen() {
       </View>
 
       <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 48 }} testID="billing-invoice-scroll">
-        {loading || !inv ? (
+        {loading || !inv || !seller || !gst ? (
           <Text style={styles.hint}>{loading ? "Loading invoice…" : "Invoice not found."}</Text>
         ) : (
           <View style={styles.card} testID="billing-invoice-card">
+            <Text style={styles.brand} testID="invoice-seller-brand">
+              {seller.brand}
+            </Text>
+            <Text style={styles.legal} testID="invoice-seller-legal">
+              {seller.legal_name}
+            </Text>
+            {seller.address_lines.map((line, i) => (
+              <Text key={`seller-addr-${i}`} style={styles.meta} testID={`invoice-seller-addr-${i}`}>
+                {line}
+              </Text>
+            ))}
+            <Text style={styles.meta} testID="invoice-seller-gstin">
+              GSTIN: {seller.gstin}
+            </Text>
+            <Text style={styles.kind}>TAX INVOICE — BAG BALANCE</Text>
+
+            <View style={styles.hr} />
+
             <Text style={styles.cardLabel}>BILLING TO</Text>
             <Text style={styles.shop} testID="invoice-billing-to">
               {(to?.shop_name || "—").toUpperCase()}
@@ -127,7 +152,15 @@ export default function BillingInvoiceScreen() {
               mono
               testID="invoice-calc"
             />
-            <Row label={`GST (${inv.gst_percent}%)`} value={money(inv.gst_amount)} mono testID="invoice-gst" />
+            <Row label="Taxable Amount" value={money(inv.base_amount)} mono testID="invoice-taxable" />
+            {gst.supply === "INTER" ? (
+              <Row label={`IGST (${gst.igstPct}%)`} value={money(gst.igstAmt)} mono testID="invoice-igst" />
+            ) : (
+              <>
+                <Row label={`CGST (${gst.cgstPct}%)`} value={money(gst.cgstAmt)} mono testID="invoice-cgst" />
+                <Row label={`SGST (${gst.sgstPct}%)`} value={money(gst.sgstAmt)} mono testID="invoice-sgst" />
+              </>
+            )}
             <View style={styles.totalBox} testID="invoice-total">
               <Text style={styles.totalLabel}>TOTAL AMOUNT</Text>
               <Text style={styles.totalValue}>{money(inv.total_amount)}</Text>
@@ -186,6 +219,16 @@ const styles = StyleSheet.create({
     borderColor: colors.borderStrong,
     padding: spacing.md,
     gap: spacing.sm,
+  },
+  brand: { fontSize: 22, fontWeight: "900", fontFamily: font.display, color: colors.onSurface, letterSpacing: 0.5 },
+  legal: { fontSize: 13, fontWeight: "700", fontFamily: font.display, color: colors.onSurface, marginTop: 2 },
+  kind: {
+    fontSize: 11,
+    letterSpacing: 2,
+    fontWeight: "800",
+    color: colors.muted,
+    fontFamily: font.display,
+    marginTop: spacing.sm,
   },
   cardLabel: {
     fontSize: 11,
