@@ -48,15 +48,24 @@ export default function Auction() {
     }
   }, [workingDateISO]);
 
-  useFocusEffect(useCallback(() => { load(); }, [load]));
+  const fromSetDriverShortcut = editDrivers === "1";
+
+  useFocusEffect(useCallback(() => {
+    load();
+    // Allow Dashboard / Reports "SET DRIVER" shortcut to reopen Driver Day Setup
+    // on each visit without changing assignment logic.
+    return () => {
+      editDriversOpened.current = false;
+    };
+  }, [load]));
 
   useEffect(() => {
-    if (editDrivers !== "1" || editDriversOpened.current || !day) return;
+    if (!fromSetDriverShortcut || editDriversOpened.current || !day) return;
     editDriversOpened.current = true;
     setDrivers(day.drivers?.length ? [...day.drivers] : [{ range_from: 1, range_to: 100, name: "", place: "", bhada_per_bag: 0 }]);
     setSaveDriverError(null);
     setShowDriverModal(true);
-  }, [editDrivers, day]);
+  }, [fromSetDriverShortcut, day]);
 
   const onApplyDate = (d: Date | null) => {
     setShowDatePicker(false);
@@ -73,6 +82,17 @@ export default function Auction() {
     setSaveDriverError(null);
     setShowDriverModal(true);
   };
+
+  const closeDriverModal = (opts?: { returnHome?: boolean }) => {
+    setShowDriverModal(false);
+    setSaveDriverError(null);
+    // Dashboard → SET DRIVER → Setup → Back must return to Dashboard (not leave user stuck on Auction).
+    if (opts?.returnHome || fromSetDriverShortcut) {
+      editDriversOpened.current = false;
+      router.replace("/(tabs)");
+    }
+  };
+
   const setDriverField = (idx: number, patch: Partial<DriverRange>) =>
     setDrivers((xs) => xs.map((d, i) => (i === idx ? { ...d, ...patch } : d)));
   const addDriverRow = () => setDrivers((xs) => [...xs, { range_from: 1, range_to: 1, name: "", place: "", bhada_per_bag: 0 }]);
@@ -96,8 +116,8 @@ export default function Auction() {
       setSavingDrivers(true);
       const updated = await api.put<AuctionDay>(`/auction-days/${day.id}`, { date: day.date, drivers });
       setDay(updated);
-      setShowDriverModal(false);
       await load();
+      closeDriverModal({ returnHome: fromSetDriverShortcut });
     } catch (e: any) {
       setSaveDriverError(e?.detail || "Failed to save");
     } finally { setSavingDrivers(false); }
@@ -254,25 +274,31 @@ export default function Auction() {
         }}
       />
 
-      {/* Driver Setup Modal */}
-      <Modal visible={showDriverModal} transparent animationType="slide" onRequestClose={() => setShowDriverModal(false)}>
+      {/* Driver Setup Modal — single source of truth for Dashboard SET DRIVER + Auction DRIVERS */}
+      <Modal visible={showDriverModal} transparent animationType="slide" onRequestClose={() => closeDriverModal()}>
         <View style={styles.modalRoot}>
-          <Pressable style={styles.backdrop} onPress={() => setShowDriverModal(false)} />
-          <View style={styles.modalSheet}>
+          <Pressable style={styles.backdrop} onPress={() => closeDriverModal()} />
+          <SafeAreaView style={styles.modalSheet} edges={["bottom"]}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>DRIVER DAY SETUP</Text>
-              <Pressable onPress={() => setShowDriverModal(false)} hitSlop={12} testID="driver-modal-close">
-                <Ionicons name="close" size={22} color={colors.onSurface} />
+              <View style={{ flex: 1, paddingRight: spacing.sm }}>
+                <Text style={styles.modalTitle} testID="driver-day-setup-title">DRIVER DAY SETUP</Text>
+                <Text style={styles.modalDate} testID="driver-day-setup-date">
+                  {isWorkingToday ? "TODAY" : "WORKING DATE"} · {workingDateISO} · {displayDate}
+                </Text>
+              </View>
+              <Pressable onPress={() => closeDriverModal()} hitSlop={12} testID="driver-modal-close" style={styles.modalBackBtn}>
+                <Ionicons name="arrow-back" size={18} color={colors.onSurface} />
+                <Text style={styles.modalBackText}>BACK</Text>
               </Pressable>
             </View>
             <KeyboardAwareScrollView
-              style={{ maxHeight: 500 }}
-              contentContainerStyle={{ padding: spacing.lg }}
+              style={styles.modalScroll}
+              contentContainerStyle={{ padding: spacing.lg, paddingBottom: spacing.xxl }}
               keyboardShouldPersistTaps="handled"
               bottomOffset={80}
             >
               <Text style={styles.hint}>
-                Lot numbers are matched by their first number (before &quot;/&quot;). e.g. Lot 35/2 → driver whose range covers 35.
+                Assign drivers to lot serial ranges for this working date. Lot numbers match on the first number (before &quot;/&quot;) — e.g. Lot 35/2 → range covering 35.
               </Text>
               {drivers.map((d, idx) => (
                 <View key={idx} style={styles.driverEditCard} testID={`driver-card-${idx}`}>
@@ -306,7 +332,7 @@ export default function Auction() {
                       />
                     </View>
                   </View>
-                  <Input label="Driver name" value={d.name} onChangeText={(t) => setDriverField(idx, { name: t })} testID={`driver-name-${idx}`} />
+                  <Input label="Driver name" value={d.name} onChangeText={(t) => setDriverField(idx, { name: t })} testID={`driver-name-${idx}`} autoCapitalize="characters" />
                   <Input label="Place (optional)" value={d.place || ""} onChangeText={(t) => setDriverField(idx, { place: t })} testID={`driver-place-${idx}`} />
                   <Input label="Lot Bhada ₹" keyboardType="decimal-pad"
                     value={String(d.bhada_per_bag || "")}
@@ -319,12 +345,21 @@ export default function Auction() {
                 <Ionicons name="add-circle-outline" size={20} color={colors.brandPrimary} />
                 <Text style={styles.addDriverText}>ADD ANOTHER DRIVER RANGE</Text>
               </Pressable>
-              {saveDriverError ? <Text style={styles.err}>{saveDriverError}</Text> : null}
-              <View style={{ marginTop: spacing.md }}>
-                <Button label={savingDrivers ? "SAVING…" : "SAVE DRIVER SETUP"} onPress={saveDrivers} loading={savingDrivers} testID="driver-save" />
+              {saveDriverError ? <Text style={styles.err} testID="driver-save-error">{saveDriverError}</Text> : null}
+              <View style={{ marginTop: spacing.md, gap: spacing.sm }}>
+                <Button label={savingDrivers ? "SAVING…" : "SAVE DRIVER SETUP"} onPress={saveDrivers} loading={savingDrivers} disabled={savingDrivers} testID="driver-save" />
+                {fromSetDriverShortcut ? (
+                  <Button
+                    label="BACK TO DASHBOARD"
+                    variant="secondary"
+                    onPress={() => closeDriverModal({ returnHome: true })}
+                    testID="driver-back-dashboard"
+                    focusable={!savingDrivers}
+                  />
+                ) : null}
               </View>
             </KeyboardAwareScrollView>
-          </View>
+          </SafeAreaView>
         </View>
       </Modal>
     </SafeAreaView>
@@ -415,9 +450,40 @@ const styles = StyleSheet.create({
   // Driver modal
   modalRoot: { flex: 1, backgroundColor: "rgba(17,24,39,0.5)", justifyContent: "flex-end" },
   backdrop: { ...StyleSheet.absoluteFillObject },
-  modalSheet: { backgroundColor: colors.surface, borderTopWidth: 2, borderTopColor: colors.borderStrong },
-  modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", padding: spacing.lg, borderBottomWidth: 2, borderBottomColor: colors.borderStrong },
+  modalSheet: {
+    backgroundColor: colors.surface,
+    borderTopWidth: 2,
+    borderTopColor: colors.borderStrong,
+    maxHeight: "92%",
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    padding: spacing.lg,
+    borderBottomWidth: 2,
+    borderBottomColor: colors.borderStrong,
+    gap: spacing.sm,
+  },
   modalTitle: { fontSize: 16, fontWeight: "900", color: colors.onSurface, fontFamily: font.display, letterSpacing: 1 },
+  modalDate: {
+    marginTop: 4,
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.muted,
+    fontFamily: font.mono,
+  },
+  modalBackBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderWidth: 2,
+    borderColor: colors.borderStrong,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  modalBackText: { fontSize: 12, fontWeight: "800", letterSpacing: 1, fontFamily: font.display, color: colors.onSurface },
+  modalScroll: { maxHeight: 560 },
   hint: { fontSize: 12, color: colors.muted, marginBottom: spacing.md, fontFamily: font.display },
   driverEditCard: { borderWidth: 2, borderColor: colors.borderStrong, padding: spacing.md, marginBottom: spacing.md, backgroundColor: colors.surfaceSecondary, gap: spacing.sm },
   driverEditHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 4 },
