@@ -201,6 +201,15 @@ export class EscPosBuilder {
     return this.raw(u8(0x1d, 0x21, n));
   }
 
+  /**
+   * ESC/POS built-in face (ESC M n). Font A = 12-dot (column planning).
+   * Font B = 9-dot condensed — not Times Roman; do not use for width-planned rows.
+   * Physical printers have no TrueType/Times — preview/HTML may use serif CSS.
+   */
+  font(kind: "A" | "B" = "A"): this {
+    return this.raw(u8(0x1b, 0x4d, kind === "B" ? 1 : 0));
+  }
+
   text(s: string): this {
     return this.raw(utf8(s));
   }
@@ -286,6 +295,43 @@ export class EscPosBuilder {
   }
 
   /**
+   * Farmer Patti FARMER value — merchant-class size (big when it fits, else tall).
+   * Label stays normal width; name is bold + large. Long names wrap safely.
+   * Does not change shopHeader / merchant size.
+   */
+  farmerNameRow(name: string): this {
+    const lab = "FARMER";
+    const val = slipText(name || "-") || "-";
+    this.normalState().align("left").font("A").bold(false).size("normal");
+    // big = double-width chars → effective columns = floor(cols/2)
+    const bigCols = Math.floor(this.cols / 2);
+    if (lab.length + 1 + val.length <= bigCols) {
+      // Label at normal size (1× width), then big name — pad in normal columns
+      // so the big glyphs land on the right edge: normalPad = cols - lab - 2*val
+      const normalGap = Math.max(1, this.cols - lab.length - val.length * 2);
+      this.text(lab + " ".repeat(normalGap));
+      this.bold(true).size("big").text(val).size("normal").bold(false).raw(u8(0x0a));
+      this.applyPrintArea().align("left");
+      return this;
+    }
+    // tall = double-height, same column width (readable, fits long names)
+    if (lab.length + 1 + val.length <= this.cols) {
+      const gap = Math.max(1, this.cols - lab.length - val.length);
+      this.text(lab + " ".repeat(gap));
+      this.bold(true).size("tall").text(val).size("normal").bold(false).raw(u8(0x0a));
+      this.applyPrintArea().align("left");
+      return this;
+    }
+    this.line(lab);
+    this.bold(true).size("tall");
+    for (const row of this.wrap(val)) {
+      this.align("right").line(row);
+    }
+    this.size("normal").bold(false).normalState().applyPrintArea().align("left");
+    return this;
+  }
+
+  /**
    * Merchant shop header — CENTER aligned (name, address, mobile only).
    * Restores left alignment afterward so Patti body layout is unchanged.
    */
@@ -359,27 +405,38 @@ export class EscPosBuilder {
    *   -------------------------------
    *   NET PAYABLE              Rs …
    *   -------------------------------
-   * WHITE background, bold black, slightly taller. Never inverse/reverse.
+   * WHITE background, bold black. Merchant-class size (big when it fits, else tall).
+   * Never inverse/reverse. No TrueType/Times on ESC/POS — Font A + bold + big/tall;
+   * HTML/preview use Times Roman separately.
    * Rules use this.cols (centralized printable width for 58/80/100 mm).
    */
   farmerNetPayableBox(amount: string): this {
     const lab = "NET PAYABLE";
-    // Prefer amount fit; keep currency + digits together; never wrap the amount.
-    const amtWidth = Math.max(10, this.cols - lab.length - 1);
-    const amt = this.fitAmount(slipText(amount || ""), amtWidth);
-    this.normalState().align("left");
+    this.normalState().align("left").font("A");
     // Continuous top rule — left printable edge → right printable edge.
     this.hr("-");
-    // Slightly taller + bold black on white (GS B stays OFF via normalState).
-    this.normalState().align("left").bold(true).size("tall");
-    const maxL = Math.max(0, this.cols - amt.length - 1);
+    // Prefer merchant-class big (2×2). Effective cols = floor(cols/2) while big.
+    const bigCols = Math.floor(this.cols / 2);
+    let amt = this.fitAmount(slipText(amount || ""), Math.max(6, bigCols - lab.length - 1));
+    let sizeKind: "big" | "tall" = "tall";
+    let unitCols = this.cols;
+    if (lab.length + 1 + amt.length <= bigCols) {
+      sizeKind = "big";
+      unitCols = bigCols;
+    } else {
+      amt = this.fitAmount(slipText(amount || ""), Math.max(10, this.cols - lab.length - 1));
+      unitCols = this.cols;
+    }
+    // Bold black on white (GS B stays OFF via normalState). Amount never wraps.
+    this.normalState().align("left").font("A").bold(true).size(sizeKind);
+    const maxL = Math.max(0, unitCols - amt.length - 1);
     let l = lab;
     if (l.length > maxL) l = l.slice(0, Math.max(0, maxL - 1)) + (maxL > 0 ? "." : "");
-    const gap = Math.max(1, this.cols - l.length - amt.length);
-    const row = (l + " ".repeat(gap) + amt).slice(0, this.cols);
+    const gap = Math.max(1, unitCols - l.length - amt.length);
+    const row = (l + " ".repeat(gap) + amt).slice(0, unitCols);
     this.line(row);
     // Reset size/bold before the bottom rule so separators stay normal weight.
-    this.size("normal").bold(false).normalState().align("left");
+    this.size("normal").bold(false).normalState().applyPrintArea().align("left");
     // Continuous bottom rule — same full printable width.
     this.hr("-");
     this.normalState();
@@ -424,13 +481,14 @@ export class EscPosBuilder {
 
   itemRowLotEmph(lot: string, mid: string, amount: string): this {
     const [lw, mw, aw] = this.lineWidths();
-    this.align("left");
+    this.align("left").font("A");
     const lotCell = pad(lot || "", lw).slice(0, lw);
     const midCell = this.fitBagsRate(slipText(mid || ""), mw).slice(0, mw).padEnd(mw, " ");
     const amtCell = this.fitAmount(amount || "", aw).slice(0, aw).padStart(aw);
+    // Lot bold (existing); Bags × Rate + Amount bold for Farmer Patti readability.
     if ((lot || "").trim()) this.bold(true).text(lotCell).bold(false);
     else this.text(lotCell);
-    this.text(midCell).text(amtCell).raw(u8(0x0a));
+    this.bold(true).text(midCell).text(amtCell).bold(false).raw(u8(0x0a));
     return this;
   }
 

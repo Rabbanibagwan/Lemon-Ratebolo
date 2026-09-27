@@ -53,7 +53,7 @@ function encodePatti(paperMm: number): { b64: string; builder: EscPosBuilder } {
   b.applyPrintArea();
   b.docTitleAndNo("PATTI / BILL", p.patti_no);
   b.hr();
-  b.infoRow("FARMER", p.farmer_name);
+  b.farmerNameRow(p.farmer_name);
   b.infoRow("DATE", date, { valueBold: false });
   b.infoRow("DRIVER", p.driver_name);
   b.hr().tableHeader3().hr("-");
@@ -66,9 +66,11 @@ function encodePatti(paperMm: number): { b64: string; builder: EscPosBuilder } {
   }
   b.hr()
     .kv("Gross total", rupees(p.farmer_gross))
+    .hr("-")
     .kv("Hamali", `- ${rupees(p.hamali_total)}`)
     .kv("Bhada", `- ${rupees(p.bhada_total)}`)
     .kv("Stationery", `- ${rupees(p.stationery_total)}`)
+    .hr("-")
     .bold(true)
     .kv("Total deduction", `- ${rupees(p.deductions_total)}`)
     .bold(false);
@@ -437,9 +439,18 @@ for (const mm of widths) {
   const botRule = pattiLines[netIdx + 1] || "";
   assert(/^-+$/.test(topRule) && topRule.length === cfg.columns, `${mm} NET top rule width ${topRule.length}`);
   assert(/^-+$/.test(botRule) && botRule.length === cfg.columns, `${mm} NET bottom rule width ${botRule.length}`);
-  // Amount stays on the same line (no wrap) and fits cols.
+  // Amount stays on the same line (no wrap). Decoded text is logical chars (big size is ESC, not extra chars).
   assert((pattiLines[netIdx] || "").length <= cfg.columns, `${mm} NET row overflow`);
   assert(/\bRs\s/.test(pattiLines[netIdx] || "") || /[\d,]+\.\d{2}/.test(pattiLines[netIdx] || ""), `${mm} NET amount on row`);
+
+  // Gross total → full-width rule → Hamali…Stationery → full-width rule → Total deduction
+  const grossIdx = pattiLines.findIndex((ln) => ln.includes("Gross total"));
+  assert(grossIdx >= 0, `${mm} Gross total present`);
+  assert(/^-+$/.test(pattiLines[grossIdx + 1] || "") && (pattiLines[grossIdx + 1] || "").length === cfg.columns, `${mm} line below Gross total`);
+  const dedIdx = pattiLines.findIndex((ln) => ln.includes("Total deduction"));
+  assert(dedIdx > 0, `${mm} Total deduction present`);
+  assert(/^-+$/.test(pattiLines[dedIdx - 1] || "") && (pattiLines[dedIdx - 1] || "").length === cfg.columns, `${mm} line above Total deduction`);
+  assert(pattiText.includes("FARMER") && pattiText.includes("MMMD"), `${mm} large farmer name row`);
 
   const analysis = analyzeEscPos(pattiB64);
   assert(analysis.hasCut, `${mm} has CUT`);
@@ -519,6 +530,9 @@ assert(docs.includes("majorTotalBox"), "docs use majorTotalBox");
 assert(/farmerNetPayableBox\(rupees\(p\.net_payable\)\)/.test(docs), "Patti NET uses farmerNetPayableBox");
 assert(/majorTotalBox\("GRAND TOTAL"/.test(docs), "Vendor GRAND TOTAL still uses majorTotalBox");
 assert(!/majorTotalBox\("NET PAYABLE"/.test(docs), "Patti no longer uses majorTotalBox for NET");
+assert(docs.includes("farmerNameRow"), "docs use farmerNameRow");
+assert(!/infoRow\("FARMER"/.test(docs), "Patti FARMER uses farmerNameRow not infoRow");
+assert(docs.includes('.hr("-")'), "docs have hr separators in Patti totals");
 assert(docs.includes("tableHeader4"), "docs use tableHeader4");
 assert(docs.includes('kv("Lemon"'), "docs Lemon");
 assert(docs.includes("GRAND TOTAL"), "docs GRAND TOTAL");
@@ -532,9 +546,14 @@ const escposSrc = readFileSync(join(__dirname, "../src/utils/escpos.ts"), "utf8"
 assert(escposSrc.includes("thermalWidthConfig"), "thermalWidthConfig exported");
 assert(escposSrc.includes("normalState"), "normalState present");
 assert(escposSrc.includes("farmerNetPayableBox"), "farmerNetPayableBox present");
+assert(escposSrc.includes("farmerNameRow"), "farmerNameRow present");
 assert(!/reverse\(true\)/.test(escposSrc.match(/majorTotalBox[\s\S]*?^  \}/m)?.[0] || ""), "majorTotalBox no reverse(true)");
 assert(!/reverse\(true\)/.test(escposSrc.match(/farmerNetPayableBox[\s\S]*?^  \}/m)?.[0] || ""), "farmerNetPayableBox no reverse(true)");
-assert(/\.size\("tall"\)/.test(escposSrc.match(/farmerNetPayableBox[\s\S]*?^  \}/m)?.[0] || ""), "farmerNetPayableBox uses tall");
+const netBoxSrc = escposSrc.match(/farmerNetPayableBox[\s\S]*?^  \}/m)?.[0] || "";
+assert(/sizeKind/.test(netBoxSrc) || /\.size\("big"\)/.test(netBoxSrc) || /\.size\("tall"\)/.test(netBoxSrc), "farmerNetPayableBox uses big/tall");
+assert(/font\("A"\)/.test(netBoxSrc), "NET PAYABLE stays Font A (no Times on ESC/POS)");
+const itemLotSrc = escposSrc.match(/itemRowLotEmph[\s\S]*?^  \}/m)?.[0] || "";
+assert(/bold\(true\)\.text\(midCell\)/.test(itemLotSrc), "Bags×Rate + Amount bold in itemRowLotEmph");
 
 const thermalCss = readFileSync(join(__dirname, "../src/utils/thermal-print.ts"), "utf8");
 assert(thermalCss.includes("#slip.patti .netbox"), "patti netbox css");
@@ -547,9 +566,22 @@ assert(/netBox:\s*\{[\s\S]*?backgroundColor:\s*colors\.surface/m.test(pattiUi), 
 assert(/netBox:\s*\{[\s\S]*?borderTopWidth:\s*2/m.test(pattiUi), "preview netBox top rule");
 assert(/netBox:\s*\{[\s\S]*?borderBottomWidth:\s*2/m.test(pattiUi), "preview netBox bottom rule");
 assert(pattiUi.includes("merchantHead"), "preview merchant head centered");
+assert(pattiUi.includes("lineBagsRate"), "preview Bags×Rate bold style");
+assert(pattiUi.includes("lineAmount"), "preview Amount bold style");
+assert(/serif|Times New Roman/.test(pattiUi), "preview NET uses Times/serif");
 
 const pattiPrint = readFileSync(join(__dirname, "../src/utils/patti-print.ts"), "utf8");
 assert(pattiPrint.includes('class="merchant-head"'), "thermal HTML merchant-head");
+assert(pattiPrint.includes("Gross total"), "thermal HTML gross");
+// Gross total then hr then Hamali; Stationery path then hr then Total deduction
+assert(
+  /Gross total[\s\S]*?<div class="hr"><\/div>[\s\S]*?Hamali/.test(pattiPrint),
+  "HTML line below Gross total",
+);
+assert(
+  /Stationery[\s\S]*?<div class="hr"><\/div>[\s\S]*?deduct-total/.test(pattiPrint),
+  "HTML line above Total deduction",
+);
 
 const btMod = readFileSync(
   join(__dirname, "../modules/thermal-bluetooth/android/src/main/java/expo/modules/thermalbluetooth/ThermalBluetoothModule.kt"),

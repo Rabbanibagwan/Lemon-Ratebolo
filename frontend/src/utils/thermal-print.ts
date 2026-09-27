@@ -31,9 +31,13 @@ export function thermalMetrics(paperMm: number) {
   /** QR display px — slightly larger, still under (widthPx - 2*pattiPadX). */
   // Compact QR display sizes so HTML thermal slips stay near ~6" with content.
   const qrPx = w <= 58 ? 96 : w <= 80 ? 112 : 128;
+  /** Merchant shop name — largest header signal (do not change for Vendor). */
+  const shopFs = w <= 58 ? 18 : w <= 80 ? 24 : 28;
   return {
     w,
     widthPx,
+    // Base metrics shared with Vendor Bill — leave unchanged.
+    // Farmer Patti slightly larger body is applied via #slip.patti overrides below.
     bodyFs: w <= 58 ? 10 : w <= 80 ? 12 : 14,
     bigFs: w <= 58 ? 13 : w <= 80 ? 16 : 19,
     hugeFs: w <= 58 ? 17 : w <= 80 ? 22 : 26,
@@ -60,11 +64,11 @@ export function thermalMetrics(paperMm: number) {
     vFarmPct: w <= 58 ? 24 : 26,
     vBagsPct: w <= 58 ? 34 : 34,
     vAmtPct: w <= 58 ? 28 : 26,
-    farmerFs: w <= 58 ? 20 : w <= 80 ? 24 : 28,
-    /** Vendor name — one step under farmerFs, still bold/readable on the same row. */
+    /** Farmer name ≈ merchant shopFs (Patti only; merchant size unchanged). */
+    farmerFs: shopFs,
+    /** Vendor name — one step under prior farmerFs, still bold/readable on the same row. */
     vendorFs: w <= 58 ? 16 : w <= 80 ? 18 : 22,
-    /** Merchant shop name — largest header signal (Preview shopName ~20–24px). */
-    shopFs: w <= 58 ? 18 : w <= 80 ? 24 : 28,
+    shopFs,
   };
 }
 
@@ -201,6 +205,13 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       font-size: ${m.lotFs}px !important;
       font-weight: 900 !important;
     }
+    /* Bags × Rate + Amount bold (Farmer Patti line items). */
+    #slip.patti .row .mid {
+      font-weight: 900 !important;
+    }
+    #slip.patti .row .right {
+      font-weight: 900 !important;
+    }
     #slip.patti .row .bags {
       font-size: ${m.emphFs}px !important;
       font-weight: 900 !important;
@@ -324,17 +335,26 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       font-weight: 900 !important;
       color: #000 !important;
     }
-    /* Farmer Patti only: Times Roman + clearer Net Payable spacing (size unchanged). */
+    /* Farmer Patti only: Times Roman + slightly larger body (Vendor metrics untouched). */
     #slip.patti,
     #slip.patti * {
       font-family: "Times New Roman", Times, "Liberation Serif", Georgia, serif !important;
     }
-    /* Side margins so content is centered in the printable area (not edge-to-edge). */
     #slip.patti {
+      font-size: ${m.bodyFs + 1}px !important;
       padding-left: ${m.pattiPadX}px !important;
       padding-right: ${m.pattiPadX}px !important;
       box-sizing: border-box !important;
       border: 2px solid #000 !important;
+    }
+    #slip.patti .row {
+      font-size: ${m.rowFs + 1}px !important;
+    }
+    #slip.patti .kv:not(.deduct):not(.deduct-total):not(.farmer) {
+      font-size: ${m.bodyFs + 1}px !important;
+    }
+    #slip.patti .kind {
+      font-size: ${Math.max(9, m.bodyFs - 1)}px !important;
     }
     /* Preview header: shop + title left, NO./BILL box right — shared by Patti + Vendor */
     #slip.patti .patti-head,
@@ -429,18 +449,21 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       -webkit-text-stroke: 0 !important;
       background: #fff !important;
     }
+    /* NET PAYABLE ≈ merchant shop size; Times Roman (HTML). ESC/POS uses Font A + big/tall. */
     #slip.patti .netbox .bold {
-      font-size: ${m.bigFs}px !important;
-      letter-spacing: 0.12em;
+      font-family: "Times New Roman", Times, "Liberation Serif", Georgia, serif !important;
+      font-size: ${m.shopFs}px !important;
+      letter-spacing: 0.08em;
       flex-shrink: 0;
       text-transform: uppercase !important;
       font-weight: 900 !important;
       color: #000 !important;
-      line-height: 1.25;
+      line-height: 1.2;
     }
     #slip.patti .netbox .huge {
-      font-size: ${Math.min(m.hugeFs + 2, m.w <= 58 ? 19 : m.hugeFs + 2)}px !important;
-      letter-spacing: 0.04em;
+      font-family: "Times New Roman", Times, "Liberation Serif", Georgia, serif !important;
+      font-size: ${m.shopFs}px !important;
+      letter-spacing: 0.02em;
       font-variant-numeric: lining-nums tabular-nums;
       padding-left: 8px;
       white-space: nowrap !important;
@@ -451,7 +474,7 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       color: #000 !important;
       flex: 0 1 auto;
       min-width: 0;
-      line-height: 1.25;
+      line-height: 1.2;
     }
     /* QR row matches App Preview: code left, SCAN AT COUNTER + hint right */
     #slip.patti .qrbox {

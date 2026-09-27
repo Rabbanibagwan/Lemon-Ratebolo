@@ -32,7 +32,8 @@ export function encodeFarmerPattiEscPos(
   b.docTitleAndNo("PATTI / BILL", p.patti_no);
   b.hr();
 
-  b.infoRow("FARMER", p.farmer_name || "-");
+  // Farmer name: merchant-class large + bold (not shopHeader — merchant size unchanged).
+  b.farmerNameRow(p.farmer_name || "-");
   b.infoRow("DATE", date, { valueBold: false });
   if (p.driver_name) {
     const drv = p.driver_place ? `${p.driver_name} - ${p.driver_place}` : p.driver_name;
@@ -44,6 +45,7 @@ export function encodeFarmerPattiEscPos(
     lot.sales.forEach((s, i) => {
       const lotNo = i === 0 ? String(lot.lot_no || `${lot.lot_serial_no}/${lot.total_bags}`) : "";
       const mid = `${s.bags} x ${rupees(pattiDisplayRate(s.rate_per_bag, p.payment_factor))}`;
+      // itemRowLotEmph bolds Bags × Rate + Amount (Farmer Patti only).
       b.itemRowLotEmph(lotNo, mid, rupees(pattiDisplayAmount(s.bags, s.rate_per_bag, p.payment_factor)));
     });
   }
@@ -53,9 +55,13 @@ export function encodeFarmerPattiEscPos(
     : "Hamali";
   b.hr()
     .kv("Gross total", rupees(p.farmer_gross))
+    // Full-width rule immediately below Gross total (this.cols → 58/80/100).
+    .hr("-")
     .kv(hamaliLabel, `- ${rupees(p.hamali_total)}`)
     .kv("Bhada", `- ${rupees(p.bhada_total)}`)
     .kv("Stationery", `- ${rupees(p.stationery_total)}`)
+    // Full-width rule immediately above Total deduction (not doubled with NET frame).
+    .hr("-")
     .bold(true)
     .kv("Total deduction", `- ${rupees(p.deductions_total)}`)
     .bold(false);

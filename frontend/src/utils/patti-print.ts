@@ -217,9 +217,11 @@ export function renderThermalPattiHtml(
     ${lines}
     <div class="hr"></div>
     <div class="kv"><span>Gross total</span><span>${fmt(p.farmer_gross)}</span></div>
+    <div class="hr"></div>
     <div class="kv deduct"><span>${detailed ? `Hamali (${p.total_bags} × ${fmt(p.hamali_per_bag)})` : "Hamali"}</span><span>− ${fmt(p.hamali_total)}</span></div>
     <div class="kv deduct"><span>Bhada</span><span>− ${fmt(p.bhada_total)}</span></div>
     <div class="kv deduct"><span>Stationery</span><span>− ${fmt(p.stationery_total)}</span></div>
+    <div class="hr"></div>
     <div class="kv deduct-total"><span>Total deduction</span><span>− ${fmt(p.deductions_total)}</span></div>
     <div class="netbox"><span class="bold">NET PAYABLE</span><span class="huge">${fmt(p.net_payable)}</span></div>
     <div class="kv"><span class="k">RECEIVER</span><span class="bold wrap">${escapeHtml(p.receiver_name || "—")}</span></div>
