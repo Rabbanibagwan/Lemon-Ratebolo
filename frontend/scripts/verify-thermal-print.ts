@@ -50,6 +50,7 @@ function encodePatti(paperMm: number): { b64: string; builder: EscPosBuilder } {
   };
   const date = new Date(p.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" });
   b.shopHeader(profile);
+  b.applyPrintArea();
   b.docTitleAndNo("PATTI / BILL", p.patti_no);
   b.hr();
   b.infoRow("FARMER", p.farmer_name);
@@ -72,7 +73,7 @@ function encodePatti(paperMm: number): { b64: string; builder: EscPosBuilder } {
     .kv("Total deduction", `- ${rupees(p.deductions_total)}`)
     .bold(false);
   b.normalState();
-  b.majorTotalBox("NET PAYABLE", rupees(p.net_payable));
+  b.farmerNetPayableBox(rupees(p.net_payable));
   b.normalState();
   b.infoRow("RECEIVER", p.receiver_name);
   b.normalState();
@@ -257,6 +258,8 @@ function analyzeEscPos(b64: string): {
   boldOnCount: number;
   lfAfterQrPrint: number;
   gsWDots: number | null;
+  gsLDots: number | null;
+  gsWCount: number;
   netPayableUsesReverse: boolean;
   shopHeaderCentered: boolean;
 } {
@@ -267,6 +270,8 @@ function analyzeEscPos(b64: string): {
   let hasCut = false;
   let cutIsFeedAndCut = false;
   let gsWDots: number | null = null;
+  let gsLDots: number | null = null;
+  let gsWCount = 0;
   let qrPrintAt = -1;
   let reverseState = false;
   let reverseOnDuringNet = false;
@@ -296,8 +301,14 @@ function analyzeEscPos(b64: string): {
       i += 3;
       continue;
     }
+    if (b === 0x1d && bin[i + 1] === 0x4c) {
+      gsLDots = bin[i + 2] + (bin[i + 3] << 8);
+      i += 4;
+      continue;
+    }
     if (b === 0x1d && bin[i + 1] === 0x57) {
       gsWDots = bin[i + 2] + (bin[i + 3] << 8);
+      gsWCount++;
       i += 4;
       continue;
     }
@@ -357,6 +368,8 @@ function analyzeEscPos(b64: string): {
     boldOnCount,
     lfAfterQrPrint,
     gsWDots,
+    gsLDots,
+    gsWCount,
     netPayableUsesReverse: reverseOnDuringNet,
     shopHeaderCentered,
   };
@@ -369,13 +382,26 @@ function assert(cond: boolean, msg: string) {
 const widths = [58, 80, 100] as const;
 const expectedDots: Record<number, number> = { 58: 384, 80: 576, 100: 720 };
 const expectedCols: Record<number, number> = { 58: 32, 80: 48, 100: 60 };
+const expectedPaperDots: Record<number, number> = { 58: 464, 80: 640, 100: 800 };
+const expectedLeftMargin: Record<number, number> = { 58: 0, 80: 0, 100: 40 };
 const results: Record<string, string> = {};
 
 for (const mm of widths) {
   const cfg = thermalWidthConfig(mm);
   assert(cfg.dots === expectedDots[mm], `${mm}mm dots`);
+  assert(cfg.contentDots === expectedDots[mm], `${mm}mm contentDots`);
   assert(cfg.columns === expectedCols[mm], `${mm}mm cols cfg`);
-  assert(cfg.contentDots === cfg.dots - cfg.leftMarginDots - cfg.rightMarginDots, `${mm} contentDots`);
+  assert(cfg.paperDots === expectedPaperDots[mm], `${mm}mm paperDots`);
+  assert(cfg.leftMarginDots === expectedLeftMargin[mm], `${mm}mm leftMargin`);
+  assert(
+    cfg.leftMarginDots + cfg.contentDots + cfg.rightMarginDots === cfg.paperDots,
+    `${mm}mm paper = left+content+right`,
+  );
+  // 100mm must not silently fall back to 80mm values.
+  if (mm === 100) {
+    assert(cfg.contentDots !== 576 && cfg.columns !== 48, "100mm not using 80mm width");
+    assert(cfg.leftMarginDots === Math.floor((800 - 720) / 2), "100mm center offset");
+  }
   assert(escposCols(mm) === expectedCols[mm], `${mm}mm cols`);
   assert(escposPrintDots(mm) === cfg.contentDots, `${mm}mm printDots`);
 
@@ -403,6 +429,18 @@ for (const mm of widths) {
   assert(pattiText.includes("SCAN AT COUNTER"), "qr");
   assert(pattiText.includes(slipText("Gross total")) || pattiText.includes("Gross total"), "gross");
 
+  // Board-style NET PAYABLE: continuous full-width rules above and below the row.
+  const pattiLines = pattiText.split("\n");
+  const netIdx = pattiLines.findIndex((ln) => ln.includes("NET PAYABLE"));
+  assert(netIdx > 0, `${mm} NET PAYABLE row present`);
+  const topRule = pattiLines[netIdx - 1] || "";
+  const botRule = pattiLines[netIdx + 1] || "";
+  assert(/^-+$/.test(topRule) && topRule.length === cfg.columns, `${mm} NET top rule width ${topRule.length}`);
+  assert(/^-+$/.test(botRule) && botRule.length === cfg.columns, `${mm} NET bottom rule width ${botRule.length}`);
+  // Amount stays on the same line (no wrap) and fits cols.
+  assert((pattiLines[netIdx] || "").length <= cfg.columns, `${mm} NET row overflow`);
+  assert(/\bRs\s/.test(pattiLines[netIdx] || "") || /[\d,]+\.\d{2}/.test(pattiLines[netIdx] || ""), `${mm} NET amount on row`);
+
   const analysis = analyzeEscPos(pattiB64);
   assert(analysis.hasCut, `${mm} has CUT`);
   assert(analysis.cutIsFeedAndCut, `${mm} uses feed-and-cut (GS V 65)`);
@@ -411,12 +449,26 @@ for (const mm of widths) {
   assert(analysis.reverseOnCount === 0, `${mm} no GS B 1 (reverse ON) in Patti`);
   assert(analysis.boldOnCount > 0, `${mm} uses bold`);
   assert(analysis.gsWDots === cfg.contentDots, `${mm} GS W dots=${analysis.gsWDots} expected ${cfg.contentDots}`);
+  assert(analysis.gsLDots === cfg.leftMarginDots, `${mm} GS L dots=${analysis.gsLDots} expected ${cfg.leftMarginDots}`);
+  // Print area must be applied more than once (init + re-assert after header size change).
+  assert(analysis.gsWCount >= 2, `${mm} print area re-asserted (gsWCount=${analysis.gsWCount})`);
   // QR clearance + SCAN/hint lines + cut feed(2)
   const minLf = pattiBuilder.qrClearanceFeed() + 2;
   assert(analysis.lfAfterQrPrint >= minLf, `${mm} feed after QR: ${analysis.lfAfterQrPrint} < ${minLf}`);
   // ~6 inches (152 mm); allow band for 1-lot sample (content must fit, not a blank flag)
   const lengthMm = pattiBuilder.estimateLengthMm();
   assert(lengthMm >= 110 && lengthMm <= 190, `${mm} length ~6in: ${lengthMm.toFixed(1)}mm out of 110–190`);
+
+  // Large Net Payable still fits inside the framed row at this paper width.
+  const large = new EscPosBuilder(mm);
+  large.farmerNetPayableBox(rupees(12_345_678.9));
+  const largeText = decodeEscPosText(large.toBase64());
+  const largeLines = largeText.split("\n").filter(Boolean);
+  const largeNet = largeLines.find((ln) => ln.includes("NET PAYABLE")) || "";
+  assert(largeNet.length <= cfg.columns, `${mm} large NET overflow: ${largeNet.length}`);
+  const li = largeLines.indexOf(largeNet);
+  assert(li > 0 && /^-+$/.test(largeLines[li - 1] || "") && (largeLines[li - 1] || "").length === cfg.columns, `${mm} large NET top rule`);
+  assert(/^-+$/.test(largeLines[li + 1] || "") && (largeLines[li + 1] || "").length === cfg.columns, `${mm} large NET bottom rule`);
 
   const shortEnc = encodeBill(mm, SHORT_BANK);
   const longEnc = encodeBill(mm, LONG_BANK);
@@ -441,6 +493,7 @@ for (const mm of widths) {
   assert(!billAnalysis.netPayableUsesReverse && billAnalysis.reverseOnCount === 0, `${mm} bill no inverse`);
   assert(billAnalysis.hasCut && billAnalysis.cutIsFeedAndCut, `${mm} vendor cut`);
   assert(billAnalysis.gsWDots === cfg.contentDots, `${mm} vendor GS W`);
+  assert(billAnalysis.gsLDots === cfg.leftMarginDots, `${mm} vendor GS L`);
   assert(contentBeforeCut(longEnc.b64, ["BANK DETAILS", ...LONG_BANK]), `${mm} long bank before CUT`);
   assert(contentBeforeCut(shortEnc.b64, ["BANK DETAILS", ...SHORT_BANK]), `${mm} short bank before CUT`);
   // Long bank doc must be taller than short (content-driven, not fixed height)
@@ -453,7 +506,7 @@ for (const mm of widths) {
   assert(vl + vf + vb + va === cfg.columns, `${mm} vendor 4-col fill`);
 
   results[`${mm}mm`] =
-    `PASS cols=${cfg.columns} dots=${cfg.dots} qrMod=${mod} lfAfterQr=${analysis.lfAfterQrPrint} len≈${lengthMm.toFixed(0)}mm centerHeader=YES vendorBank=COMPLETE`;
+    `PASS cols=${cfg.columns} content=${cfg.contentDots} paper=${cfg.paperDots} leftMargin=${cfg.leftMarginDots} qrMod=${mod} lfAfterQr=${analysis.lfAfterQrPrint} len≈${lengthMm.toFixed(0)}mm centerHeader=YES vendorBank=COMPLETE`;
   console.log(`\n=== PATTI ${mm}mm (${cfg.columns} cols / ${cfg.dots} dots, ~${lengthMm.toFixed(0)}mm) ===\n${pattiText}`);
   console.log(`\n=== VENDOR ${mm}mm LONG BANK (${cfg.columns} cols) ===\n${billText}`);
 }
@@ -461,7 +514,11 @@ for (const mm of widths) {
 // Source wiring checks
 const docs = readFileSync(join(__dirname, "../src/utils/thermal-escpos-docs.ts"), "utf8");
 assert(docs.includes("shopHeader"), "docs use shopHeader");
+assert(docs.includes("farmerNetPayableBox"), "docs use farmerNetPayableBox for Patti");
 assert(docs.includes("majorTotalBox"), "docs use majorTotalBox");
+assert(/farmerNetPayableBox\(rupees\(p\.net_payable\)\)/.test(docs), "Patti NET uses farmerNetPayableBox");
+assert(/majorTotalBox\("GRAND TOTAL"/.test(docs), "Vendor GRAND TOTAL still uses majorTotalBox");
+assert(!/majorTotalBox\("NET PAYABLE"/.test(docs), "Patti no longer uses majorTotalBox for NET");
 assert(docs.includes("tableHeader4"), "docs use tableHeader4");
 assert(docs.includes('kv("Lemon"'), "docs Lemon");
 assert(docs.includes("GRAND TOTAL"), "docs GRAND TOTAL");
@@ -474,14 +531,21 @@ assert(docs.includes("bank_branch"), "docs bank_branch");
 const escposSrc = readFileSync(join(__dirname, "../src/utils/escpos.ts"), "utf8");
 assert(escposSrc.includes("thermalWidthConfig"), "thermalWidthConfig exported");
 assert(escposSrc.includes("normalState"), "normalState present");
+assert(escposSrc.includes("farmerNetPayableBox"), "farmerNetPayableBox present");
 assert(!/reverse\(true\)/.test(escposSrc.match(/majorTotalBox[\s\S]*?^  \}/m)?.[0] || ""), "majorTotalBox no reverse(true)");
+assert(!/reverse\(true\)/.test(escposSrc.match(/farmerNetPayableBox[\s\S]*?^  \}/m)?.[0] || ""), "farmerNetPayableBox no reverse(true)");
+assert(/\.size\("tall"\)/.test(escposSrc.match(/farmerNetPayableBox[\s\S]*?^  \}/m)?.[0] || ""), "farmerNetPayableBox uses tall");
 
 const thermalCss = readFileSync(join(__dirname, "../src/utils/thermal-print.ts"), "utf8");
 assert(thermalCss.includes("#slip.patti .netbox"), "patti netbox css");
 assert(/#slip\.patti \.netbox \{[\s\S]*?background:\s*#fff/m.test(thermalCss), "patti netbox white bg");
+assert(/#slip\.patti \.netbox \{[\s\S]*?border-top:\s*2px solid #000/m.test(thermalCss), "patti netbox top rule");
+assert(/#slip\.patti \.netbox \{[\s\S]*?border-bottom:\s*2px solid #000/m.test(thermalCss), "patti netbox bottom rule");
 
 const pattiUi = readFileSync(join(__dirname, "../app/patti/[id].tsx"), "utf8");
 assert(/netBox:\s*\{[\s\S]*?backgroundColor:\s*colors\.surface/m.test(pattiUi), "preview netBox white");
+assert(/netBox:\s*\{[\s\S]*?borderTopWidth:\s*2/m.test(pattiUi), "preview netBox top rule");
+assert(/netBox:\s*\{[\s\S]*?borderBottomWidth:\s*2/m.test(pattiUi), "preview netBox bottom rule");
 assert(pattiUi.includes("merchantHead"), "preview merchant head centered");
 
 const pattiPrint = readFileSync(join(__dirname, "../src/utils/patti-print.ts"), "utf8");
@@ -510,8 +574,10 @@ assert(idSrc.includes("merchantHead"), "UI merchantHead");
 console.log("\nRESULTS:");
 for (const [k, v] of Object.entries(results)) console.log(`  ${k}: ${v}`);
 console.log("  Merchant header centered (Patti + Vendor): PASS");
+console.log("  Net Payable framed (full-width top/bottom rules): PASS");
 console.log("  Net Payable / Grand Total inverse: PASS (disabled)");
 console.log("  Net Payable / Grand Total bold black / white bg: PASS");
+console.log("  Vendor Bill GRAND TOTAL still majorTotalBox (unchanged): PASS");
 console.log("  Short + long Bank Details before CUT: PASS");
 console.log("  Content-driven Vendor Bill length: PASS");
 console.log("  QR clearance + feed-and-cut: PASS");

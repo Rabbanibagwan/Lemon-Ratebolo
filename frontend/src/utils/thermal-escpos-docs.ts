@@ -27,6 +27,8 @@ export function encodeFarmerPattiEscPos(
   const date = new Date(p.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" });
 
   b.shopHeader(profile);
+  // Ensure 100mm (and all widths) keep GS L/GS W after header — document positioning.
+  b.applyPrintArea();
   b.docTitleAndNo("PATTI / BILL", p.patti_no);
   b.hr();
 
@@ -59,7 +61,8 @@ export function encodeFarmerPattiEscPos(
     .bold(false);
 
   b.normalState();
-  b.majorTotalBox("NET PAYABLE", rupees(p.net_payable));
+  // Farmer Patti only: framed NET PAYABLE (Vendor Bill keeps majorTotalBox).
+  b.farmerNetPayableBox(rupees(p.net_payable));
   b.normalState();
   b.infoRow("RECEIVER", p.receiver_name || "-");
 

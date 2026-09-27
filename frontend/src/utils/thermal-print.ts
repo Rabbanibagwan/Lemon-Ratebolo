@@ -408,33 +408,50 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       font-weight: 900 !important;
       line-height: 1.1;
     }
-    /* Farmer Patti: white bg + bold black NET PAYABLE (matches physical thermal) */
+    /* Farmer Patti: board-style NET PAYABLE — continuous full-width top/bottom rules */
     #slip.patti .netbox {
       background: #fff !important;
       padding: 10px 0;
+      margin: 4px 0;
       gap: 10px;
+      width: 100% !important;
+      max-width: 100% !important;
+      box-sizing: border-box !important;
       border: none !important;
+      border-top: 2px solid #000 !important;
+      border-bottom: 2px solid #000 !important;
+      border-left: 0 !important;
+      border-right: 0 !important;
     }
     #slip.patti .netbox,
     #slip.patti .netbox * {
       color: #000 !important;
       -webkit-text-stroke: 0 !important;
+      background: #fff !important;
     }
     #slip.patti .netbox .bold {
+      font-size: ${m.bigFs}px !important;
       letter-spacing: 0.12em;
       flex-shrink: 0;
       text-transform: uppercase !important;
       font-weight: 900 !important;
       color: #000 !important;
+      line-height: 1.25;
     }
     #slip.patti .netbox .huge {
+      font-size: ${Math.min(m.hugeFs + 2, m.w <= 58 ? 19 : m.hugeFs + 2)}px !important;
       letter-spacing: 0.04em;
       font-variant-numeric: lining-nums tabular-nums;
       padding-left: 8px;
-      white-space: nowrap;
+      white-space: nowrap !important;
+      overflow: hidden;
+      text-overflow: clip;
       text-align: right;
       font-weight: 900 !important;
       color: #000 !important;
+      flex: 0 1 auto;
+      min-width: 0;
+      line-height: 1.25;
     }
     /* QR row matches App Preview: code left, SCAN AT COUNTER + hint right */
     #slip.patti .qrbox {

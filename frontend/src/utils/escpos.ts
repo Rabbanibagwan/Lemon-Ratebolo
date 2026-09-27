@@ -15,40 +15,62 @@ function clampPaperMm(n: unknown, fallback = 80): number {
 /** Single width config for an entire thermal document (Patti / Vendor Bill). */
 export type ThermalWidthConfig = {
   paperMm: number;
-  /** Max printable dots at 203 DPI (GS W). */
+  /** Physical roll width in dots at 203 DPI (paperMm × 8). */
+  paperDots: number;
+  /**
+   * ESC/POS print-area width (GS W) = document content width.
+   * Canonical: 58→384, 80→576, 100→720.
+   */
   dots: number;
-  /** Font-A / 12-dot columns — all sections must stay within this. */
+  /** Font-A / 12-dot columns — always contentDots / 12 (32 / 48 / 60). */
   columns: number;
-  /** Left margin in dots (GS L). */
+  /**
+   * Left margin in dots (GS L) — centers the content block on the physical
+   * roll when the addressable paper width is wider than content (100mm).
+   */
   leftMarginDots: number;
-  /** Right margin in dots (implicit: dots - left - content). */
+  /** Right residual on the roll: paperDots - leftMargin - contentDots. */
   rightMarginDots: number;
-  /** Usable content dots after margins. */
+  /** Usable content dots (= dots / GS W). */
   contentDots: number;
 };
 
+/** Font-A character cell width used for column planning (203 DPI). */
+const FONT_A_DOTS = 12;
+
 /**
- * Canonical printable widths (paper → printable area at 203 DPI):
- *  58mm → 384 dots / 32 cols  (~48 mm printable)
- *  80mm → 576 dots / 48 cols  (~72 mm printable)
- * 100mm → 720 dots / 60 cols  (~90 mm printable)
+ * Canonical content widths (selected paper → ESC/POS content at 203 DPI):
+ *  58mm → 384 dots / 32 cols
+ *  80mm → 576 dots / 48 cols
+ * 100mm → 720 dots / 60 cols
  *
- * `dots` is MAX_PRINTABLE for the roll. Left margin is forced to 0 so every
- * section shares one fixed content width (= dots / columns).
+ * Document positioning (not text-align):
+ *  Physical roll dots = paperMm × 8 (58→464, 80→640, 100→800).
+ *  On 100mm rolls the content block (720) is narrower than the roll (800),
+ *  so leftMarginDots = ⌊(paperDots − contentDots) / 2⌋ centers the Patti
+ *  horizontally (GS L) — no space-padding of text rows.
+ *  58/80 keep leftMargin=0 because the print head ≈ content width; offsetting
+ *  would clip.
  */
 export function thermalWidthConfig(paperMm: number): ThermalWidthConfig {
   const w = clampPaperMm(paperMm);
-  const dots = w <= 58 ? 384 : w <= 80 ? 576 : 720;
-  const columns = w <= 58 ? 32 : w <= 80 ? 48 : 60;
-  const leftMarginDots = 0;
-  const rightMarginDots = 0;
+  // Explicit mapping — never reuse 58/80 values for 100mm.
+  const contentDots = w <= 58 ? 384 : w <= 80 ? 576 : 720;
+  const columns = Math.floor(contentDots / FONT_A_DOTS);
+  const paperDots = Math.round(w * 8);
+  let leftMarginDots = 0;
+  if (w >= 100 && paperDots > contentDots) {
+    leftMarginDots = Math.floor((paperDots - contentDots) / 2);
+  }
+  const rightMarginDots = Math.max(0, paperDots - leftMarginDots - contentDots);
   return {
     paperMm: w,
-    dots,
+    paperDots,
+    dots: contentDots,
     columns,
     leftMarginDots,
     rightMarginDots,
-    contentDots: dots - leftMarginDots - rightMarginDots,
+    contentDots,
   };
 }
 
@@ -134,14 +156,22 @@ export class EscPosBuilder {
     return this;
   }
 
-  init(): this {
-    const n = this.printDots;
+  /**
+   * Apply GS L (left margin) + GS W (content / print-area width).
+   * Call after ESC @ and again after commands that some firmwares use to
+   * reset the print area (e.g. character-size changes in the shop header).
+   */
+  applyPrintArea(): this {
     const lm = this.width.leftMarginDots;
-    // ESC @ reset → left margin → print area width → clear sticky styles.
-    return this.raw(u8(0x1b, 0x40))
-      .raw(u8(0x1d, 0x4c, lm & 0xff, (lm >> 8) & 0xff))
-      .raw(u8(0x1d, 0x57, n & 0xff, (n >> 8) & 0xff))
-      .normalState();
+    const n = this.width.contentDots;
+    return this.raw(u8(0x1d, 0x4c, lm & 0xff, (lm >> 8) & 0xff)).raw(
+      u8(0x1d, 0x57, n & 0xff, (n >> 8) & 0xff),
+    );
+  }
+
+  init(): this {
+    // ESC @ reset → centered print area for this paper → clear sticky styles.
+    return this.raw(u8(0x1b, 0x40)).applyPrintArea().normalState();
   }
 
   /**
@@ -280,7 +310,11 @@ export class EscPosBuilder {
     if (profile?.mobile) {
       this.align("center").bold(false).size("normal").line(`Mobile: ${slipText(profile.mobile)}`);
     }
-    // Body sections (title/NO., farmer, table, totals) stay left/right as designed.
+    // Re-assert GS L / GS W after size("big") — some firmwares drop print-area
+    // settings on character-size changes, which left-aligns a narrow body on 100mm.
+    this.applyPrintArea();
+    // Body sections (title/NO., farmer, table, totals) stay left/right *within* the
+    // centered content area (document positioning ≠ per-row ALIGN_CENTER).
     this.align("left");
     return this;
   }
@@ -308,6 +342,7 @@ export class EscPosBuilder {
   /**
    * Major total (NET PAYABLE / GRAND TOTAL).
    * WHITE background, BOLD BLACK text — never inverse/reverse fill.
+   * Vendor Bill GRAND TOTAL keeps this compact row (no frame).
    */
   majorTotalBox(left: string, right: string): this {
     const lab = String(left || "").toUpperCase();
@@ -316,6 +351,38 @@ export class EscPosBuilder {
     this.normalState().align("left").bold(true).size("normal");
     this.kv(lab, amt);
     this.bold(false).normalState();
+    return this;
+  }
+
+  /**
+   * Farmer Patti NET PAYABLE — board-style frame with continuous full-width rules:
+   *   -------------------------------
+   *   NET PAYABLE              Rs …
+   *   -------------------------------
+   * WHITE background, bold black, slightly taller. Never inverse/reverse.
+   * Rules use this.cols (centralized printable width for 58/80/100 mm).
+   */
+  farmerNetPayableBox(amount: string): this {
+    const lab = "NET PAYABLE";
+    // Prefer amount fit; keep currency + digits together; never wrap the amount.
+    const amtWidth = Math.max(10, this.cols - lab.length - 1);
+    const amt = this.fitAmount(slipText(amount || ""), amtWidth);
+    this.normalState().align("left");
+    // Continuous top rule — left printable edge → right printable edge.
+    this.hr("-");
+    // Slightly taller + bold black on white (GS B stays OFF via normalState).
+    this.normalState().align("left").bold(true).size("tall");
+    const maxL = Math.max(0, this.cols - amt.length - 1);
+    let l = lab;
+    if (l.length > maxL) l = l.slice(0, Math.max(0, maxL - 1)) + (maxL > 0 ? "." : "");
+    const gap = Math.max(1, this.cols - l.length - amt.length);
+    const row = (l + " ".repeat(gap) + amt).slice(0, this.cols);
+    this.line(row);
+    // Reset size/bold before the bottom rule so separators stay normal weight.
+    this.size("normal").bold(false).normalState().align("left");
+    // Continuous bottom rule — same full printable width.
+    this.hr("-");
+    this.normalState();
     return this;
   }
 
