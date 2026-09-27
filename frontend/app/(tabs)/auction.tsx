@@ -166,6 +166,14 @@ export default function Auction() {
             <Ionicons name="calendar-outline" size={14} color={colors.onSurface} />
           </Pressable>
         </View>
+        <Pressable
+          style={styles.headerBtn}
+          onPress={() => router.push("/chart" as any)}
+          testID="auction-open-chart"
+        >
+          <Ionicons name="grid-outline" size={16} color={colors.onSurface} />
+          <Text style={styles.headerBtnText}>CHART</Text>
+        </Pressable>
         <Pressable style={styles.headerBtn} onPress={openDriverModal} testID="edit-drivers">
           <Ionicons name="car-outline" size={16} color={colors.onSurface} />
           <Text style={styles.headerBtnText}>DRIVERS</Text>
