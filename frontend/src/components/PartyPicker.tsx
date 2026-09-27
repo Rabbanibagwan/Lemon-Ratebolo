@@ -11,6 +11,15 @@ import { api, Farmer, Vendor } from "@/src/api";
 import { KeyboardFormAvoid } from "@/src/components/KeyboardForm";
 import { Button, Empty, Input } from "@/src/components/ui";
 import { colors, font, spacing } from "@/src/theme";
+import {
+  createEnterGate,
+  isArrowDownKey,
+  isArrowLeftKey,
+  isArrowRightKey,
+  isArrowUpKey,
+  isEnterKey,
+  isEscapeKey,
+} from "@/src/utils/physical-keyboard";
 
 export type PartyKind = "farmer" | "vendor";
 export type PartyItem = Farmer | Vendor;
@@ -115,12 +124,13 @@ export function PartyPicker({
   const villageRef = useRef<TextInput>(null);
   const createKeyRef = useRef<TextInput>(null);
   const createActionRef = useRef<"save" | "cancel">("save");
-  const suppressCreateEnterUntilRef = useRef(0);
+  const searchEnterGate = useRef(createEnterGate()).current;
+  const createEnterGateRef = useRef(createEnterGate()).current;
   const nameFocusPendingRef = useRef(false);
   const searchFocusPendingRef = useRef(false);
   createActionRef.current = createAction;
 
-  const shouldIgnoreCreateEnter = () => Date.now() < suppressCreateEnterUntilRef.current;
+  const shouldIgnoreCreateEnter = () => createEnterGateRef.shouldIgnore();
 
   useEffect(() => {
     if (!visible) return;
@@ -170,8 +180,10 @@ export function PartyPicker({
 
   type CreateField = "name" | "details" | "phone" | "village";
 
+  // Enter chain: farmer Name → Phone → Save (village optional via touch/Tab).
+  // Vendor: Name → Details → Phone → Save.
   const createFieldOrder = useMemo((): CreateField[] => {
-    if (isFarmer) return ["name", "phone", "village"];
+    if (isFarmer) return ["name", "phone"];
     return ["name", "details", "phone"];
   }, [isFarmer]);
 
@@ -194,6 +206,7 @@ export function PartyPicker({
 
   const submitCreateField = (field: CreateField) => {
     if (shouldIgnoreCreateEnter()) return;
+    if (!createEnterGateRef.claim()) return;
     advanceCreateField(field);
   };
 
@@ -216,7 +229,8 @@ export function PartyPicker({
   };
 
   const activateCreateActions = (action: "save" | "cancel" = "save") => {
-    suppressCreateEnterUntilRef.current = 0;
+    // Same Enter that advanced here must not also trigger Save.
+    createEnterGateRef.suppressFor(280);
     setCreateAction(action);
     setCreateActionsActive(true);
     nameRef.current?.blur();
@@ -250,20 +264,30 @@ export function PartyPicker({
 
   const handleCreateFormKeyPress = (e: NativeSyntheticEvent<TextInputKeyPressEventData>) => {
     const key = e.nativeEvent.key;
-    if (key === "Escape") {
+    if (isEscapeKey(key)) {
       closeCreate();
       return;
     }
     if (!createActionsActive) return;
-    if (key === "ArrowLeft") setCreateAction("save");
-    else if (key === "ArrowRight") setCreateAction("cancel");
-    else if (key === "Enter") runCreateAction(createActionRef.current);
+    if (isArrowLeftKey(key)) setCreateAction("save");
+    else if (isArrowRightKey(key)) setCreateAction("cancel");
+    else if (isEnterKey(key)) {
+      if (!createEnterGateRef.claim()) return;
+      runCreateAction(createActionRef.current);
+    }
   };
 
-  const handleCreateFieldKeyPress = (_field: CreateField) => (
+  const handleCreateFieldKeyPress = (field: CreateField) => (
     e: NativeSyntheticEvent<TextInputKeyPressEventData>,
   ) => {
-    if (e.nativeEvent.key === "Escape") closeCreate();
+    const key = e.nativeEvent.key;
+    if (isEscapeKey(key)) {
+      closeCreate();
+      return;
+    }
+    if (isEnterKey(key)) {
+      submitCreateField(field);
+    }
   };
 
   const handleCreateFieldFocus = () => {
@@ -284,7 +308,9 @@ export function PartyPicker({
 
   const openCreate = () => {
     searchRef.current?.blur();
-    suppressCreateEnterUntilRef.current = Date.now() + 650;
+    // Prevent the same Enter that opened create from advancing Name → next field.
+    createEnterGateRef.suppressFor(500);
+    searchEnterGate.suppressFor(500);
     nameFocusPendingRef.current = true;
     setCreateAction("save");
     setCreateActionsActive(false);
@@ -305,20 +331,29 @@ export function PartyPicker({
     onSelect(filtered[idx]);
   };
 
+  const confirmSearchSelection = () => {
+    if (!searchEnterGate.claim()) return;
+    if (filtered.length === 0 && query.trim()) {
+      createEnterGateRef.suppressFor(500);
+      nameFocusPendingRef.current = true;
+    }
+    confirmHighlighted();
+  };
+
   const handleSearchKeyPress = (e: NativeSyntheticEvent<TextInputKeyPressEventData>) => {
     const key = e.nativeEvent.key;
-    if (key === "ArrowDown") {
+    if (isEscapeKey(key)) {
+      onClose();
+      return;
+    }
+    if (isArrowDownKey(key)) {
       if (!filtered.length) return;
       setHighlightIndex((i) => Math.min(i + 1, filtered.length - 1));
-    } else if (key === "ArrowUp") {
+    } else if (isArrowUpKey(key)) {
       if (!filtered.length) return;
       setHighlightIndex((i) => Math.max(i - 1, 0));
-    } else if (key === "Enter") {
-      if (filtered.length === 0 && query.trim()) {
-        suppressCreateEnterUntilRef.current = Date.now() + 650;
-        nameFocusPendingRef.current = true;
-      }
-      confirmHighlighted();
+    } else if (isEnterKey(key)) {
+      confirmSearchSelection();
     }
   };
 
@@ -421,13 +456,7 @@ export function PartyPicker({
                 returnKeyType="search"
                 blurOnSubmit={false}
                 onLayout={handleSearchLayout}
-                onSubmitEditing={() => {
-                  if (filtered.length === 0 && query.trim()) {
-                    suppressCreateEnterUntilRef.current = Date.now() + 650;
-                    nameFocusPendingRef.current = true;
-                  }
-                  confirmHighlighted();
-                }}
+                onSubmitEditing={confirmSearchSelection}
                 onKeyPress={handleSearchKeyPress}
                 testID={isFarmer ? "farmer-search" : "vendor-search"}
               />
@@ -533,7 +562,7 @@ export function PartyPicker({
               keyboardType="phone-pad"
               testID={isFarmer ? "new-farmer-phone" : "new-vendor-phone"}
               inputRef={phoneRef}
-              returnKeyType="next"
+              returnKeyType={isFarmer ? "done" : "next"}
               blurOnSubmit={false}
               onFocus={handleCreateFieldFocus}
               onSubmitEditing={() => submitCreateField("phone")}
