@@ -126,18 +126,7 @@ export function encodeVendorBillEscPos(bill: VendorBill, profile: ShopProfile, p
   b.kv("Paid", rupees(bill.paid));
   b.bold(true).kv("Balance Due", rupees(bill.balance)).bold(false);
 
-  // Merchant UPI QR (shop profile VPA) — after Balance Due, before bank details.
-  const upiId = normalizeUpiId(profile.upi_id);
-  const upiPayload = buildMerchantUpiPayUrl({
-    upiId,
-    merchantName: merchantUpiDisplayName(profile),
-    amount: bill.balance,
-  });
-  if (upiPayload) {
-    b.merchantUpiQrSection(upiPayload, upiId, paperMm);
-  }
-
-  // Complete Bank Details BEFORE any feed/cut (content-driven length).
+  // Complete Bank Details BEFORE QR / feed / cut (content-driven length).
   const bank: string[] = [];
   if (profile.bank_account_holder) bank.push(`A/c Name: ${profile.bank_account_holder}`);
   if (profile.bank_account_number) bank.push(`A/c No: ${profile.bank_account_number}`);
@@ -148,6 +137,22 @@ export function encodeVendorBillEscPos(bill: VendorBill, profile: ShopProfile, p
 
   if (bill.notes) {
     b.hr().align("left").size("normal").wrapped(slipText(bill.notes));
+  }
+
+  // Bottom of slip: merchant-uploaded QR (preferred), else generated UPI deep-link QR.
+  const uploaded = String(profile.upi_qr_base64 || "").trim();
+  if (uploaded) {
+    b.merchantUploadedQrSection(uploaded, paperMm);
+  } else {
+    const upiId = normalizeUpiId(profile.upi_id);
+    const upiPayload = buildMerchantUpiPayUrl({
+      upiId,
+      merchantName: merchantUpiDisplayName(profile),
+      amount: bill.balance,
+    });
+    if (upiPayload) {
+      b.merchantUpiQrSection(upiPayload, upiId, paperMm);
+    }
   }
 
   // Finalize only after last content line — clearance for head→cutter, then cut.

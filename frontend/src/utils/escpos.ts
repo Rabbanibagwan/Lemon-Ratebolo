@@ -5,6 +5,7 @@
  * Shared layout primitives for Farmer Patti + Vendor Bill so both documents
  * follow the same hierarchy as the on-screen thermal HTML preview.
  */
+import { pngBase64ToMonoBitmap, type MonoBitmap } from "@/src/utils/png-mono";
 
 function clampPaperMm(n: unknown, fallback = 80): number {
   const v = typeof n === "number" ? n : Number(n);
@@ -710,6 +711,7 @@ export class EscPosBuilder {
   /**
    * Merchant UPI payment QR on Vendor Bill (ESC/POS GS ( k).
    * Payload should already be a upi://pay?... deep link. Does not cut.
+   * Prefer merchantUploadedQrSection when the shop has an uploaded QR image.
    */
   merchantUpiQrSection(payload: string, upiId: string, paperMm?: number): this {
     const data = (payload || "").trim();
@@ -719,10 +721,52 @@ export class EscPosBuilder {
     this.align("center").bold(true).size("normal").line("PAY VIA UPI").bold(false);
     const module = this.qrModuleSize(paperMm ?? this.paperMm);
     this.normalState().align("center").qr(data, module);
-    this.normalState().align("center").bold(true).line("Scan to pay").bold(false);
+    this.normalState().align("center").bold(true).line("SCAN TO PAY").bold(false);
     if (vpa) {
       this.align("center").size("normal").wrapped(`Merchant UPI: ${vpa}`);
     }
+    this.normalState().align("left").hr("-");
+    this.normalState();
+    this.feed(this.qrClearanceFeed());
+    return this;
+  }
+
+  /**
+   * ESC/POS GS v 0 raster — centered within contentDots.
+   * Bitmap rows must be width padded to a multiple of 8.
+   */
+  rasterBitmap(bmp: MonoBitmap): this {
+    const w = bmp.width;
+    const h = bmp.height;
+    if (!w || !h || !bmp.rows.length) return this;
+    const xL = (Math.ceil(w / 8)) & 0xff;
+    const xH = (Math.ceil(w / 8) >> 8) & 0xff;
+    const yL = h & 0xff;
+    const yH = (h >> 8) & 0xff;
+    this.normalState().align("center");
+    this.raw(u8(0x1d, 0x76, 0x30, 0x00, xL, xH, yL, yH));
+    for (const row of bmp.rows) this.raw(row);
+    this.normalState();
+    return this;
+  }
+
+  /**
+   * Merchant-uploaded QR image on Vendor Bill (ESC/POS raster).
+   * Printed at the bottom after bank details. Does not cut.
+   */
+  merchantUploadedQrSection(imageBase64: string, paperMm?: number): this {
+    const mm = paperMm ?? this.paperMm;
+    // Leave quiet zone: target ~70% of content width, max per paper.
+    const maxDots =
+      mm <= 58 ? Math.min(this.printDots - 16, 288) :
+      mm <= 80 ? Math.min(this.printDots - 24, 384) :
+      Math.min(this.printDots - 32, 480);
+    const bmp = pngBase64ToMonoBitmap(imageBase64, maxDots);
+    if (!bmp) return this;
+    this.normalState().align("left").hr("-");
+    this.align("center").bold(true).size("normal").line("MERCHANT QR CODE").bold(false);
+    this.rasterBitmap(bmp);
+    this.normalState().align("center").bold(true).line("SCAN TO PAY").bold(false);
     this.normalState().align("left").hr("-");
     this.normalState();
     this.feed(this.qrClearanceFeed());

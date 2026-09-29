@@ -17,6 +17,7 @@ import {
   merchantUpiDisplayName,
   normalizeUpiId,
 } from "@/src/utils/merchant-upi";
+import { imageDataUri } from "@/src/utils/png-mono";
 import { qrDataUri } from "@/src/utils/qr";
 import { clampPaperMm, thermalPrintUserMessage } from "@/src/utils/thermal-print";
 import { shareVendorBillPdf, thermalPrintVendorBill } from "@/src/utils/vendor-bill-print";
@@ -58,16 +59,29 @@ export default function VendorBillDetail() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Merchant UPI QR preview — same payload as thermal ESC/POS / HTML print.
+  // Merchant QR preview — uploaded image preferred; else generated UPI deep-link.
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!b || !profile?.upi_id) {
+      if (!b || !profile) {
         setUpiQrUri("");
         setUpiIdShown("");
         return;
       }
       const upiId = normalizeUpiId(profile.upi_id);
+      const uploaded = imageDataUri(profile.upi_qr_base64);
+      if (uploaded) {
+        if (!cancelled) {
+          setUpiQrUri(uploaded);
+          setUpiIdShown(upiId);
+        }
+        return;
+      }
+      if (!upiId) {
+        setUpiQrUri("");
+        setUpiIdShown("");
+        return;
+      }
       const payload = buildMerchantUpiPayUrl({
         upiId,
         merchantName: merchantUpiDisplayName(profile),
@@ -262,22 +276,6 @@ export default function VendorBillDetail() {
           <Row label="Paid" value={money(b.paid)} />
           <Row label="Balance Due" value={money(b.balance)} strong />
 
-          {upiIdShown ? (
-            <>
-              <View style={styles.divider} />
-              <View style={styles.upiBox} testID="bill-upi-qr">
-                <Text style={styles.upiTitle}>PAY VIA UPI</Text>
-                {upiQrUri ? (
-                  <Image source={{ uri: upiQrUri }} style={styles.upiQr} accessibilityLabel="Merchant UPI QR" />
-                ) : (
-                  <ActivityIndicator color={colors.brandPrimary} style={{ marginVertical: spacing.md }} />
-                )}
-                <Text style={styles.upiScan}>Scan to pay</Text>
-                <Text style={styles.upiId}>Merchant UPI: {upiIdShown}</Text>
-              </View>
-            </>
-          ) : null}
-
           {profile?.bank_account_holder || profile?.bank_account_number || profile?.bank_ifsc || profile?.bank_name || profile?.bank_branch ? (
             <>
               <View style={styles.divider} />
@@ -295,6 +293,22 @@ export default function VendorBillDetail() {
               <View style={styles.divider} />
               <Text style={styles.section}>Notes</Text>
               <Text style={styles.subInfo}>{b.notes}</Text>
+            </>
+          ) : null}
+
+          {upiQrUri || upiIdShown ? (
+            <>
+              <View style={styles.divider} />
+              <View style={styles.upiBox} testID="bill-upi-qr">
+                <Text style={styles.upiTitle}>MERCHANT QR CODE</Text>
+                {upiQrUri ? (
+                  <Image source={{ uri: upiQrUri }} style={styles.upiQr} accessibilityLabel="Merchant QR" />
+                ) : (
+                  <ActivityIndicator color={colors.brandPrimary} style={{ marginVertical: spacing.md }} />
+                )}
+                <Text style={styles.upiScan}>SCAN TO PAY</Text>
+                {upiIdShown ? <Text style={styles.upiId}>Merchant UPI: {upiIdShown}</Text> : null}
+              </View>
             </>
           ) : null}
         </View>

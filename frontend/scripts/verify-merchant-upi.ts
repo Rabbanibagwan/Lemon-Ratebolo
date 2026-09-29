@@ -102,6 +102,11 @@ function encodeBillWithUpi(paperMm: number, upiId: string | null): string {
   b.normalState();
   b.kv("Paid", rupees(bill.paid));
   b.bold(true).kv("Balance Due", rupees(bill.balance)).bold(false);
+  b.bankDetailsSection([
+    "A/c Name: Test Mandi",
+    "A/c No: 1234567895",
+    "IFSC: HDFC0001234",
+  ]);
   if (upiId) {
     const p = buildMerchantUpiPayUrl({
       upiId,
@@ -110,11 +115,6 @@ function encodeBillWithUpi(paperMm: number, upiId: string | null): string {
     });
     if (p) b.merchantUpiQrSection(p, upiId, paperMm);
   }
-  b.bankDetailsSection([
-    "A/c Name: Test Mandi",
-    "A/c No: 1234567895",
-    "IFSC: HDFC0001234",
-  ]);
   b.normalState();
   b.feed(b.contentClearanceFeed());
   b.cut();
@@ -143,14 +143,17 @@ for (const mm of [58, 80, 100] as const) {
   const b64 = encodeBillWithUpi(mm, TEST_UPI);
   const bin = Buffer.from(b64, "base64");
   const text = bin.toString("latin1");
+  assert(text.includes("BANK DETAILS"), `${mm} bank before UPI`);
   assert(text.includes("PAY VIA UPI"), `${mm} PAY VIA UPI`);
-  assert(text.includes("Scan to pay"), `${mm} Scan to pay`);
+  assert(text.includes("SCAN TO PAY"), `${mm} SCAN TO PAY`);
   assert(text.includes(`Merchant UPI: ${TEST_UPI}`), `${mm} caption`);
-  assert(text.includes("BANK DETAILS"), `${mm} bank after UPI`);
   assert(hasQrPrint(b64), `${mm} ESC/POS QR print command`);
   assert(bin.includes(Buffer.from("upi://pay?", "utf8")), `${mm} upi://pay in ESC/POS buffer`);
   assert(bin.includes(Buffer.from("am=23360", "utf8")), `${mm} am=23360 in ESC/POS buffer`);
   assert(bin.includes(Buffer.from("cu=INR", "utf8")), `${mm} cu=INR in ESC/POS buffer`);
+  const bankIdx = text.indexOf("BANK DETAILS");
+  const upiIdx = text.indexOf("PAY VIA UPI");
+  assert(bankIdx >= 0 && upiIdx > bankIdx, `${mm} UPI after bank`);
 }
 
 const noUpi = { ...profile, upi_id: null } as ShopProfile;
@@ -163,7 +166,7 @@ const docs = readFileSync(join(__dirname, "../src/utils/thermal-escpos-docs.ts")
 assert(docs.includes("merchantUpiQrSection"), "docs wire merchantUpiQrSection");
 assert(docs.includes("buildMerchantUpiPayUrl"), "docs build UPI payload");
 const vendorPrint = readFileSync(join(__dirname, "../src/utils/vendor-bill-print.ts"), "utf8");
-assert(vendorPrint.includes("PAY VIA UPI"), "HTML PAY VIA UPI");
+assert(vendorPrint.includes("MERCHANT QR CODE") || vendorPrint.includes("SCAN TO PAY"), "HTML merchant QR");
 const backend = readFileSync(join(__dirname, "../../backend/server.py"), "utf8");
 assert(backend.includes("upi_name"), "backend ShopProfile has upi_name");
 assert(backend.includes("Invalid Merchant UPI ID"), "backend validates UPI on save");

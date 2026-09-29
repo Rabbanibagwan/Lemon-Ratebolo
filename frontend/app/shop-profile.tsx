@@ -1,17 +1,23 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  Pressable, StyleSheet, Text, View,
+  Alert, Image, Platform, Pressable, StyleSheet, Text, View,
 } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import * as ImagePicker from "expo-image-picker";
+import * as ImageManipulator from "expo-image-manipulator";
 
 import { api, ShopProfile } from "@/src/api";
 import { useAuth } from "@/src/context/AuthContext";
 import { Button, Input } from "@/src/components/ui";
 import { colors, font, spacing } from "@/src/theme";
 import { isValidUpiId, normalizeUpiId } from "@/src/utils/merchant-upi";
+import { imageDataUri } from "@/src/utils/png-mono";
+
+/** Max stored base64 length (matches backend ShopProfile.upi_qr_base64). */
+const MAX_QR_BASE64 = 480_000;
 
 export default function ShopProfileScreen() {
   const router = useRouter();
@@ -20,6 +26,7 @@ export default function ShopProfileScreen() {
 
   const [p, setP] = useState<ShopProfile | null>(null);
   const [saving, setSaving] = useState(false);
+  const [picking, setPicking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -29,9 +36,71 @@ export default function ShopProfileScreen() {
 
   useEffect(() => { load(); }, [load]);
 
-  const set = (k: keyof ShopProfile, v: string) => {
+  const set = (k: keyof ShopProfile, v: string | null) => {
     if (!p) return;
     setP({ ...p, [k]: v });
+  };
+
+  const qrPreview = imageDataUri(p?.upi_qr_base64);
+
+  const pickMerchantQr = async (source: "camera" | "gallery") => {
+    if (!p || !isOwner) return;
+    setError(null); setMsg(null);
+    try {
+      setPicking(true);
+      const perm = source === "camera"
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert(
+          "Permission needed",
+          source === "camera" ? "Camera access is required to capture the Merchant QR." : "Photo library access is required to upload the Merchant QR.",
+        );
+        return;
+      }
+      const result = source === "camera"
+        ? await ImagePicker.launchCameraAsync({
+            mediaTypes: ["images"],
+            quality: 0.9,
+            allowsEditing: Platform.OS !== "web",
+            aspect: [1, 1],
+          })
+        : await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ["images"],
+            quality: 0.9,
+            allowsEditing: Platform.OS !== "web",
+            aspect: [1, 1],
+          });
+      if (result.canceled || !result.assets?.[0]?.uri) return;
+
+      // Normalize to compact square PNG for storage + thermal raster print.
+      const manipulated = await ImageManipulator.manipulateAsync(
+        result.assets[0].uri,
+        [{ resize: { width: 360 } }],
+        { compress: 0.85, format: ImageManipulator.SaveFormat.PNG, base64: true },
+      );
+      const b64 = manipulated.base64 || "";
+      if (!b64) {
+        setError("Could not read QR image. Try another photo.");
+        return;
+      }
+      if (b64.length > MAX_QR_BASE64) {
+        setError("QR image is too large. Crop closer to the QR and try again.");
+        return;
+      }
+      set("upi_qr_base64", `data:image/png;base64,${b64}`);
+      setMsg("Merchant QR ready — tap SAVE PROFILE to keep it.");
+    } catch (e: any) {
+      setError(e?.message || "Failed to upload QR image");
+    } finally {
+      setPicking(false);
+    }
+  };
+
+  const clearMerchantQr = () => {
+    if (!p || !isOwner) return;
+    set("upi_qr_base64", null);
+    setMsg("Merchant QR cleared — tap SAVE PROFILE to apply.");
   };
 
   const save = async () => {
@@ -58,6 +127,7 @@ export default function ShopProfileScreen() {
         bank_branch: p.bank_branch || null,
         upi_id: upiId || null,
         upi_name: String(p.upi_name || "").trim() || null,
+        upi_qr_base64: p.upi_qr_base64 || null,
       });
       setP(upd);
       setMsg("Saved");
@@ -119,10 +189,57 @@ export default function ShopProfileScreen() {
           </View>
           <Input label="Branch" value={p?.bank_branch || ""} onChangeText={(v) => set("bank_branch", v)} editable={isOwner} />
 
-          <Text style={styles.section}>Merchant UPI (Vendor Bill QR)</Text>
-          <Text style={styles.hint}>Public UPI ID only — never enter PIN, OTP, or banking passwords.</Text>
+          <Text style={styles.section}>Payment / UPI QR</Text>
+          <Text style={styles.hint}>
+            Upload the merchant&apos;s own UPI QR image for Vendor Bill thermal print.
+            Public UPI ID is optional. Never enter PIN, OTP, or banking passwords.
+          </Text>
+
+          <View style={styles.qrBox} testID="pf-upi-qr-box">
+            {qrPreview ? (
+              <Image source={{ uri: qrPreview }} style={styles.qrImg} accessibilityLabel="Merchant QR preview" />
+            ) : (
+              <View style={styles.qrPlaceholder}>
+                <Ionicons name="qr-code-outline" size={40} color={colors.muted} />
+                <Text style={styles.qrPlaceholderText}>No Merchant QR uploaded</Text>
+              </View>
+            )}
+            {isOwner ? (
+              <View style={styles.qrActions}>
+                <Pressable
+                  style={({ pressed }) => [styles.qrBtn, pressed && { opacity: 0.85 }, picking && { opacity: 0.5 }]}
+                  onPress={() => pickMerchantQr("gallery")}
+                  disabled={picking}
+                  testID="pf-upi-qr-gallery"
+                >
+                  <Ionicons name="images-outline" size={16} color={colors.onSurface} />
+                  <Text style={styles.qrBtnText}>GALLERY</Text>
+                </Pressable>
+                <Pressable
+                  style={({ pressed }) => [styles.qrBtn, pressed && { opacity: 0.85 }, picking && { opacity: 0.5 }]}
+                  onPress={() => pickMerchantQr("camera")}
+                  disabled={picking}
+                  testID="pf-upi-qr-camera"
+                >
+                  <Ionicons name="camera-outline" size={16} color={colors.onSurface} />
+                  <Text style={styles.qrBtnText}>CAMERA</Text>
+                </Pressable>
+                {qrPreview ? (
+                  <Pressable
+                    style={({ pressed }) => [styles.qrBtn, styles.qrBtnDanger, pressed && { opacity: 0.85 }]}
+                    onPress={clearMerchantQr}
+                    testID="pf-upi-qr-clear"
+                  >
+                    <Ionicons name="trash-outline" size={16} color={colors.error} />
+                    <Text style={[styles.qrBtnText, { color: colors.error }]}>CLEAR</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            ) : null}
+          </View>
+
           <Input
-            label="Merchant UPI ID / VPA"
+            label="Merchant UPI ID / VPA (optional)"
             value={p?.upi_id || ""}
             onChangeText={(v) => set("upi_id", v)}
             autoCapitalize="none"
@@ -166,6 +283,23 @@ const styles = StyleSheet.create({
     fontSize: 11, color: colors.muted, fontFamily: font.display, fontWeight: "600",
     marginBottom: spacing.sm, lineHeight: 16,
   },
+  qrBox: {
+    borderWidth: 2, borderColor: colors.borderStrong, padding: spacing.md, marginBottom: spacing.md,
+    alignItems: "center", backgroundColor: colors.surface,
+  },
+  qrImg: { width: 180, height: 180, marginBottom: spacing.sm },
+  qrPlaceholder: {
+    width: 180, height: 180, marginBottom: spacing.sm, alignItems: "center", justifyContent: "center",
+    borderWidth: 1, borderColor: colors.divider, borderStyle: "dashed",
+  },
+  qrPlaceholderText: { marginTop: 8, fontSize: 11, color: colors.muted, fontFamily: font.display, fontWeight: "700" },
+  qrActions: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, justifyContent: "center" },
+  qrBtn: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    borderWidth: 2, borderColor: colors.borderStrong, paddingHorizontal: 12, paddingVertical: 10,
+  },
+  qrBtnDanger: { borderColor: colors.error },
+  qrBtnText: { fontFamily: font.display, fontWeight: "900", fontSize: 11, letterSpacing: 0.5, color: colors.onSurface },
   err: { color: colors.error, backgroundColor: "#FEE2E2", borderWidth: 2, borderColor: colors.error, padding: spacing.sm, marginBottom: spacing.sm, fontFamily: font.display, fontWeight: "700" },
   ok: { color: colors.success, backgroundColor: "#D1FAE5", borderWidth: 2, borderColor: colors.success, padding: spacing.sm, marginBottom: spacing.sm, fontFamily: font.display, fontWeight: "700" },
 });

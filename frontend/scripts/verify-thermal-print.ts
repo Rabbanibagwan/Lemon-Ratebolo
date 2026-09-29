@@ -125,13 +125,13 @@ function encodeBill(paperMm: number, bankLines: string[]): { b64: string; builde
   b.normalState();
   b.kv("Paid", rupees(bill.paid));
   b.bold(true).kv("Balance Due", rupees(bill.balance)).bold(false);
+  b.bankDetailsSection(bankLines);
   const upiPayload = buildMerchantUpiPayUrl({
     upiId: TEST_MERCHANT_UPI,
     merchantName: profile.shop_name,
     amount: bill.balance,
   });
   if (upiPayload) b.merchantUpiQrSection(upiPayload, TEST_MERCHANT_UPI, paperMm);
-  b.bankDetailsSection(bankLines);
   b.normalState();
   b.feed(b.contentClearanceFeed());
   b.cut();
@@ -513,9 +513,9 @@ for (const mm of widths) {
   assert(billText.includes("BANK DETAILS"), "bank title");
   for (const row of LONG_BANK) assert(billText.includes(row), `long bank: ${row}`);
 
-  // Merchant UPI QR section (after Balance Due, before bank).
+  // Merchant UPI QR section at bottom (after bank details).
   assert(billText.includes("PAY VIA UPI"), `${mm} PAY VIA UPI`);
-  assert(billText.includes("Scan to pay"), `${mm} Scan to pay`);
+  assert(billText.includes("SCAN TO PAY"), `${mm} SCAN TO PAY`);
   assert(billText.includes(`Merchant UPI: ${TEST_MERCHANT_UPI}`), `${mm} Merchant UPI caption`);
   const upiPayload = buildMerchantUpiPayUrl({
     upiId: TEST_MERCHANT_UPI,
@@ -529,12 +529,12 @@ for (const mm of widths) {
   );
   assert(/am=50190(\.00)?(&|$)/.test(upiPayload), `${mm} upi am=balance`);
   assert(upiPayload.includes("cu=INR"), `${mm} upi cu=INR`);
-  // Order: Balance Due → PAY VIA UPI → BANK DETAILS → CUT
+  // Order: Balance Due → BANK DETAILS → PAY VIA UPI → CUT
   const balIdx = billText.indexOf("Balance Due");
   const upiIdx = billText.indexOf("PAY VIA UPI");
   const bankIdx = billText.indexOf("BANK DETAILS");
-  assert(balIdx >= 0 && upiIdx > balIdx && bankIdx > upiIdx, `${mm} UPI between Balance Due and bank`);
-  assert(contentBeforeCut(longEnc.b64, ["PAY VIA UPI", "BANK DETAILS", ...LONG_BANK]), `${mm} UPI+bank before CUT`);
+  assert(balIdx >= 0 && bankIdx > balIdx && upiIdx > bankIdx, `${mm} UPI after bank details`);
+  assert(contentBeforeCut(longEnc.b64, ["BANK DETAILS", ...LONG_BANK, "PAY VIA UPI"]), `${mm} bank+UPI before CUT`);
 
   // GRAND TOTAL framed with continuous full-width rules (this.cols).
   // Same-row BIG on wide paper; stacked BIG label/amount on narrow (58mm) still framed.
@@ -600,16 +600,19 @@ const vendorPrintSrc = readFileSync(join(__dirname, "../src/utils/vendor-bill-pr
 assert(vendorPrintSrc.includes("encodeVendorBillEscPos"), "thermalPrintVendorBill wires ESC/POS encoder");
 assert(vendorPrintSrc.includes("escposBase64"), "Bluetooth path receives escposBase64");
 assert(docs.includes("merchantUpiQrSection"), "Vendor Bill ESC/POS emits merchant UPI QR");
+assert(docs.includes("merchantUploadedQrSection"), "Vendor Bill ESC/POS emits uploaded merchant QR");
 assert(docs.includes("buildMerchantUpiPayUrl"), "Vendor Bill builds UPI deep-link");
-assert(vendorPrintSrc.includes("PAY VIA UPI"), "Vendor Bill HTML shows PAY VIA UPI");
-assert(vendorPrintSrc.includes("renderUpiThermalHtml") || vendorPrintSrc.includes("upiBox"), "Vendor Bill thermal HTML has UPI box");
+assert(vendorPrintSrc.includes("MERCHANT QR CODE") || vendorPrintSrc.includes("SCAN TO PAY"), "Vendor Bill HTML shows merchant QR");
+assert(vendorPrintSrc.includes("renderMerchantQrThermalHtml") || vendorPrintSrc.includes("upiBox"), "Vendor Bill thermal HTML has QR box");
 const shopUi = readFileSync(join(__dirname, "../app/shop-profile.tsx"), "utf8");
-assert(shopUi.includes("Merchant UPI"), "Shop Profile Merchant UPI section");
+assert(shopUi.includes("Payment / UPI QR"), "Shop Profile Payment / UPI QR section");
+assert(shopUi.includes("ImagePicker"), "Shop Profile can upload QR image");
+assert(shopUi.includes("upi_qr_base64"), "Shop Profile saves uploaded QR");
 assert(shopUi.includes("isValidUpiId"), "Shop Profile validates UPI ID");
 assert(shopUi.includes("upi_name"), "Shop Profile optional UPI display name");
 const billUi = readFileSync(join(__dirname, "../app/vendor-bill/[id].tsx"), "utf8");
-assert(billUi.includes("PAY VIA UPI"), "Vendor Bill screen shows PAY VIA UPI");
-assert(billUi.includes("buildMerchantUpiPayUrl"), "Vendor Bill screen uses same UPI payload builder");
+assert(billUi.includes("MERCHANT QR CODE") || billUi.includes("SCAN TO PAY"), "Vendor Bill screen shows merchant QR");
+assert(billUi.includes("imageDataUri") || billUi.includes("upi_qr_base64"), "Vendor Bill prefers uploaded QR");
 assert(docs.includes('.hr("-")'), "docs have hr separators in Patti totals");
 assert(docs.includes("tableHeader4"), "docs use tableHeader4");
 assert(docs.includes('kv("Lemon"'), "docs Lemon");
@@ -629,6 +632,8 @@ assert(escposSrc.includes("farmerNameRow"), "farmerNameRow present");
 assert(escposSrc.includes("vendorNameRow"), "vendorNameRow present");
 assert(escposSrc.includes("framedMajorTotal"), "framedMajorTotal present");
 assert(escposSrc.includes("merchantUpiQrSection"), "EscPosBuilder.merchantUpiQrSection present");
+assert(escposSrc.includes("merchantUploadedQrSection"), "EscPosBuilder.merchantUploadedQrSection present");
+assert(escposSrc.includes("rasterBitmap"), "EscPosBuilder.rasterBitmap present");
 assert(!/reverse\(true\)/.test(escposSrc.match(/majorTotalBox[\s\S]*?^  \}/m)?.[0] || ""), "majorTotalBox no reverse(true)");
 assert(!/reverse\(true\)/.test(escposSrc.match(/framedMajorTotal[\s\S]*?^  \}/m)?.[0] || ""), "framedMajorTotal no reverse(true)");
 const framedSrc = escposSrc.match(/framedMajorTotal[\s\S]*?^  \}/m)?.[0] || "";
