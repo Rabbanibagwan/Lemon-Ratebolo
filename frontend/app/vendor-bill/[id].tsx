@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  ActivityIndicator, Alert, Modal, Pressable, ScrollView,
+  ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView,
   StyleSheet, Text, View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -12,6 +12,12 @@ import { KeyboardFormAvoid } from "@/src/components/KeyboardForm";
 import { useAuth } from "@/src/context/AuthContext";
 import { colors, font, money, spacing } from "@/src/theme";
 import { Button, Input } from "@/src/components/ui";
+import {
+  buildMerchantUpiPayUrl,
+  merchantUpiDisplayName,
+  normalizeUpiId,
+} from "@/src/utils/merchant-upi";
+import { qrDataUri } from "@/src/utils/qr";
 import { clampPaperMm, thermalPrintUserMessage } from "@/src/utils/thermal-print";
 import { shareVendorBillPdf, thermalPrintVendorBill } from "@/src/utils/vendor-bill-print";
 import { routeParam } from "@/src/utils/route-params";
@@ -31,6 +37,8 @@ export default function VendorBillDetail() {
   const [loading, setLoading] = useState(true);
   const [sharing, setSharing] = useState(false);
   const [autoActionRan, setAutoActionRan] = useState(false);
+  const [upiQrUri, setUpiQrUri] = useState<string>("");
+  const [upiIdShown, setUpiIdShown] = useState<string>("");
 
   const [showDelete, setShowDelete] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
@@ -49,6 +57,42 @@ export default function VendorBillDetail() {
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Merchant UPI QR preview — same payload as thermal ESC/POS / HTML print.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!b || !profile?.upi_id) {
+        setUpiQrUri("");
+        setUpiIdShown("");
+        return;
+      }
+      const upiId = normalizeUpiId(profile.upi_id);
+      const payload = buildMerchantUpiPayUrl({
+        upiId,
+        merchantName: merchantUpiDisplayName(profile),
+        amount: b.balance,
+      });
+      if (!payload) {
+        setUpiQrUri("");
+        setUpiIdShown("");
+        return;
+      }
+      try {
+        const uri = await qrDataUri(payload, 220);
+        if (!cancelled) {
+          setUpiQrUri(uri);
+          setUpiIdShown(upiId);
+        }
+      } catch {
+        if (!cancelled) {
+          setUpiQrUri("");
+          setUpiIdShown(upiId);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [b, profile]);
 
   const share = async () => {
     if (!b || !session) return;
@@ -218,6 +262,22 @@ export default function VendorBillDetail() {
           <Row label="Paid" value={money(b.paid)} />
           <Row label="Balance Due" value={money(b.balance)} strong />
 
+          {upiIdShown ? (
+            <>
+              <View style={styles.divider} />
+              <View style={styles.upiBox} testID="bill-upi-qr">
+                <Text style={styles.upiTitle}>PAY VIA UPI</Text>
+                {upiQrUri ? (
+                  <Image source={{ uri: upiQrUri }} style={styles.upiQr} accessibilityLabel="Merchant UPI QR" />
+                ) : (
+                  <ActivityIndicator color={colors.brandPrimary} style={{ marginVertical: spacing.md }} />
+                )}
+                <Text style={styles.upiScan}>Scan to pay</Text>
+                <Text style={styles.upiId}>Merchant UPI: {upiIdShown}</Text>
+              </View>
+            </>
+          ) : null}
+
           {profile?.bank_account_holder || profile?.bank_account_number || profile?.bank_ifsc || profile?.bank_name || profile?.bank_branch ? (
             <>
               <View style={styles.divider} />
@@ -348,6 +408,17 @@ const styles = StyleSheet.create({
   },
   netLbl: { color: colors.onSurface, fontFamily: font.display, letterSpacing: 1.5, fontWeight: "900", fontSize: 12 },
   netVal: { color: colors.onSurface, fontFamily: font.mono, fontWeight: "900", fontSize: 22 },
+  upiBox: { alignItems: "center", paddingVertical: spacing.sm, width: "100%" },
+  upiTitle: {
+    fontSize: 12, letterSpacing: 1.5, fontWeight: "900", color: colors.onSurface,
+    fontFamily: font.display, marginBottom: spacing.sm,
+  },
+  upiQr: { width: 180, height: 180, marginBottom: spacing.sm },
+  upiScan: { fontSize: 13, fontWeight: "800", color: colors.onSurface, fontFamily: font.display },
+  upiId: {
+    fontSize: 12, fontWeight: "700", color: colors.muted, fontFamily: font.display,
+    marginTop: 4, textAlign: "center",
+  },
   footer: { borderTopWidth: 2, borderTopColor: colors.borderStrong, padding: spacing.lg, backgroundColor: colors.surface },
   modalRoot: { flex: 1, justifyContent: "flex-end" },
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.45)" },

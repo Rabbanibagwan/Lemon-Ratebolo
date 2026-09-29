@@ -11,6 +11,7 @@ import { api, ShopProfile } from "@/src/api";
 import { useAuth } from "@/src/context/AuthContext";
 import { Button, Input } from "@/src/components/ui";
 import { colors, font, spacing } from "@/src/theme";
+import { isValidUpiId, normalizeUpiId } from "@/src/utils/merchant-upi";
 
 export default function ShopProfileScreen() {
   const router = useRouter();
@@ -37,6 +38,12 @@ export default function ShopProfileScreen() {
     if (!p) return;
     setError(null); setMsg(null);
     if (!p.shop_name.trim()) { setError("Shop name required"); return; }
+    const upiRaw = String(p.upi_id || "").trim();
+    const upiId = upiRaw ? normalizeUpiId(upiRaw) : "";
+    if (upiRaw && !isValidUpiId(upiId)) {
+      setError("Enter a valid Merchant UPI ID (example: merchant@upi)");
+      return;
+    }
     try {
       setSaving(true);
       const upd = await api.put<ShopProfile>("/shop/profile", {
@@ -48,7 +55,9 @@ export default function ShopProfileScreen() {
         gst_number: p.gst_number || null, pan_number: p.pan_number || null,
         bank_name: p.bank_name || null, bank_account_holder: p.bank_account_holder || null,
         bank_account_number: p.bank_account_number || null, bank_ifsc: p.bank_ifsc || null,
-        bank_branch: p.bank_branch || null, upi_id: p.upi_id || null,
+        bank_branch: p.bank_branch || null,
+        upi_id: upiId || null,
+        upi_name: String(p.upi_name || "").trim() || null,
       });
       setP(upd);
       setMsg("Saved");
@@ -109,7 +118,27 @@ export default function ShopProfileScreen() {
             <View style={{ flex: 1 }}><Input label="IFSC" value={p?.bank_ifsc || ""} onChangeText={(v) => set("bank_ifsc", v)} autoCapitalize="characters" editable={isOwner} /></View>
           </View>
           <Input label="Branch" value={p?.bank_branch || ""} onChangeText={(v) => set("bank_branch", v)} editable={isOwner} />
-          <Input label="UPI ID" value={p?.upi_id || ""} onChangeText={(v) => set("upi_id", v)} autoCapitalize="none" editable={isOwner} testID="pf-upi" />
+
+          <Text style={styles.section}>Merchant UPI (Vendor Bill QR)</Text>
+          <Text style={styles.hint}>Public UPI ID only — never enter PIN, OTP, or banking passwords.</Text>
+          <Input
+            label="Merchant UPI ID / VPA"
+            value={p?.upi_id || ""}
+            onChangeText={(v) => set("upi_id", v)}
+            autoCapitalize="none"
+            autoCorrect={false}
+            editable={isOwner}
+            placeholder="merchant@upi"
+            testID="pf-upi"
+          />
+          <Input
+            label="UPI Display Name (optional)"
+            value={p?.upi_name || ""}
+            onChangeText={(v) => set("upi_name", v)}
+            editable={isOwner}
+            placeholder="Shown as payee name"
+            testID="pf-upi-name"
+          />
 
           {error ? <Text style={styles.err}>{error}</Text> : null}
           {msg ? <Text style={styles.ok}>{msg}</Text> : null}
@@ -132,6 +161,10 @@ const styles = StyleSheet.create({
   section: {
     fontSize: 11, letterSpacing: 2, color: colors.muted, textTransform: "uppercase",
     fontFamily: font.display, fontWeight: "800", marginTop: spacing.md, marginBottom: spacing.sm,
+  },
+  hint: {
+    fontSize: 11, color: colors.muted, fontFamily: font.display, fontWeight: "600",
+    marginBottom: spacing.sm, lineHeight: 16,
   },
   err: { color: colors.error, backgroundColor: "#FEE2E2", borderWidth: 2, borderColor: colors.error, padding: spacing.sm, marginBottom: spacing.sm, fontFamily: font.display, fontWeight: "700" },
   ok: { color: colors.success, backgroundColor: "#D1FAE5", borderWidth: 2, borderColor: colors.success, padding: spacing.sm, marginBottom: spacing.sm, fontFamily: font.display, fontWeight: "700" },

@@ -4,10 +4,16 @@ import * as Sharing from "expo-sharing";
 import { Alert, Platform, Share } from "react-native";
 
 import { ShopProfile, VendorBill } from "@/src/api";
+import {
+  buildMerchantUpiPayUrl,
+  merchantUpiDisplayName,
+  normalizeUpiId,
+} from "@/src/utils/merchant-upi";
 import { printThermalDocument } from "@/src/utils/thermal-connection";
 import { encodeVendorBillEscPos } from "@/src/utils/thermal-escpos-docs";
 import { resolvePrintPaperMm } from "@/src/utils/printer-prefs";
 import { buildVendorBillPrintDocument, logPrintDocument } from "@/src/utils/print-document";
+import { qrDataUri, qrDataUriThermal } from "@/src/utils/qr";
 import {
   thermalBaseCss,
   thermalMetrics,
@@ -51,8 +57,49 @@ function renderBankThermalHtml(profile: ShopProfile): string {
   `;
 }
 
+function merchantUpiPayloadForBill(b: VendorBill, profile: ShopProfile): { upiId: string; payload: string } | null {
+  const upiId = normalizeUpiId(profile.upi_id);
+  const payload = buildMerchantUpiPayUrl({
+    upiId,
+    merchantName: merchantUpiDisplayName(profile),
+    amount: b.balance,
+  });
+  if (!payload) return null;
+  return { upiId, payload };
+}
+
+function renderUpiThermalHtml(upiId: string, qrUri: string): string {
+  if (!qrUri) return "";
+  return `
+    <div class="hr"></div>
+    <div class="upiBox">
+      <div class="center bold upiTitle">PAY VIA UPI</div>
+      <img class="qr" src="${qrUri}" alt="Merchant UPI QR"/>
+      <div class="center bold upiScan">Scan to pay</div>
+      <div class="center upiId wrap">Merchant UPI: ${escapeHtml(upiId)}</div>
+    </div>
+    <div class="hr"></div>
+  `;
+}
+
+function renderUpiPdfHtml(upiId: string, qrUri: string): string {
+  if (!qrUri) return "";
+  return `
+    <div class="upi">
+      <div class="upiTitle">PAY VIA UPI</div>
+      <img class="upiQr" src="${qrUri}" alt="Merchant UPI QR"/>
+      <div class="upiScan">Scan to pay</div>
+      <div class="upiId">Merchant UPI: ${escapeHtml(upiId)}</div>
+    </div>`;
+}
+
 /** Digital PDF share layout (no Print/Share buttons). */
-export function renderVendorBillPdfHtml(b: VendorBill, profile: ShopProfile, userName: string): string {
+export function renderVendorBillPdfHtml(
+  b: VendorBill,
+  profile: ShopProfile,
+  userName: string,
+  upiQrUri: string = "",
+): string {
   const rows = b.lines.map((l) => `
     <tr>
       <td class="mono">${escapeHtml(l.lot_no)}</td>
@@ -62,6 +109,7 @@ export function renderVendorBillPdfHtml(b: VendorBill, profile: ShopProfile, use
     </tr>`).join("");
   const addr = [profile.address, profile.village, profile.taluk, profile.district, profile.state].filter(Boolean).join(", ");
   const contact = [profile.mobile, profile.email].filter(Boolean).join(" · ");
+  const upi = merchantUpiPayloadForBill(b, profile);
   return `
   <!doctype html><html><head><meta charset="utf-8"/>
   <style>
@@ -87,6 +135,11 @@ export function renderVendorBillPdfHtml(b: VendorBill, profile: ShopProfile, use
     .bankTitle { font-size:10px; letter-spacing:1.5px; font-weight:900; margin-bottom:6px; }
     .bankRow { padding: 2px 0; font-weight:700; }
     .bk { font-weight:800; }
+    .upi { border:2px solid #111827; padding:12px 10px; margin-top:10px; text-align:center; }
+    .upiTitle { font-size:11px; letter-spacing:1.5px; font-weight:900; margin-bottom:8px; }
+    .upiQr { width:160px; height:160px; display:block; margin:0 auto 8px; image-rendering:pixelated; }
+    .upiScan { font-size:12px; font-weight:800; }
+    .upiId { font-size:11px; font-weight:700; margin-top:4px; word-break:break-all; }
     .notes { border:2px solid #111827; padding:8px 10px; margin-top:8px; font-size:11px; }
     .foot { margin-top:10px; font-size:10px; color:#6B7280; text-align:center; }
     button, .no-print { display:none !important; }
@@ -116,6 +169,7 @@ export function renderVendorBillPdfHtml(b: VendorBill, profile: ShopProfile, use
     <div class="net"><div class="netl">GRAND TOTAL</div><div class="netv">${fmt(b.grand_total)}</div></div>
     <div class="trow" style="margin-top:8px"><span>Paid</span><span class="mono">${fmt(b.paid)}</span></div>
     <div class="trow"><span class="strong">Balance Due</span><span class="mono strong">${fmt(b.balance)}</span></div>
+    ${upi ? renderUpiPdfHtml(upi.upiId, upiQrUri) : ""}
     ${renderBankPdfHtml(profile)}
     ${b.notes ? `<div class="notes">Notes: ${escapeHtml(b.notes)}</div>` : ""}
   </div>
@@ -124,11 +178,17 @@ export function renderVendorBillPdfHtml(b: VendorBill, profile: ShopProfile, use
 }
 
 /** Thermal Vendor Bill for 58 / 80 / 100 mm — mirrors on-screen preview (master). */
-export function renderThermalVendorBillHtml(b: VendorBill, profile: ShopProfile, paperMm: number = 80): string {
+export function renderThermalVendorBillHtml(
+  b: VendorBill,
+  profile: ShopProfile,
+  paperMm: number = 80,
+  upiQrUri: string = "",
+): string {
   const m = thermalMetrics(paperMm);
   const addr = [profile.address, profile.village, profile.taluk, profile.district, profile.state].filter(Boolean).join(", ");
   const shop = (profile.shop_name || "").trim().toUpperCase();
   const mobile = (profile.mobile || "").trim();
+  const upi = merchantUpiPayloadForBill(b, profile);
   const lines = b.lines.map((l) => `
     <div class="row">
       <span class="lot">${escapeHtml(l.lot_no)}</span>
@@ -168,6 +228,7 @@ export function renderThermalVendorBillHtml(b: VendorBill, profile: ShopProfile,
     <div class="netbox"><span class="bold">GRAND TOTAL</span><span class="huge">${fmt(b.grand_total)}</span></div>
     <div class="kv"><span>Paid</span><span>${fmt(b.paid)}</span></div>
     <div class="kv bold"><span>Balance Due</span><span>${fmt(b.balance)}</span></div>
+    ${upi ? renderUpiThermalHtml(upi.upiId, upiQrUri) : ""}
     ${renderBankThermalHtml(profile)}
     ${b.notes ? `<div class="center wrap" style="margin-top:4px">${escapeHtml(b.notes)}</div>` : ""}
   </div>
@@ -181,8 +242,13 @@ export async function thermalPrintVendorBill(
 ): Promise<void> {
   const mm = await resolvePrintPaperMm(paperMm);
   // Canonical document — shared values for HTML + ESC/POS (no dual total math).
-  logPrintDocument(buildVendorBillPrintDocument(b, profile, { paperMm: mm }));
-  const html = renderThermalVendorBillHtml(b, profile, mm);
+  const doc = buildVendorBillPrintDocument(b, profile, { paperMm: mm });
+  logPrintDocument(doc);
+  const m = thermalMetrics(mm);
+  const upiQrUri = doc.merchant_upi_payload
+    ? await qrDataUriThermal(doc.merchant_upi_payload, Math.max(220, m.qrPx * 2))
+    : "";
+  const html = renderThermalVendorBillHtml(b, profile, mm, upiQrUri);
   await printThermalDocument({
     html,
     escposBase64: encodeVendorBillEscPos(b, profile, mm),
@@ -195,7 +261,9 @@ export async function shareVendorBillPdf(
   profile: ShopProfile,
   userName: string,
 ): Promise<void> {
-  const html = renderVendorBillPdfHtml(b, profile, userName);
+  const upi = merchantUpiPayloadForBill(b, profile);
+  const upiQrUri = upi ? await qrDataUri(upi.payload, 240) : "";
+  const html = renderVendorBillPdfHtml(b, profile, userName, upiQrUri);
   const { uri } = await Print.printToFileAsync({ html });
   if (await Sharing.isAvailableAsync()) {
     await Sharing.shareAsync(uri, { mimeType: "application/pdf", UTI: ".pdf", dialogTitle: `Bill ${b.bill_code}` });

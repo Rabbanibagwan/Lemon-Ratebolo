@@ -14,8 +14,12 @@ import {
   slipText,
   thermalWidthConfig,
 } from "../src/utils/escpos";
+import { buildMerchantUpiPayUrl } from "../src/utils/merchant-upi";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+/** Test-only Merchant UPI VPA — not for production use. */
+const TEST_MERCHANT_UPI = "test-merchant@upi";
 
 const profile = {
   shop_name: "Test Mandi",
@@ -25,6 +29,8 @@ const profile = {
   district: "District",
   state: "KA",
   mobile: "9999999999",
+  upi_id: TEST_MERCHANT_UPI,
+  upi_name: "Test Mandi",
 };
 
 /** Mirrors encodeFarmerPattiEscPos using the shared layout helpers. */
@@ -119,6 +125,12 @@ function encodeBill(paperMm: number, bankLines: string[]): { b64: string; builde
   b.normalState();
   b.kv("Paid", rupees(bill.paid));
   b.bold(true).kv("Balance Due", rupees(bill.balance)).bold(false);
+  const upiPayload = buildMerchantUpiPayUrl({
+    upiId: TEST_MERCHANT_UPI,
+    merchantName: profile.shop_name,
+    amount: bill.balance,
+  });
+  if (upiPayload) b.merchantUpiQrSection(upiPayload, TEST_MERCHANT_UPI, paperMm);
   b.bankDetailsSection(bankLines);
   b.normalState();
   b.feed(b.contentClearanceFeed());
@@ -501,6 +513,29 @@ for (const mm of widths) {
   assert(billText.includes("BANK DETAILS"), "bank title");
   for (const row of LONG_BANK) assert(billText.includes(row), `long bank: ${row}`);
 
+  // Merchant UPI QR section (after Balance Due, before bank).
+  assert(billText.includes("PAY VIA UPI"), `${mm} PAY VIA UPI`);
+  assert(billText.includes("Scan to pay"), `${mm} Scan to pay`);
+  assert(billText.includes(`Merchant UPI: ${TEST_MERCHANT_UPI}`), `${mm} Merchant UPI caption`);
+  const upiPayload = buildMerchantUpiPayUrl({
+    upiId: TEST_MERCHANT_UPI,
+    merchantName: profile.shop_name,
+    amount: 50190,
+  }) || "";
+  assert(upiPayload.includes("upi://pay?"), `${mm} upi payload scheme`);
+  assert(
+    upiPayload.includes(`pa=${encodeURIComponent(TEST_MERCHANT_UPI)}`) || upiPayload.includes(`pa=${TEST_MERCHANT_UPI}`),
+    `${mm} upi pa`,
+  );
+  assert(/am=50190(\.00)?(&|$)/.test(upiPayload), `${mm} upi am=balance`);
+  assert(upiPayload.includes("cu=INR"), `${mm} upi cu=INR`);
+  // Order: Balance Due → PAY VIA UPI → BANK DETAILS → CUT
+  const balIdx = billText.indexOf("Balance Due");
+  const upiIdx = billText.indexOf("PAY VIA UPI");
+  const bankIdx = billText.indexOf("BANK DETAILS");
+  assert(balIdx >= 0 && upiIdx > balIdx && bankIdx > upiIdx, `${mm} UPI between Balance Due and bank`);
+  assert(contentBeforeCut(longEnc.b64, ["PAY VIA UPI", "BANK DETAILS", ...LONG_BANK]), `${mm} UPI+bank before CUT`);
+
   // GRAND TOTAL framed with continuous full-width rules (this.cols).
   // Same-row BIG on wide paper; stacked BIG label/amount on narrow (58mm) still framed.
   const gLines = billText.split("\n");
@@ -525,6 +560,7 @@ for (const mm of widths) {
   assert(bigSizeCount >= 2, `${mm} vendor ESC/POS uses GS ! big (≥2: shop + vendor/total), got ${bigSizeCount}`);
 
   const billAnalysis = analyzeEscPos(longEnc.b64);
+  assert(billAnalysis.lfAfterQrPrint > 0, `${mm} vendor ESC/POS contains QR print (GS ( k)`);
   assert(billAnalysis.shopHeaderCentered, `${mm} vendor merchant header centered`);
   assert(!billAnalysis.netPayableUsesReverse && billAnalysis.reverseOnCount === 0, `${mm} bill no inverse`);
   assert(billAnalysis.hasCut && billAnalysis.cutIsFeedAndCut, `${mm} vendor cut`);
@@ -563,6 +599,17 @@ assert(!/infoRow\("VENDOR"/.test(docs), "Vendor VENDOR uses vendorNameRow not in
 const vendorPrintSrc = readFileSync(join(__dirname, "../src/utils/vendor-bill-print.ts"), "utf8");
 assert(vendorPrintSrc.includes("encodeVendorBillEscPos"), "thermalPrintVendorBill wires ESC/POS encoder");
 assert(vendorPrintSrc.includes("escposBase64"), "Bluetooth path receives escposBase64");
+assert(docs.includes("merchantUpiQrSection"), "Vendor Bill ESC/POS emits merchant UPI QR");
+assert(docs.includes("buildMerchantUpiPayUrl"), "Vendor Bill builds UPI deep-link");
+assert(vendorPrintSrc.includes("PAY VIA UPI"), "Vendor Bill HTML shows PAY VIA UPI");
+assert(vendorPrintSrc.includes("renderUpiThermalHtml") || vendorPrintSrc.includes("upiBox"), "Vendor Bill thermal HTML has UPI box");
+const shopUi = readFileSync(join(__dirname, "../app/shop-profile.tsx"), "utf8");
+assert(shopUi.includes("Merchant UPI"), "Shop Profile Merchant UPI section");
+assert(shopUi.includes("isValidUpiId"), "Shop Profile validates UPI ID");
+assert(shopUi.includes("upi_name"), "Shop Profile optional UPI display name");
+const billUi = readFileSync(join(__dirname, "../app/vendor-bill/[id].tsx"), "utf8");
+assert(billUi.includes("PAY VIA UPI"), "Vendor Bill screen shows PAY VIA UPI");
+assert(billUi.includes("buildMerchantUpiPayUrl"), "Vendor Bill screen uses same UPI payload builder");
 assert(docs.includes('.hr("-")'), "docs have hr separators in Patti totals");
 assert(docs.includes("tableHeader4"), "docs use tableHeader4");
 assert(docs.includes('kv("Lemon"'), "docs Lemon");
@@ -581,6 +628,7 @@ assert(escposSrc.includes("vendorGrandTotalBox"), "vendorGrandTotalBox present")
 assert(escposSrc.includes("farmerNameRow"), "farmerNameRow present");
 assert(escposSrc.includes("vendorNameRow"), "vendorNameRow present");
 assert(escposSrc.includes("framedMajorTotal"), "framedMajorTotal present");
+assert(escposSrc.includes("merchantUpiQrSection"), "EscPosBuilder.merchantUpiQrSection present");
 assert(!/reverse\(true\)/.test(escposSrc.match(/majorTotalBox[\s\S]*?^  \}/m)?.[0] || ""), "majorTotalBox no reverse(true)");
 assert(!/reverse\(true\)/.test(escposSrc.match(/framedMajorTotal[\s\S]*?^  \}/m)?.[0] || ""), "framedMajorTotal no reverse(true)");
 const framedSrc = escposSrc.match(/framedMajorTotal[\s\S]*?^  \}/m)?.[0] || "";
@@ -724,4 +772,5 @@ console.log("  QR clearance + feed-and-cut: PASS");
 console.log("  BT chunked write + settle: PASS");
 console.log("  Driver Detail Print requireBluetooth (no system dialog): PASS");
 console.log("  Driver Detail ESC/POS 58/80/100 width: PASS");
+console.log("  Merchant UPI QR on Vendor Bill (ESC/POS + preview wiring): PASS");
 console.log("ALL WIDTHS OK");

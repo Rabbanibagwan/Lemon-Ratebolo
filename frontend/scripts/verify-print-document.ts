@@ -8,6 +8,9 @@ import {
 } from "../src/utils/print-document";
 import type { Patti, ShopProfile, VendorBill } from "../src/api";
 
+/** Test-only Merchant UPI — not for production. */
+const TEST_MERCHANT_UPI = "test-merchant@upi";
+
 const profile: ShopProfile = {
   shop_name: "Test Mandi",
   address: "Market Road",
@@ -16,6 +19,8 @@ const profile: ShopProfile = {
   district: "D1",
   state: "KA",
   mobile: "9999999999",
+  upi_id: TEST_MERCHANT_UPI,
+  upi_name: "Test Mandi",
 } as ShopProfile;
 
 const patti = {
@@ -91,6 +96,9 @@ assert(vd.paid === 0, "paid");
 assert(vd.balance_due === 50190, "balance");
 assert(vd.lines[0].lot_no === "7/1", "vb lot");
 assert(vd.lines[0].farmer_name === "MMMD", "vb farmer");
+assert(vd.merchant_upi_id === TEST_MERCHANT_UPI, "merchant upi id");
+assert(/am=50190(\.00)?(&|$)/.test(vd.merchant_upi_payload), "merchant upi am=balance");
+assert(vd.merchant_upi_payload.includes("cu=INR"), "merchant upi cu");
 
 console.log("verify-print-document: PASS");
 console.log(
@@ -110,6 +118,8 @@ console.log(
         cess: vd.cess,
         grand_total: vd.grand_total,
         balance_due: vd.balance_due,
+        merchant_upi_id: vd.merchant_upi_id,
+        merchant_upi_payload: vd.merchant_upi_payload,
       },
     },
     null,

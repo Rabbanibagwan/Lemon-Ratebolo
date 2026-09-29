@@ -1,4 +1,9 @@
 import { LedgerDetail, Patti, ShopProfile, VendorBill } from "@/src/api";
+import {
+  buildMerchantUpiPayUrl,
+  merchantUpiDisplayName,
+  normalizeUpiId,
+} from "@/src/utils/merchant-upi";
 import { EscPosBuilder, rupees, slipText } from "@/src/utils/escpos";
 import { pattiDisplayAmount, pattiDisplayRate } from "@/src/utils/print-document";
 import { thermalBaseCss, thermalMetrics } from "@/src/utils/thermal-print";
@@ -120,6 +125,17 @@ export function encodeVendorBillEscPos(bill: VendorBill, profile: ShopProfile, p
 
   b.kv("Paid", rupees(bill.paid));
   b.bold(true).kv("Balance Due", rupees(bill.balance)).bold(false);
+
+  // Merchant UPI QR (shop profile VPA) — after Balance Due, before bank details.
+  const upiId = normalizeUpiId(profile.upi_id);
+  const upiPayload = buildMerchantUpiPayUrl({
+    upiId,
+    merchantName: merchantUpiDisplayName(profile),
+    amount: bill.balance,
+  });
+  if (upiPayload) {
+    b.merchantUpiQrSection(upiPayload, upiId, paperMm);
+  }
 
   // Complete Bank Details BEFORE any feed/cut (content-driven length).
   const bank: string[] = [];

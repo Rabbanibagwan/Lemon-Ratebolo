@@ -707,6 +707,28 @@ export class EscPosBuilder {
     return this;
   }
 
+  /**
+   * Merchant UPI payment QR on Vendor Bill (ESC/POS GS ( k).
+   * Payload should already be a upi://pay?... deep link. Does not cut.
+   */
+  merchantUpiQrSection(payload: string, upiId: string, paperMm?: number): this {
+    const data = (payload || "").trim();
+    const vpa = slipText(upiId || "").trim();
+    if (!data) return this;
+    this.normalState().align("left").hr("-");
+    this.align("center").bold(true).size("normal").line("PAY VIA UPI").bold(false);
+    const module = this.qrModuleSize(paperMm ?? this.paperMm);
+    this.normalState().align("center").qr(data, module);
+    this.normalState().align("center").bold(true).line("Scan to pay").bold(false);
+    if (vpa) {
+      this.align("center").size("normal").wrapped(`Merchant UPI: ${vpa}`);
+    }
+    this.normalState().align("left").hr("-");
+    this.normalState();
+    this.feed(this.qrClearanceFeed());
+    return this;
+  }
+
   qr(data: string, moduleSize = 4): this {
     const payload = utf8(data || "");
     const storeLen = payload.length + 3;

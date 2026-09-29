@@ -6,6 +6,11 @@
  * (₹ vs Rs, × vs x) for thermal hardware limits.
  */
 import type { Patti, ShopProfile, VendorBill } from "@/src/api";
+import {
+  buildMerchantUpiPayUrl,
+  merchantUpiDisplayName,
+  normalizeUpiId,
+} from "@/src/utils/merchant-upi";
 
 export type PrintDocLine = {
   lot_no: string;
@@ -54,6 +59,10 @@ export type VendorBillPrintDocument = {
   grand_total: number;
   paid: number;
   balance_due: number;
+  /** Merchant UPI VPA from shop profile (public). Empty when unset. */
+  merchant_upi_id: string;
+  /** Dynamic upi://pay?... payload for QR (includes Balance Due when valid). */
+  merchant_upi_payload: string;
   shop_name: string;
   shop_address: string;
   shop_mobile: string;
@@ -139,6 +148,14 @@ export function buildVendorBillPrintDocument(
   profile: ShopProfile,
   opts?: { paperMm?: number },
 ): VendorBillPrintDocument {
+  const balanceDue = Number(b.balance) || 0;
+  const merchantUpiId = normalizeUpiId(profile?.upi_id);
+  const merchantUpiPayload =
+    buildMerchantUpiPayUrl({
+      upiId: merchantUpiId,
+      merchantName: merchantUpiDisplayName(profile),
+      amount: balanceDue,
+    }) || "";
   return {
     type: "VENDOR_BILL",
     bill_id: b.id,
@@ -160,7 +177,9 @@ export function buildVendorBillPrintDocument(
     cess: Number(b.cess) || 0,
     grand_total: Number(b.grand_total) || 0,
     paid: Number(b.paid) || 0,
-    balance_due: Number(b.balance) || 0,
+    balance_due: balanceDue,
+    merchant_upi_id: merchantUpiId,
+    merchant_upi_payload: merchantUpiPayload,
     shop_name: (profile?.shop_name || "").trim().toUpperCase(),
     shop_address: shopAddressLine(profile),
     shop_mobile: (profile?.mobile || "").trim(),
@@ -218,6 +237,8 @@ export function logPrintDocument(doc: FarmerPattiPrintDocument | VendorBillPrint
         `hamali: ${doc.hamali}`,
         `cess: ${doc.cess}`,
         `grand_total: ${doc.grand_total}`,
+        `merchant_upi: ${doc.merchant_upi_id ? "yes" : "no"}`,
+        `balance_due: ${doc.balance_due}`,
         `paid: ${doc.paid}`,
         `balance_due: ${doc.balance_due}`,
         `paper_mm: ${doc.paper_mm ?? ""}`,

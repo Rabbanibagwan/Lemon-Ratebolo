@@ -533,6 +533,32 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       -webkit-print-color-adjust: exact !important;
       print-color-adjust: exact !important;
     }
+    /* Vendor Bill merchant UPI QR — centered, square, not stretched. */
+    #slip.vendor .upiBox {
+      text-align: center;
+      width: 100%;
+      max-width: 100%;
+      box-sizing: border-box;
+      padding: 4px 0;
+    }
+    #slip.vendor .upiTitle,
+    #slip.vendor .upiScan {
+      font-weight: 900 !important;
+      letter-spacing: 0.5px;
+      margin: 2px 0;
+    }
+    #slip.vendor .upiId {
+      font-size: ${Math.max(8, m.bodyFs - 1)}px;
+      font-weight: 700 !important;
+      margin-top: 2px;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    #slip.vendor img.qr {
+      width: ${Math.min(m.qrPx, m.w <= 58 ? 96 : m.w <= 80 ? 120 : 140)}px !important;
+      height: ${Math.min(m.qrPx, m.w <= 58 ? 96 : m.w <= 80 ? 120 : 140)}px !important;
+      margin: 6px auto !important;
+    }
     /* Vendor Bill only: Times + printable side margins + same-row vendor name. */
     #slip.vendor,
     #slip.vendor * {
