@@ -295,12 +295,12 @@ export class EscPosBuilder {
   }
 
   /**
-   * Farmer Patti FARMER value — merchant-class size (big when it fits, else tall).
+   * Party name value (FARMER / VENDOR) — merchant-class size (big when it fits, else tall).
    * Label stays normal width; name is bold + large. Long names wrap safely.
    * Does not change shopHeader / merchant size.
    */
-  farmerNameRow(name: string): this {
-    const lab = "FARMER";
+  partyNameRow(label: string, name: string): this {
+    const lab = String(label || "").toUpperCase() || "NAME";
     const val = slipText(name || "-") || "-";
     this.normalState().align("left").font("A").bold(false).size("normal");
     // big = double-width chars → effective columns = floor(cols/2)
@@ -327,6 +327,57 @@ export class EscPosBuilder {
     for (const row of this.wrap(val)) {
       this.align("right").line(row);
     }
+    this.size("normal").bold(false).normalState().applyPrintArea().align("left");
+    return this;
+  }
+
+  /**
+   * Farmer Patti FARMER value — merchant-class size (big when it fits, else tall).
+   * Does not change shopHeader / merchant size.
+   */
+  farmerNameRow(name: string): this {
+    return this.partyNameRow("FARMER", name);
+  }
+
+  /**
+   * Vendor Bill VENDOR value — merchant-class BIG (GS ! 0x11), same as shopHeader.
+   * Label stays normal; VALUE is bold + large. Prefers same-row big; if the name is
+   * too long for same-row big, stacks: VENDOR then big right-aligned name (never
+   * falls back to body-size text). Long names wrap with tall only as last resort.
+   * Does not change shopHeader / merchant size.
+   */
+  vendorNameRow(name: string): this {
+    const lab = "VENDOR";
+    const val = slipText(name || "-") || "-";
+    this.normalState().align("left").font("A").bold(false).size("normal");
+    const bigCols = Math.floor(this.cols / 2);
+    // 1) Same-row: normal label + big value (identical size command as merchant name).
+    if (lab.length + 1 + val.length <= bigCols) {
+      const normalGap = Math.max(1, this.cols - lab.length - val.length * 2);
+      this.text(lab + " ".repeat(normalGap));
+      this.bold(true).size("big").text(val).size("normal").bold(false).raw(u8(0x0a));
+      this.applyPrintArea().align("left");
+      return this;
+    }
+    // 2) Stacked big — merchant-class 2×2 value when same-row big would not fit.
+    if (val.length <= bigCols) {
+      this.line(lab);
+      this.bold(true).size("big").align("right").line(val).size("normal").bold(false);
+      this.normalState().applyPrintArea().align("left");
+      return this;
+    }
+    // 3) Same-row tall (double-height) when name is longer than bigCols.
+    if (lab.length + 1 + val.length <= this.cols) {
+      const gap = Math.max(1, this.cols - lab.length - val.length);
+      this.text(lab + " ".repeat(gap));
+      this.bold(true).size("tall").text(val).size("normal").bold(false).raw(u8(0x0a));
+      this.applyPrintArea().align("left");
+      return this;
+    }
+    // 4) Wrap tall — never clip / never body-size.
+    this.line(lab);
+    this.bold(true).size("tall");
+    for (const row of this.wrap(val)) this.align("right").line(row);
     this.size("normal").bold(false).normalState().applyPrintArea().align("left");
     return this;
   }
@@ -386,9 +437,9 @@ export class EscPosBuilder {
   }
 
   /**
-   * Major total (NET PAYABLE / GRAND TOTAL).
+   * Major total (legacy compact row).
    * WHITE background, BOLD BLACK text — never inverse/reverse fill.
-   * Vendor Bill GRAND TOTAL keeps this compact row (no frame).
+   * Prefer farmerNetPayableBox / vendorGrandTotalBox for framed totals.
    */
   majorTotalBox(left: string, right: string): this {
     const lab = String(left || "").toUpperCase();
@@ -401,17 +452,15 @@ export class EscPosBuilder {
   }
 
   /**
-   * Farmer Patti NET PAYABLE — board-style frame with continuous full-width rules:
+   * Framed major total with continuous full-width rules (this.cols → 58/80/100):
    *   -------------------------------
-   *   NET PAYABLE              Rs …
+   *   LABEL                    Rs …
    *   -------------------------------
    * WHITE background, bold black. Merchant-class size (big when it fits, else tall).
-   * Never inverse/reverse. No TrueType/Times on ESC/POS — Font A + bold + big/tall;
-   * HTML/preview use Times Roman separately.
-   * Rules use this.cols (centralized printable width for 58/80/100 mm).
+   * Never inverse/reverse. ESC/POS Font A + bold + big/tall only (no image).
    */
-  farmerNetPayableBox(amount: string): this {
-    const lab = "NET PAYABLE";
+  framedMajorTotal(label: string, amount: string): this {
+    const lab = String(label || "").toUpperCase();
     this.normalState().align("left").font("A");
     // Continuous top rule — left printable edge → right printable edge.
     this.hr("-");
@@ -436,6 +485,45 @@ export class EscPosBuilder {
     const row = (l + " ".repeat(gap) + amt).slice(0, unitCols);
     this.line(row);
     // Reset size/bold before the bottom rule so separators stay normal weight.
+    this.size("normal").bold(false).normalState().applyPrintArea().align("left");
+    // Continuous bottom rule — same full printable width.
+    this.hr("-");
+    this.normalState();
+    return this;
+  }
+
+  /**
+   * Farmer Patti NET PAYABLE — framed merchant-class total.
+   */
+  farmerNetPayableBox(amount: string): this {
+    return this.framedMajorTotal("NET PAYABLE", amount);
+  }
+
+  /**
+   * Vendor Bill GRAND TOTAL — continuous full-width rules + merchant-class BIG
+   * (GS ! 0x11 / bold), same size hierarchy as shopHeader ("MKB LEMON CO.").
+   * WHITE background, black text, no inverse. Amount stays on one line.
+   * Rules use this.cols (58→32 / 80→48 / 100→60) — never a fixed dash count.
+   */
+  vendorGrandTotalBox(amount: string): this {
+    const lab = "GRAND TOTAL";
+    this.normalState().align("left").font("A");
+    // Continuous top rule — left printable edge → right printable edge.
+    this.hr("-");
+    const bigCols = Math.floor(this.cols / 2);
+    // Compact amount first so same-row BIG is preferred (matches merchant 2×2).
+    let amt = this.fitAmount(slipText(amount || ""), Math.max(6, bigCols - lab.length - 1));
+    if (lab.length + 1 + amt.length <= bigCols) {
+      this.normalState().align("left").font("A").bold(true).size("big");
+      const gap = Math.max(1, bigCols - lab.length - amt.length);
+      this.line((lab + " ".repeat(gap) + amt).slice(0, bigCols));
+    } else {
+      // Stacked BIG lines when label+amount cannot share one double-width row (e.g. 58mm).
+      amt = this.fitAmount(slipText(amount || ""), Math.max(6, bigCols));
+      this.normalState().align("left").font("A").bold(true).size("big");
+      this.line(lab.slice(0, bigCols));
+      this.align("right").line(amt.slice(0, bigCols));
+    }
     this.size("normal").bold(false).normalState().applyPrintArea().align("left");
     // Continuous bottom rule — same full printable width.
     this.hr("-");

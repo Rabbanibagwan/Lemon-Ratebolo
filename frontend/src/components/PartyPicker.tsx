@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
-  FlatList, Modal,
-  Pressable, StyleSheet, Text, TextInput, View,
+  FlatList, Modal, Platform,
+  Pressable, StyleSheet, Text, TextInput, useWindowDimensions, View,
   type NativeSyntheticEvent,
   type TextInputKeyPressEventData,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useKeyboardState } from "react-native-keyboard-controller";
 
 import { api, Farmer, Vendor } from "@/src/api";
 import { KeyboardFormAvoid } from "@/src/components/KeyboardForm";
@@ -20,6 +21,10 @@ import {
   isEnterKey,
   isEscapeKey,
 } from "@/src/utils/physical-keyboard";
+import {
+  partyPickerSearchListMaxHeight,
+  partyPickerSearchSheetMaxHeight,
+} from "@/src/utils/party-picker-keyboard";
 
 export type PartyKind = "farmer" | "vendor";
 export type PartyItem = Farmer | Vendor;
@@ -104,6 +109,23 @@ export function PartyPicker({
   const title = isFarmer ? "LINK FARMER" : "LINK VENDOR";
   const addLabel = isFarmer ? "+ ADD NEW FARMER" : "+ ADD NEW VENDOR";
   const searchPlaceholder = isFarmer ? "Search Farmer…" : "Search Vendor…";
+
+  const { height: windowHeight } = useWindowDimensions();
+  const keyboardHeight = useKeyboardState((s) => (s.isVisible ? s.height : 0));
+  // Cap sheet + list to the space above the IME so suggestions never sit behind it.
+  const searchSheetMaxHeight = useMemo(
+    () => partyPickerSearchSheetMaxHeight(windowHeight, keyboardHeight, Platform.OS),
+    [windowHeight, keyboardHeight],
+  );
+  const searchListMaxHeight = useMemo(
+    () => partyPickerSearchListMaxHeight(
+      windowHeight,
+      keyboardHeight,
+      searchSheetMaxHeight,
+      Platform.OS,
+    ),
+    [windowHeight, keyboardHeight, searchSheetMaxHeight],
+  );
 
   const [query, setQuery] = useState("");
   const [showCreate, setShowCreate] = useState(false);
@@ -424,9 +446,12 @@ export function PartyPicker({
         onRequestClose={onClose}
         onShow={handleSearchModalShown}
       >
-        <View style={styles.modalRoot}>
+        <KeyboardFormAvoid style={styles.modalRoot} behavior="padding">
           <Pressable style={styles.backdrop} onPress={onClose} />
-          <View style={styles.sheet}>
+          <View
+            style={[styles.sheet, { maxHeight: searchSheetMaxHeight }]}
+            testID={isFarmer ? "farmer-picker-sheet" : "vendor-picker-sheet"}
+          >
             <View style={styles.header}>
               <Text style={styles.title}>{title}</Text>
               <Pressable onPress={onClose} hitSlop={12} testID="party-picker-close">
@@ -467,8 +492,9 @@ export function PartyPicker({
               data={filtered}
               keyExtractor={(x) => x.id}
               keyboardShouldPersistTaps="handled"
-              style={{ maxHeight: 360 }}
-              contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.xl, gap: spacing.sm }}
+              keyboardDismissMode="none"
+              style={{ maxHeight: searchListMaxHeight, flexGrow: 0 }}
+              contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.md, gap: spacing.sm }}
               onScrollToIndexFailed={() => {
                 /* ignore — list may still be measuring */
               }}
@@ -503,7 +529,7 @@ export function PartyPicker({
               )}
             />
           </View>
-        </View>
+        </KeyboardFormAvoid>
       </Modal>
 
       <Modal
@@ -665,7 +691,7 @@ const styles = StyleSheet.create({
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.45)" },
   sheet: {
     backgroundColor: colors.surface, borderTopWidth: 2, borderColor: colors.borderStrong,
-    paddingBottom: spacing.md, maxHeight: "82%",
+    paddingBottom: spacing.md, flexShrink: 1,
   },
   createCard: {
     backgroundColor: colors.surface, borderTopWidth: 2, borderColor: colors.borderStrong,

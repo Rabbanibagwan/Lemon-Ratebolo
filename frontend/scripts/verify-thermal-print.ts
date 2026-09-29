@@ -103,7 +103,7 @@ function encodeBill(paperMm: number, bankLines: string[]): { b64: string; builde
   b.shopHeader(profile);
   b.docTitleAndNo("VENDOR BILL", bill.bill_code, "BILL");
   b.hr();
-  b.infoRow("VENDOR", bill.vendor_name);
+  b.vendorNameRow(bill.vendor_name);
   b.infoRow("DATE", bill.date, { valueBold: false });
   b.hr().tableHeader4().hr("-");
   for (const l of bill.lines) {
@@ -115,7 +115,7 @@ function encodeBill(paperMm: number, bankLines: string[]): { b64: string; builde
     .kv("Hamali", rupees(bill.hamali))
     .kv("Cess / Other", rupees(bill.cess));
   b.normalState();
-  b.majorTotalBox("GRAND TOTAL", rupees(bill.grand_total));
+  b.vendorGrandTotalBox(rupees(bill.grand_total));
   b.normalState();
   b.kv("Paid", rupees(bill.paid));
   b.bold(true).kv("Balance Due", rupees(bill.balance)).bold(false);
@@ -496,8 +496,33 @@ for (const mm of widths) {
   assert(billText.includes("GRAND TOTAL"), "grand");
   assert(billText.includes("Cess / Other"), "cess");
   assert(billText.includes("FARMER"), "farmer col");
+  assert(billText.includes("VENDOR"), "vendor label");
+  assert(billText.includes("Vendor One") || billText.includes("VENDOR ONE") || /Vendor One/i.test(billText), "vendor name");
   assert(billText.includes("BANK DETAILS"), "bank title");
   for (const row of LONG_BANK) assert(billText.includes(row), `long bank: ${row}`);
+
+  // GRAND TOTAL framed with continuous full-width rules (this.cols).
+  // Same-row BIG on wide paper; stacked BIG label/amount on narrow (58mm) still framed.
+  const gLines = billText.split("\n");
+  const gi = gLines.findIndex((ln) => ln.includes("GRAND TOTAL"));
+  assert(gi > 0, `${mm} GRAND TOTAL row present`);
+  const grandLine = gLines[gi] || "";
+  assert(/^-+$/.test(gLines[gi - 1] || "") && (gLines[gi - 1] || "").length === cfg.columns, `${mm} GRAND TOTAL top rule`);
+  const amountOnGrand = /Rs\s*[\d,]+\.?\d*/.test(grandLine);
+  const amountNext = /Rs\s*[\d,]+\.?\d*/.test(gLines[gi + 1] || "");
+  assert(amountOnGrand || amountNext, `${mm} GRAND TOTAL amount present (same or next line)`);
+  const ruleAfter = amountOnGrand ? gi + 1 : gi + 2;
+  assert(
+    /^-+$/.test(gLines[ruleAfter] || "") && (gLines[ruleAfter] || "").length === cfg.columns,
+    `${mm} GRAND TOTAL bottom rule`,
+  );
+  // Merchant-class size: GS ! 0x11 (big) must appear in Vendor Bill ESC/POS.
+  const billBin = Buffer.from(longEnc.b64, "base64");
+  let bigSizeCount = 0;
+  for (let i = 0; i < billBin.length - 2; i++) {
+    if (billBin[i] === 0x1d && billBin[i + 1] === 0x21 && billBin[i + 2] === 0x11) bigSizeCount++;
+  }
+  assert(bigSizeCount >= 2, `${mm} vendor ESC/POS uses GS ! big (≥2: shop + vendor/total), got ${bigSizeCount}`);
 
   const billAnalysis = analyzeEscPos(longEnc.b64);
   assert(billAnalysis.shopHeaderCentered, `${mm} vendor merchant header centered`);
@@ -526,12 +551,18 @@ for (const mm of widths) {
 const docs = readFileSync(join(__dirname, "../src/utils/thermal-escpos-docs.ts"), "utf8");
 assert(docs.includes("shopHeader"), "docs use shopHeader");
 assert(docs.includes("farmerNetPayableBox"), "docs use farmerNetPayableBox for Patti");
-assert(docs.includes("majorTotalBox"), "docs use majorTotalBox");
+assert(docs.includes("vendorGrandTotalBox"), "docs use vendorGrandTotalBox");
 assert(/farmerNetPayableBox\(rupees\(p\.net_payable\)\)/.test(docs), "Patti NET uses farmerNetPayableBox");
-assert(/majorTotalBox\("GRAND TOTAL"/.test(docs), "Vendor GRAND TOTAL still uses majorTotalBox");
+assert(/vendorGrandTotalBox\(rupees\(bill\.grand_total\)\)/.test(docs), "Vendor GRAND TOTAL uses vendorGrandTotalBox");
+assert(!/majorTotalBox\("GRAND TOTAL"/.test(docs), "Vendor no longer uses majorTotalBox for GRAND TOTAL");
 assert(!/majorTotalBox\("NET PAYABLE"/.test(docs), "Patti no longer uses majorTotalBox for NET");
 assert(docs.includes("farmerNameRow"), "docs use farmerNameRow");
+assert(docs.includes("vendorNameRow"), "docs use vendorNameRow");
 assert(!/infoRow\("FARMER"/.test(docs), "Patti FARMER uses farmerNameRow not infoRow");
+assert(!/infoRow\("VENDOR"/.test(docs), "Vendor VENDOR uses vendorNameRow not infoRow");
+const vendorPrintSrc = readFileSync(join(__dirname, "../src/utils/vendor-bill-print.ts"), "utf8");
+assert(vendorPrintSrc.includes("encodeVendorBillEscPos"), "thermalPrintVendorBill wires ESC/POS encoder");
+assert(vendorPrintSrc.includes("escposBase64"), "Bluetooth path receives escposBase64");
 assert(docs.includes('.hr("-")'), "docs have hr separators in Patti totals");
 assert(docs.includes("tableHeader4"), "docs use tableHeader4");
 assert(docs.includes('kv("Lemon"'), "docs Lemon");
@@ -546,12 +577,15 @@ const escposSrc = readFileSync(join(__dirname, "../src/utils/escpos.ts"), "utf8"
 assert(escposSrc.includes("thermalWidthConfig"), "thermalWidthConfig exported");
 assert(escposSrc.includes("normalState"), "normalState present");
 assert(escposSrc.includes("farmerNetPayableBox"), "farmerNetPayableBox present");
+assert(escposSrc.includes("vendorGrandTotalBox"), "vendorGrandTotalBox present");
 assert(escposSrc.includes("farmerNameRow"), "farmerNameRow present");
+assert(escposSrc.includes("vendorNameRow"), "vendorNameRow present");
+assert(escposSrc.includes("framedMajorTotal"), "framedMajorTotal present");
 assert(!/reverse\(true\)/.test(escposSrc.match(/majorTotalBox[\s\S]*?^  \}/m)?.[0] || ""), "majorTotalBox no reverse(true)");
-assert(!/reverse\(true\)/.test(escposSrc.match(/farmerNetPayableBox[\s\S]*?^  \}/m)?.[0] || ""), "farmerNetPayableBox no reverse(true)");
-const netBoxSrc = escposSrc.match(/farmerNetPayableBox[\s\S]*?^  \}/m)?.[0] || "";
-assert(/sizeKind/.test(netBoxSrc) || /\.size\("big"\)/.test(netBoxSrc) || /\.size\("tall"\)/.test(netBoxSrc), "farmerNetPayableBox uses big/tall");
-assert(/font\("A"\)/.test(netBoxSrc), "NET PAYABLE stays Font A (no Times on ESC/POS)");
+assert(!/reverse\(true\)/.test(escposSrc.match(/framedMajorTotal[\s\S]*?^  \}/m)?.[0] || ""), "framedMajorTotal no reverse(true)");
+const framedSrc = escposSrc.match(/framedMajorTotal[\s\S]*?^  \}/m)?.[0] || "";
+assert(/sizeKind/.test(framedSrc) || /\.size\("big"\)/.test(framedSrc) || /\.size\("tall"\)/.test(framedSrc), "framedMajorTotal uses big/tall");
+assert(/font\("A"\)/.test(framedSrc), "framed totals stay Font A (no Times on ESC/POS)");
 const itemLotSrc = escposSrc.match(/itemRowLotEmph[\s\S]*?^  \}/m)?.[0] || "";
 assert(/bold\(true\)\.text\(midCell\)/.test(itemLotSrc), "Bags×Rate + Amount bold in itemRowLotEmph");
 
@@ -560,6 +594,10 @@ assert(thermalCss.includes("#slip.patti .netbox"), "patti netbox css");
 assert(/#slip\.patti \.netbox \{[\s\S]*?background:\s*#fff/m.test(thermalCss), "patti netbox white bg");
 assert(/#slip\.patti \.netbox \{[\s\S]*?border-top:\s*2px solid #000/m.test(thermalCss), "patti netbox top rule");
 assert(/#slip\.patti \.netbox \{[\s\S]*?border-bottom:\s*2px solid #000/m.test(thermalCss), "patti netbox bottom rule");
+assert(/#slip\.vendor \.netbox \{[\s\S]*?background:\s*#fff/m.test(thermalCss), "vendor netbox white bg");
+assert(/#slip\.vendor \.netbox \{[\s\S]*?border-top:\s*2px solid #000/m.test(thermalCss), "vendor netbox top rule");
+assert(/#slip\.vendor \.netbox \{[\s\S]*?border-bottom:\s*2px solid #000/m.test(thermalCss), "vendor netbox bottom rule");
+assert(/vendorFs:\s*shopFs/.test(thermalCss), "vendor name uses shopFs hierarchy");
 
 const pattiUi = readFileSync(join(__dirname, "../app/patti/[id].tsx"), "utf8");
 assert(/netBox:\s*\{[\s\S]*?backgroundColor:\s*colors\.surface/m.test(pattiUi), "preview netBox white");
@@ -603,15 +641,87 @@ assert(idSrc.includes('label="Lemon"'), "UI Lemon");
 assert(!idSrc.includes("Goods (×"), "UI no Goods calc");
 assert(idSrc.includes("merchantHead"), "UI merchantHead");
 
+// Driver Detail Print — must use Bluetooth ESC/POS, never preferHtml / system Print.
+const reportsExport = readFileSync(join(__dirname, "../src/utils/reports-export.ts"), "utf8");
+const driverPrintFn = reportsExport.match(/export async function thermalPrintDriverReport[\s\S]*?^}/m)?.[0] || "";
+assert(driverPrintFn.includes("requireBluetooth: true"), "Driver Detail Print requires Bluetooth");
+assert(!/preferHtml:\s*true/.test(driverPrintFn), "Driver Detail Print must not preferHtml");
+assert(!/Print\.printAsync\s*\(/.test(driverPrintFn), "Driver Detail Print must not call Print.printAsync");
+assert(/printThermalDocument\s*\(/.test(driverPrintFn), "Driver Detail Print uses printThermalDocument");
+assert(reportsExport.includes("encodeDriverReportEscPos"), "Driver ESC/POS encoder present");
+assert(/encodeDriverReportEscPos[\s\S]*contentClearanceFeed/.test(reportsExport), "Driver report feeds before cut");
+const connSrc = readFileSync(join(__dirname, "../src/utils/thermal-connection.ts"), "utf8");
+assert(connSrc.includes("requireBluetooth"), "printThermalDocument supports requireBluetooth");
+assert(connSrc.includes("writeEscPos"), "BT writeEscPos path present");
+const reportsUi = readFileSync(join(__dirname, "../app/(tabs)/reports.tsx"), "utf8");
+assert(reportsUi.includes("thermalPrintDriverReport"), "Reports UI calls thermalPrintDriverReport");
+assert(reportsUi.includes("connected thermal printer"), "Reports UI success copy is thermal, not preview");
+
+/** Mirror encodeDriverReportEscPos layout for width/overflow/cut checks (no RN imports). */
+function encodeDriverReportMirror(paperMm: number): { b64: string; builder: EscPosBuilder } {
+  const b = new EscPosBuilder(paperMm);
+  const c = b.cols;
+  const wPt = Math.max(3, Math.floor(c * 0.1));
+  const wLot = Math.max(4, Math.floor(c * 0.14));
+  const wPay = Math.max(8, Math.floor(c * 0.22));
+  const wRecv = Math.max(6, Math.floor(c * 0.22));
+  const wFarm = Math.max(6, c - wPt - wLot - wPay - wRecv);
+  const clip = (s: string, n: number) => {
+    const t = String(s || "");
+    return t.length <= n ? t.padEnd(n, " ") : t.slice(0, Math.max(0, n - 1)) + ".";
+  };
+  const row5 = (pt: string, lot: string, farm: string, pay: string, recv: string) => {
+    const payCell = pay.length > wPay ? pay.slice(-wPay) : pay.padStart(wPay, " ");
+    return clip(pt, wPt) + clip(lot, wLot) + clip(farm, wFarm) + payCell + clip(recv, wRecv);
+  };
+  b.init().align("center").bold(true).size("big").line("MKB LEMON CO.").size("normal")
+    .bold(true).line("DRIVER DETAILS").bold(false).hr().align("left").applyPrintArea()
+    .kv("Driver", "SHABBIR-2").kv("Date", "2026-09-27").kv("Lots", "153/1 - 155/3")
+    .hr().bold(true).line(row5("PT", "LOT", "FARMER", "NET PAY", "RECV")).bold(false).hr("-");
+  b.line(row5("#153", "153/1", "Long Farmer Name Example", rupees(12345.5), "DRIVER"));
+  b.line(row5("#154", "154/2", "RAMU", rupees(2000), "-"));
+  b.hr().kv("TOTAL BAGS", "4").kv("TOTAL BHADA", rupees(100))
+    .bold(true).kv("TOTAL NET PAYABLE", rupees(14345.5)).kv("DRV NET RECVD", rupees(12345.5)).bold(false);
+  b.normalState();
+  b.feed(b.contentClearanceFeed());
+  b.cut();
+  return { b64: b.toBase64(), builder: b };
+}
+
+for (const mm of widths) {
+  const cfg = thermalWidthConfig(mm);
+  const enc = encodeDriverReportMirror(mm);
+  const text = decodeEscPosText(enc.b64);
+  for (const line of text.split("\n")) {
+    if (line && line.length > cfg.columns) {
+      throw new Error(`Driver ${mm} overflow: ${line.length} "${line}"`);
+    }
+  }
+  assert(text.includes("DRIVER DETAILS"), `${mm} driver title`);
+  assert(text.includes("SHABBIR-2"), `${mm} driver name`);
+  assert(text.includes("TOTAL NET PAYABLE"), `${mm} driver totals`);
+  const analysis = analyzeEscPos(enc.b64);
+  assert(analysis.hasCut && analysis.cutIsFeedAndCut, `${mm} driver cut`);
+  assert(analysis.gsWDots === cfg.contentDots, `${mm} driver GS W = ${cfg.contentDots}`);
+  assert(analysis.gsLDots === cfg.leftMarginDots, `${mm} driver GS L`);
+  const hr = text.split("\n").find((ln) => /^-+$/.test(ln));
+  assert(!!hr && hr!.length === cfg.columns, `${mm} driver hr width`);
+  console.log(`\n=== DRIVER ${mm}mm (${cfg.columns} cols) ===\n${text}`);
+}
+
 console.log("\nRESULTS:");
 for (const [k, v] of Object.entries(results)) console.log(`  ${k}: ${v}`);
 console.log("  Merchant header centered (Patti + Vendor): PASS");
 console.log("  Net Payable framed (full-width top/bottom rules): PASS");
+console.log("  Vendor GRAND TOTAL framed (full-width top/bottom rules): PASS");
 console.log("  Net Payable / Grand Total inverse: PASS (disabled)");
 console.log("  Net Payable / Grand Total bold black / white bg: PASS");
-console.log("  Vendor Bill GRAND TOTAL still majorTotalBox (unchanged): PASS");
+console.log("  Vendor name merchant-class (vendorNameRow): PASS");
+console.log("  Vendor Bill GRAND TOTAL vendorGrandTotalBox: PASS");
 console.log("  Short + long Bank Details before CUT: PASS");
 console.log("  Content-driven Vendor Bill length: PASS");
 console.log("  QR clearance + feed-and-cut: PASS");
 console.log("  BT chunked write + settle: PASS");
+console.log("  Driver Detail Print requireBluetooth (no system dialog): PASS");
+console.log("  Driver Detail ESC/POS 58/80/100 width: PASS");
 console.log("ALL WIDTHS OK");

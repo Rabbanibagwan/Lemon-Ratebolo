@@ -66,8 +66,8 @@ export function thermalMetrics(paperMm: number) {
     vAmtPct: w <= 58 ? 28 : 26,
     /** Farmer name ≈ merchant shopFs (Patti only; merchant size unchanged). */
     farmerFs: shopFs,
-    /** Vendor name — one step under prior farmerFs, still bold/readable on the same row. */
-    vendorFs: w <= 58 ? 16 : w <= 80 ? 18 : 22,
+    /** Vendor name ≈ merchant shopFs (Vendor Bill only; merchant size unchanged). */
+    vendorFs: shopFs,
     shopFs,
   };
 }
@@ -600,16 +600,37 @@ export function thermalBaseCss(m: ReturnType<typeof thermalMetrics>): string {
       overflow-wrap: anywhere;
       word-break: break-word;
     }
+    /* Vendor Bill GRAND TOTAL — continuous full-width rules + merchant-class type. */
     #slip.vendor .netbox {
-      padding: 10px 0;
-      gap: 12px;
+      padding: 8px 0;
+      margin: 4px 0;
+      gap: 8px;
       background: #fff !important;
       border: none !important;
+      border-top: 2px solid #000 !important;
+      border-bottom: 2px solid #000 !important;
+      width: 100% !important;
+      max-width: 100% !important;
+      box-sizing: border-box !important;
+      align-items: center;
     }
     #slip.vendor .netbox .bold,
     #slip.vendor .netbox .huge {
       color: #000 !important;
       font-weight: 900 !important;
+      font-size: ${m.shopFs}px !important;
+      white-space: nowrap;
+      -webkit-text-stroke: 0 !important;
+    }
+    #slip.vendor .netbox .bold {
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      flex: 0 1 auto;
+      min-width: 0;
+    }
+    #slip.vendor .netbox .huge {
+      flex: 0 0 auto;
+      text-align: right !important;
     }
     .foot {
       font-size: ${Math.max(8, m.bodyFs - 1)}px; font-weight: 700 !important;

@@ -67,7 +67,7 @@ export function encodeFarmerPattiEscPos(
     .bold(false);
 
   b.normalState();
-  // Farmer Patti only: framed NET PAYABLE (Vendor Bill keeps majorTotalBox).
+  // Farmer Patti only: framed NET PAYABLE (Vendor Bill uses vendorGrandTotalBox).
   b.farmerNetPayableBox(rupees(p.net_payable));
   b.normalState();
   b.infoRow("RECEIVER", p.receiver_name || "-");
@@ -97,7 +97,8 @@ export function encodeVendorBillEscPos(bill: VendorBill, profile: ShopProfile, p
   b.docTitleAndNo("VENDOR BILL", bill.bill_code, "BILL");
   b.hr();
 
-  b.infoRow("VENDOR", bill.vendor_name || "-");
+  // ESC/POS Bluetooth path: vendor VALUE uses GS ! 0x11 (big) + bold — same as shopHeader.
+  b.vendorNameRow(bill.vendor_name || "-");
   if (bill.vendor_details) b.infoRow("DETAILS", bill.vendor_details, { valueBold: false });
   b.infoRow("DATE", bill.date || "-", { valueBold: false });
 
@@ -113,7 +114,8 @@ export function encodeVendorBillEscPos(bill: VendorBill, profile: ShopProfile, p
   if (bill.cess > 0) b.kv("Cess / Other", rupees(bill.cess));
 
   b.normalState();
-  b.majorTotalBox("GRAND TOTAL", rupees(bill.grand_total));
+  // ESC/POS Bluetooth: full-width hr + big/bold GRAND TOTAL + amount + full-width hr.
+  b.vendorGrandTotalBox(rupees(bill.grand_total));
   b.normalState();
 
   b.kv("Paid", rupees(bill.paid));
