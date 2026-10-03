@@ -369,7 +369,7 @@ export default function NewVendorBill() {
           <View style={styles.divider} />
 
           <Text style={styles.section}>Totals</Text>
-          <SummaryRow label="Bags" value={String(totals.bags)} />
+          <SummaryRow label="No. Bags" value={String(totals.bags)} />
           <SummaryRow label="Lemon" value={money(totals.goods)} />
           <SummaryRow label="Commission" value={money(totals.commTotal)} />
           <SummaryRow label="Hamali" value={money(totals.hamaliN)} />

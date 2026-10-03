@@ -7,6 +7,7 @@ import {
 import { EscPosBuilder, rupees, slipText } from "@/src/utils/escpos";
 import { pattiDisplayAmount, pattiDisplayRate } from "@/src/utils/print-document";
 import { thermalBaseCss, thermalMetrics } from "@/src/utils/thermal-print";
+import { vendorBillNoBags } from "@/src/utils/vendor-bill-totals";
 
 export type CashBookLine = { side: "JAMMA" | "KHAR"; amount: number; details: string };
 export type CashBookDoc = {
@@ -113,6 +114,7 @@ export function encodeVendorBillEscPos(bill: VendorBill, profile: ShopProfile, p
   }
 
   b.hr()
+    .kv("No. Bags", String(vendorBillNoBags(bill)))
     .kv("Lemon", rupees(bill.goods_total))
     .kv("Commission", rupees(bill.commission_total))
     .kv("Hamali", rupees(bill.hamali));

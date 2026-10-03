@@ -54,6 +54,32 @@ export function canUserSharePatti(session: Session | null | undefined): boolean 
   return session?.role === "owner";
 }
 
+/**
+ * Reports tab export (Print / Save / Share) — existing owner|counter roles only.
+ * - Entry Book: no export for anyone from the list (staff also blocked on opened Patti via UI).
+ * - Driver / Farmer / Vendor Details: owner + staff.
+ * - Audit Log: owner only.
+ */
+export type ReportsExportMode = "entry" | "driver" | "farmer" | "vendor" | "audit";
+
+export function canUserExportReport(
+  session: Session | null | undefined,
+  mode: ReportsExportMode,
+): boolean {
+  if (!session) return false;
+  if (mode === "entry") return false;
+  if (mode === "audit") return session.role === "owner";
+  if (mode === "driver" || mode === "farmer" || mode === "vendor") {
+    return session.role === "owner" || session.role === "counter";
+  }
+  return false;
+}
+
+/** Audit Log report — owner only (staff must not see tab or fetch data). */
+export function canUserAccessAuditReport(session: Session | null | undefined): boolean {
+  return session?.role === "owner";
+}
+
 export function staffPrintBlockedMessage(): string {
   return "This Patti was already printed. Staff may print each Patti only once.";
 }

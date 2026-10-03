@@ -1,21 +1,11 @@
-import { Tabs, useRouter } from "expo-router";
+import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { Platform } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useEffect } from "react";
-import { useAuth } from "@/src/context/AuthContext";
 import { colors, font } from "@/src/theme";
 
 export default function TabLayout() {
   const insets = useSafeAreaInsets();
-  const { session } = useAuth();
-  const router = useRouter();
-  const isOwner = session?.role === "owner";
-
-  // Counter role: force to Pattis tab if they land elsewhere restricted (best effort).
-  useEffect(() => {
-    // No-op; tab restriction is enforced by hiding tabs below.
-  }, [session]);
 
   return (
     <Tabs
@@ -66,7 +56,7 @@ export default function TabLayout() {
         options={{
           title: "People",
           tabBarIcon: ({ color, size }) => <Ionicons name="people-outline" color={color} size={size} />,
-          href: isOwner ? undefined : null,
+          // Owner + Staff (counter): existing Farmers/Vendors directory — same APIs/DB.
         }}
       />
       <Tabs.Screen

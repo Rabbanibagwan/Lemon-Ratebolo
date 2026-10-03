@@ -21,6 +21,7 @@ import { imageDataUri } from "@/src/utils/png-mono";
 import { qrDataUri } from "@/src/utils/qr";
 import { clampPaperMm, thermalPrintUserMessage } from "@/src/utils/thermal-print";
 import { shareVendorBillPdf, thermalPrintVendorBill } from "@/src/utils/vendor-bill-print";
+import { vendorBillNoBags } from "@/src/utils/vendor-bill-totals";
 import { routeParam } from "@/src/utils/route-params";
 
 export default function VendorBillDetail() {
@@ -272,7 +273,8 @@ export default function VendorBillDetail() {
             </View>
           ))}
           <View style={styles.divider} />
-          <Row label="Lemon" value={money(b.goods_total)} />
+          <Row label="No. Bags" value={String(vendorBillNoBags(b))} testID="bill-no-bags" />
+          <Row label="Lemon" value={money(b.goods_total)} testID="bill-lemon" />
           <Row label="Commission" value={money(b.commission_total)} />
           <Row label="Hamali" value={money(b.hamali)} />
           {b.cess > 0 ? <Row label="Cess / Other" value={money(b.cess)} /> : null}
@@ -373,9 +375,19 @@ function MetaRow({ label, value }: { label: string; value: string }) {
     </View>
   );
 }
-function Row({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
+function Row({
+  label,
+  value,
+  strong,
+  testID,
+}: {
+  label: string;
+  value: string;
+  strong?: boolean;
+  testID?: string;
+}) {
   return (
-    <View style={styles.rowFlex}>
+    <View style={styles.rowFlex} testID={testID}>
       <Text style={styles.rowLabel}>{label}</Text>
       <Text style={[styles.rowValue, strong && { fontWeight: "900", fontSize: 15 }]}>{value}</Text>
     </View>

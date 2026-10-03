@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -40,6 +40,7 @@ import { useAuth } from "@/src/context/AuthContext";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
 import { Empty, Input } from "@/src/components/ui";
 import { colors, font, money, spacing } from "@/src/theme";
+import { canUserAccessAuditReport, canUserExportReport } from "@/src/utils/patti-print";
 
 type Mode = "entry" | "driver" | "farmer" | "vendor" | "audit";
 type ExportKind = "farmer" | "vendor" | "audit";
@@ -91,7 +92,7 @@ function pdfDateStamp(iso: string): string {
 export default function Reports() {
   const router = useRouter();
   const { session } = useAuth();
-  const isOwner = session?.role === "owner";
+  const canAccessAudit = canUserAccessAuditReport(session);
   const { workingDateISO, displayDate } = useWorkingDate();
 
   const [mode, setMode] = useState<Mode>("entry");
@@ -106,6 +107,14 @@ export default function Reports() {
   const [search, setSearch] = useState("");
   const [selectedDriver, setSelectedDriver] = useState<string | null>(null);
   const [auctionDrivers, setAuctionDrivers] = useState<DriverRangeRef[]>([]);
+
+  // Staff must never remain on Audit (deep link / stale state / race).
+  useEffect(() => {
+    if (!canAccessAudit && mode === "audit") {
+      setMode("entry");
+      setFormatPicker(null);
+    }
+  }, [canAccessAudit, mode]);
 
   const load = useCallback(async () => {
     try {
@@ -130,7 +139,7 @@ export default function Reports() {
       if (profile?.shop_name) setShopName(profile.shop_name);
       else if (session?.shop_name) setShopName(session.shop_name);
 
-      if (session?.role === "owner") {
+      if (canUserAccessAuditReport(session)) {
         const audit = await api
           .get<PattiAuditLogEntry[]>(`/reports/audit-log?date=${workingDateISO}`)
           .catch(() => []);
@@ -143,11 +152,11 @@ export default function Reports() {
       setPattis([]);
       setBills([]);
       setAuctionDrivers([]);
-      setAuditRows(session?.role === "owner" ? [] : null);
+      setAuditRows(canUserAccessAuditReport(session) ? [] : null);
     } finally {
       setLoading(false);
     }
-  }, [workingDateISO, session?.shop_name, session?.role]);
+  }, [workingDateISO, session?.shop_name, session]);
 
   useFocusEffect(
     useCallback(() => {
@@ -215,7 +224,7 @@ export default function Reports() {
   };
 
   const exportDriver = (d: DriverSummary, action: "print" | "share") => {
-    if (!isOwner) return;
+    if (!canUserExportReport(session, "driver")) return;
     void runExport(async () => {
       // Fresh settings at print/share time so selected paper width always applies.
       const freshSettings = await api.get<Settings>("/settings").catch(() => settings);
@@ -235,7 +244,7 @@ export default function Reports() {
   };
 
   const runDetailExport = (kind: ExportKind, action: ExportAction, format: ExportFormat) => {
-    if (!isOwner) return;
+    if (!canUserExportReport(session, kind)) return;
     setFormatPicker(null);
     void runExport(async () => {
       const title =
@@ -282,9 +291,9 @@ export default function Reports() {
     });
   };
 
-  // Merchant only: Print / Save (PDF·Excel) / Share. Staff may view + search only.
+  // Entry Book: no Print/Share. Driver/Farmer/Vendor: owner + staff. Audit: owner only.
   const showActions =
-    !!isOwner &&
+    canUserExportReport(session, mode) &&
     ((mode === "farmer" && !selectedDriver) ||
       (mode === "vendor" && !selectedDriver) ||
       (mode === "audit" && !selectedDriver) ||
@@ -415,7 +424,7 @@ export default function Reports() {
           <Seg label="DRIVER DETAILS" active={mode === "driver"} onPress={() => { setMode("driver"); setSelectedDriver(null); setSearch(""); }} testID="report-seg-driver" />
           <Seg label="FARMER DETAILS" active={mode === "farmer"} onPress={() => { setMode("farmer"); setSelectedDriver(null); setSearch(""); }} testID="report-seg-farmer" />
           <Seg label="VENDOR DETAILS" active={mode === "vendor"} onPress={() => { setMode("vendor"); setSelectedDriver(null); setSearch(""); }} testID="report-seg-vendor" />
-          {isOwner ? (
+          {canAccessAudit ? (
             <Seg label="AUDIT LOG" active={mode === "audit"} onPress={() => { setMode("audit"); setSelectedDriver(null); setSearch(""); }} testID="report-seg-audit" />
           ) : null}
         </ScrollView>
@@ -512,8 +521,14 @@ export default function Reports() {
           }
           renderItem={({ item }) => <FarmerDetailsRow p={item} drivers={auctionDrivers} />}
         />
-      ) : mode === "audit" ? (
+      ) : mode === "audit" && canAccessAudit ? (
         <AuditLogView rows={auditFiltered} search={search} onSearch={setSearch} loading={loading} />
+      ) : mode === "audit" ? (
+        <Empty
+          title="Audit unavailable"
+          subtitle="Staff cannot access the Audit Log."
+          testID="audit-staff-blocked"
+        />
       ) : (
         <FlatList
           data={bills || []}

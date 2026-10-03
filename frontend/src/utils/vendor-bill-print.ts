@@ -19,6 +19,9 @@ import {
   thermalBaseCss,
   thermalMetrics,
 } from "@/src/utils/thermal-print";
+import { vendorBillNoBags } from "@/src/utils/vendor-bill-totals";
+
+export { vendorBillNoBags } from "@/src/utils/vendor-bill-totals";
 
 function fmt(n: number): string {
   return "₹" + (Number.isFinite(n) ? n : 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -183,6 +186,7 @@ export function renderVendorBillPdfHtml(
       <tbody>${rows}</tbody>
     </table>
     <div style="margin-top:10px">
+      <div class="trow"><span>No. Bags</span><span class="mono">${vendorBillNoBags(b)}</span></div>
       <div class="trow"><span>Lemon</span><span class="mono">${fmt(b.goods_total)}</span></div>
       <div class="trow"><span>Commission</span><span class="mono">${fmt(b.commission_total)}</span></div>
       <div class="trow"><span>Hamali</span><span class="mono">${fmt(b.hamali)}</span></div>
@@ -244,6 +248,7 @@ export function renderThermalVendorBillHtml(
     <div class="row th"><span class="lot">LOT</span><span class="farm">FARMER</span><span class="bags">BAGS × RATE</span><span class="right">AMOUNT</span></div>
     ${lines}
     <div class="hr"></div>
+    <div class="kv"><span>No. Bags</span><span>${vendorBillNoBags(b)}</span></div>
     <div class="kv"><span>Lemon</span><span>${fmt(b.goods_total)}</span></div>
     <div class="kv"><span>Commission</span><span>${fmt(b.commission_total)}</span></div>
     <div class="kv"><span>Hamali</span><span>${fmt(b.hamali)}</span></div>

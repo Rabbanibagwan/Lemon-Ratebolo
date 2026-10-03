@@ -2,9 +2,11 @@
  * CHART — Live Auction Vendor Purchase Board.
  * All vendors + purchases for the global working date in one horizontally scrollable view.
  * Data: Action Diary lots/sales (same source as Vendor Bills). Not a graph.
+ * Per-vendor PRINT uses existing Bluetooth ESC/POS thermal pipeline (selected vendor only).
  */
 import { useCallback, useMemo, useState } from "react";
 import {
+  ActivityIndicator,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -17,11 +19,13 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
-import { api, Lot } from "@/src/api";
+import { api, Lot, Settings, ShopProfile } from "@/src/api";
+import { useAuth } from "@/src/context/AuthContext";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
 import { DatePickerModal } from "@/src/components/DatePickerModal";
 import { Empty } from "@/src/components/ui";
 import { colors, font, money, spacing } from "@/src/theme";
+import { printVendorChartColumn } from "@/src/utils/chart-print";
 import {
   buildVendorPurchaseChart,
   filterVendorPurchaseChart,
@@ -34,17 +38,27 @@ const COL_WIDTH = 148;
 
 export default function VendorPurchaseChartScreen() {
   const router = useRouter();
+  const { session } = useAuth();
   const { workingDate, workingDateISO, displayDate, setWorkingDate } = useWorkingDate();
   const [lots, setLots] = useState<Lot[]>([]);
   const [loading, setLoading] = useState(false);
   const [q, setQ] = useState("");
   const [showPicker, setShowPicker] = useState(false);
+  const [printingId, setPrintingId] = useState<string | null>(null);
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [profile, setProfile] = useState<ShopProfile | null>(null);
 
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      const rows = await api.get<Lot[]>(`/lots?date=${workingDateISO}`);
+      const [rows, st, pf] = await Promise.all([
+        api.get<Lot[]>(`/lots?date=${workingDateISO}`),
+        api.get<Settings>("/settings").catch(() => null),
+        api.get<ShopProfile>("/shop/profile").catch(() => null),
+      ]);
       setLots(rows || []);
+      if (st) setSettings(st);
+      if (pf) setProfile(pf);
     } catch {
       /* keep previous */
     } finally {
@@ -62,6 +76,33 @@ export default function VendorPurchaseChartScreen() {
     () => filterVendorPurchaseChart(buildVendorPurchaseChart(lots, workingDateISO), q),
     [lots, workingDateISO, q],
   );
+
+  const shopName = profile?.shop_name || session?.shop_name || "LEMON MANDI";
+
+  const onPrintVendor = async (col: ChartVendorColumn) => {
+    if (printingId) return;
+    try {
+      setPrintingId(col.vendor_id);
+      // Fresh settings at print time so selected paper width always applies.
+      const [freshSettings, freshProfile] = await Promise.all([
+        api.get<Settings>("/settings").catch(() => settings),
+        api.get<ShopProfile>("/shop/profile").catch(() => profile),
+      ]);
+      if (freshSettings) setSettings(freshSettings);
+      if (freshProfile) setProfile(freshProfile);
+      await printVendorChartColumn(
+        col,
+        workingDateISO,
+        freshProfile?.shop_name || shopName,
+        freshSettings || settings,
+        freshProfile || profile,
+      );
+    } catch {
+      /* printVendorChartColumn already alerts */
+    } finally {
+      setPrintingId(null);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
@@ -143,7 +184,12 @@ export default function VendorPurchaseChartScreen() {
             testID="chart-board"
           >
             {chart.vendors.map((col) => (
-              <VendorColumn key={col.vendor_id} col={col} />
+              <VendorColumn
+                key={col.vendor_id}
+                col={col}
+                printing={printingId === col.vendor_id}
+                onPrint={() => void onPrintVendor(col)}
+              />
             ))}
           </ScrollView>
 
@@ -164,7 +210,15 @@ export default function VendorPurchaseChartScreen() {
   );
 }
 
-function VendorColumn({ col }: { col: ChartVendorColumn }) {
+function VendorColumn({
+  col,
+  printing,
+  onPrint,
+}: {
+  col: ChartVendorColumn;
+  printing: boolean;
+  onPrint: () => void;
+}) {
   return (
     <View style={styles.column} testID={`chart-vendor-${col.vendor_id}`}>
       <Text style={styles.vendorName} numberOfLines={2}>
@@ -185,6 +239,19 @@ function VendorColumn({ col }: { col: ChartVendorColumn }) {
       <Text style={styles.colTotal} testID={`chart-vendor-total-${col.vendor_id}`}>
         {col.total_bags} Avg {formatChartRate(col.avg_rate)}
       </Text>
+      <Pressable
+        style={({ pressed }) => [styles.printBtn, pressed && { opacity: 0.85 }, printing && { opacity: 0.6 }]}
+        onPress={onPrint}
+        disabled={printing}
+        testID={`chart-vendor-print-${col.vendor_id}`}
+      >
+        {printing ? (
+          <ActivityIndicator size="small" color={colors.onSurfaceInverse} />
+        ) : (
+          <Ionicons name="print-outline" size={14} color={colors.onSurfaceInverse} />
+        )}
+        <Text style={styles.printBtnText}>{printing ? "…" : "PRINT"}</Text>
+      </Pressable>
     </View>
   );
 }
@@ -316,6 +383,25 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.onSurface,
     letterSpacing: 0.3,
+  },
+  printBtn: {
+    marginTop: spacing.sm,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+    backgroundColor: colors.surfaceInverse,
+    borderWidth: 2,
+    borderColor: colors.surfaceInverse,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+  },
+  printBtnText: {
+    color: colors.onSurfaceInverse,
+    fontFamily: font.display,
+    fontWeight: "900",
+    letterSpacing: 1,
+    fontSize: 11,
   },
   summary: {
     marginHorizontal: spacing.md,

@@ -198,12 +198,21 @@ export default function SettingsScreen() {
               <NavRow icon="cloud-upload-outline" label="BACKUP & RESTORE" onPress={() => router.push("/backup" as any)} testID="settings-backup" />
             </>
           ) : (
-            <View style={styles.roleNote}>
-              <Ionicons name="information-circle-outline" size={16} color={colors.muted} />
-              <Text style={styles.roleNoteText}>
-                Counter role has limited access. Contact the shop owner to change billing defaults or manage staff.
-              </Text>
-            </View>
+            <>
+              <Text style={[styles.section, { marginTop: spacing.xl }]}>People</Text>
+              <NavRow
+                icon="people-outline"
+                label="FARMERS & VENDORS"
+                onPress={() => router.push("/(tabs)/directory")}
+                testID="settings-directory-staff"
+              />
+              <View style={styles.roleNote}>
+                <Ionicons name="information-circle-outline" size={16} color={colors.muted} />
+                <Text style={styles.roleNoteText}>
+                  Counter role has limited access. Contact the shop owner to change billing defaults or manage staff.
+                </Text>
+              </View>
+            </>
           )}
 
           <Text style={[styles.section, { marginTop: spacing.xl }]}>Printing</Text>
