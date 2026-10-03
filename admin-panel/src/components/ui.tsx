@@ -1,7 +1,20 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
+import { istToday } from "../lib/dates";
+import { useWorkingDate } from "../lib/workingDate";
 
-export function Shell({ title, children, actions }: { title: string; children: ReactNode; actions?: ReactNode }) {
+export function Shell({
+  title,
+  children,
+  actions,
+  dateNote,
+}: {
+  title: string;
+  children: ReactNode;
+  actions?: ReactNode;
+  /** Shown beside the working date on pages whose data is not filtered by it. */
+  dateNote?: string;
+}) {
   const [navOpen, setNavOpen] = useState(false);
   const loc = useLocation();
 
@@ -62,12 +75,44 @@ export function Shell({ title, children, actions }: { title: string; children: R
         </NavLink>
       </aside>
       <main className="admin-main" style={styles.main}>
+        <WorkingDateBar note={dateNote} />
         <header style={styles.header}>
           <h1 style={styles.h1}>{title}</h1>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>{actions}</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>{actions}</div>
         </header>
         {children}
       </main>
+    </div>
+  );
+}
+
+function WorkingDateBar({ note }: { note?: string }) {
+  const { date, setDate } = useWorkingDate();
+  const today = istToday();
+  return (
+    <div style={styles.dateBar} data-testid="global-working-date-bar">
+      <label style={styles.dateLabel} htmlFor="global-working-date">
+        WORKING DATE (IST)
+      </label>
+      <input
+        id="global-working-date"
+        type="date"
+        value={date}
+        onChange={(e) => setDate(e.target.value)}
+        style={styles.dateInput}
+        data-testid="global-working-date"
+      />
+      <button
+        type="button"
+        onClick={() => setDate(today)}
+        disabled={date === today}
+        style={{ ...styles.todayBtn, ...(date === today ? styles.todayBtnOff : {}) }}
+        data-testid="global-working-date-today"
+      >
+        TODAY
+      </button>
+      {date !== today ? <span style={styles.dateWarn}>Not today</span> : null}
+      {note ? <span style={styles.dateNote}>{note}</span> : null}
     </div>
   );
 }
@@ -141,6 +186,22 @@ const styles: Record<string, CSSProperties> = {
   link: { color: "#ccc", textDecoration: "none", padding: "8px 10px", border: "1px solid transparent" },
   linkActive: { color: "#fff", borderColor: "#fff", background: "#222" },
   main: { flex: 1, padding: 24, minWidth: 0 },
+  dateBar: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    flexWrap: "wrap",
+    background: "#111",
+    color: "#fff",
+    padding: "8px 12px",
+    marginBottom: 16,
+  },
+  dateLabel: { fontSize: 12, fontWeight: 900, letterSpacing: 1 },
+  dateInput: { padding: "6px 8px", border: "2px solid #fff", fontWeight: 800, fontSize: 15 },
+  todayBtn: { background: "#facc15", color: "#111", border: "2px solid #facc15", padding: "6px 12px", fontWeight: 900 },
+  todayBtnOff: { opacity: 0.45, cursor: "default" },
+  dateWarn: { background: "#facc15", color: "#111", padding: "2px 8px", fontSize: 12, fontWeight: 900 },
+  dateNote: { fontSize: 12, color: "#d4d4d4" },
   header: {
     display: "flex",
     justifyContent: "space-between",

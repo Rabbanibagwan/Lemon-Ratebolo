@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { Empty, ErrorBanner, Shell } from "../components/ui";
 import { api, setToken, type ApiError } from "../lib/api";
 import { qs } from "../lib/dates";
+import { useWorkingDate } from "../lib/workingDate";
 
 type MerchantHit = {
   shop_id: string;
@@ -91,11 +92,20 @@ function newClientRequestId() {
   return `req-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function periodKeyOf(isoDate: string) {
+  const [y, m] = isoDate.split("-").map(Number);
+  return `${y}-${m}`;
+}
+
 export default function FreeBagsPage() {
   const nav = useNavigate();
-  const now = new Date();
-  const periodOpts = useMemo(() => monthOptionsAround(now), []);
-  const defaultPeriod = `${now.getFullYear()}-${now.getMonth() + 1}`;
+  const { date: workingDate } = useWorkingDate();
+  const workingAnchor = useMemo(() => {
+    const [y, m] = workingDate.split("-").map(Number);
+    return new Date(y, m - 1, 1);
+  }, [workingDate]);
+  const periodOpts = useMemo(() => monthOptionsAround(workingAnchor), [workingAnchor]);
+  const defaultPeriod = periodKeyOf(workingDate);
 
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<MerchantHit[]>([]);
@@ -113,19 +123,24 @@ export default function FreeBagsPage() {
 
   const [filterStatus, setFilterStatus] = useState("");
   const [filterQ, setFilterQ] = useState("");
-  const [filterPeriod, setFilterPeriod] = useState("");
+  const [filterPeriod, setFilterPeriod] = useState(defaultPeriod);
   const [rows, setRows] = useState<FreeAllocation[]>([]);
+  const historySeq = useRef(0);
+  const [periodsFor, setPeriodsFor] = useState(workingDate);
+
+  if (periodsFor !== workingDate) {
+    setPeriodsFor(workingDate);
+    setPeriodKey(defaultPeriod);
+    setFilterPeriod(defaultPeriod);
+  }
 
   const selectedPeriod = useMemo(() => {
     const found = periodOpts.find((p) => p.key === periodKey);
     if (found) return found;
-    return {
-      key: defaultPeriod,
-      year: now.getFullYear(),
-      month: now.getMonth() + 1,
-      label: `${MONTHS[now.getMonth()].l} ${now.getFullYear()}`,
-    };
-  }, [periodKey, periodOpts, defaultPeriod, now]);
+    const year = workingAnchor.getFullYear();
+    const month = workingAnchor.getMonth() + 1;
+    return { key: defaultPeriod, year, month, label: `${MONTHS[month - 1].l} ${year}` };
+  }, [periodKey, periodOpts, defaultPeriod, workingAnchor]);
 
   const selectedMerchants = useMemo(
     () => hits.filter((h) => selectedIds.has(h.shop_id)),
@@ -163,6 +178,7 @@ export default function FreeBagsPage() {
   }
 
   async function loadHistory() {
+    const seq = ++historySeq.current;
     setError(null);
     try {
       let year: string | undefined;
@@ -181,8 +197,10 @@ export default function FreeBagsPage() {
           limit: 200,
         })}`,
       );
+      if (seq !== historySeq.current) return;
       setRows(res);
     } catch (err) {
+      if (seq !== historySeq.current) return;
       const e = err as ApiError;
       if (e.status === 401) {
         setToken(null);
@@ -330,7 +348,7 @@ export default function FreeBagsPage() {
   const singleMerchant = selectedMerchants.length === 1 ? selectedMerchants[0] : null;
 
   return (
-    <Shell title="FREE BAGS">
+    <Shell title="FREE BAGS" dateNote={`Allocation month and history follow the working date (${MONTHS[workingAnchor.getMonth()].l} ${workingAnchor.getFullYear()}).`}>
       {error ? <ErrorBanner message={error} /> : null}
       {okMsg ? <div style={okBox} data-testid="free-bags-ok">{okMsg}</div> : null}
 

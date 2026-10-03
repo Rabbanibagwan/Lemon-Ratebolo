@@ -2,21 +2,27 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Empty, ErrorBanner, Shell } from "../components/ui";
 import { api, setToken, type ApiError } from "../lib/api";
-import { istToday, qs } from "../lib/dates";
+import { qs } from "../lib/dates";
+import { useWorkingDate } from "../lib/workingDate";
 
 function useList(path: string) {
   const [params] = useSearchParams();
   const nav = useNavigate();
-  const initialDate = params.get("date") || istToday();
+  const { date } = useWorkingDate();
   const initialShop = params.get("shop_id") || "";
-  const [date, setDate] = useState(initialDate);
   const [shopId, setShopId] = useState(initialShop);
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
+  const [pageDate, setPageDate] = useState(date);
   const [items, setItems] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+
+  if (pageDate !== date) {
+    setPageDate(date);
+    setPage(1);
+  }
 
   const query = useMemo(
     () => qs({ date, shop_id: shopId || undefined, q: q || undefined, page, page_size: 50 }),
@@ -24,24 +30,30 @@ function useList(path: string) {
   );
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       setLoading(true);
       setError(null);
       try {
         const res = await api<{ items: any[]; total_count: number }>(`${path}${query}`);
+        if (cancelled) return;
         setItems(res.items);
         setTotal(res.total_count);
       } catch (err) {
+        if (cancelled) return;
         const e = err as ApiError;
         if (e.status === 401) { setToken(null); nav("/login"); return; }
         setError(e.detail);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [path, query, nav]);
 
-  return { date, setDate, shopId, setShopId, q, setQ, page, setPage, items, total, error, loading };
+  return { date, shopId, setShopId, q, setQ, page, setPage, items, total, error, loading };
 }
 
 export function PattisPage() {
@@ -160,23 +172,28 @@ export function OperationsPage() {
 
 export function ReportsPage() {
   const nav = useNavigate();
-  const [date, setDate] = useState(istToday());
+  const { date } = useWorkingDate();
   const [rows, setRows] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  async function load() {
-    setError(null);
-    try {
-      const res = await api<{ items: any[] }>(`/admin/reports/merchant-wise${qs({ date })}`);
-      setRows(res.items);
-    } catch (err) {
-      const e = err as ApiError;
-      if (e.status === 401) { setToken(null); nav("/login"); return; }
-      setError(e.detail);
-    }
-  }
-
-  useEffect(() => { load(); }, [date]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setError(null);
+      try {
+        const res = await api<{ items: any[] }>(`/admin/reports/merchant-wise${qs({ date })}`);
+        if (!cancelled) setRows(res.items);
+      } catch (err) {
+        if (cancelled) return;
+        const e = err as ApiError;
+        if (e.status === 401) { setToken(null); nav("/login"); return; }
+        setError(e.detail);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [date, nav]);
 
   function downloadCsv() {
     const header = ["shop_id", "shop_name", "farmer_pattis", "farmer_bags", "vendor_bills", "purchased_bags"];
@@ -195,7 +212,6 @@ export function ReportsPage() {
   return (
     <Shell title="Reports" actions={
       <>
-        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
         <button onClick={downloadCsv} style={{ border: "2px solid #111", padding: "6px 10px", fontWeight: 700 }}>Export CSV</button>
       </>
     }>
@@ -252,7 +268,7 @@ export function SettingsPage() {
   }
 
   return (
-    <Shell title="Settings">
+    <Shell title="Settings" dateNote="Settings are not date-specific.">
       {error ? <ErrorBanner message={error} /> : null}
       {msg ? <div style={{ background: "#d1fae5", border: "2px solid #059669", padding: 8, marginBottom: 12 }}>{msg}</div> : null}
       {!form ? <Empty message="Loading…" /> : (
@@ -307,7 +323,7 @@ export function AuditPage() {
   }, [nav]);
 
   return (
-    <Shell title="Audit Log">
+    <Shell title="Audit Log" dateNote="Audit log shows the latest 100 entries (not filtered by date).">
       {error ? <ErrorBanner message={error} /> : null}
       {!items.length ? <Empty message="No audit entries yet." /> : (
         <table style={table}>
@@ -346,7 +362,6 @@ function ListShell({
   return (
     <Shell title={title} actions={
       <>
-        <input type="date" value={s.date} onChange={(e) => { s.setPage(1); s.setDate(e.target.value); }} />
         <input placeholder="Shop ID" value={s.shopId} onChange={(e) => { s.setPage(1); s.setShopId(e.target.value); }} style={{ border: "2px solid #111", padding: 6, width: 160 }} />
         {!hideSearch ? <input placeholder="Search" value={s.q} onChange={(e) => { s.setPage(1); s.setQ(e.target.value); }} style={{ border: "2px solid #111", padding: 6 }} /> : null}
       </>
