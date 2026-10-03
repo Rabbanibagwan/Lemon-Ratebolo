@@ -5,13 +5,12 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from fastapi.security import HTTPAuthorizationCredentials
 
 from admin_panel.auth import admin_bearer, require_platform_admin
 from admin_panel.dates import ist_range_utc_window, resolve_date_range
-from admin_panel import queries
-import billing as billing_mod
+from admin_panel import purchase_docs, queries
 from admin_panel.schemas import (
     ActivityListOut,
     ActivityRow,
@@ -37,6 +36,27 @@ def _page_args(page: int, page_size: int) -> tuple[int, int, int]:
     page_size = max(1, min(200, page_size))
     offset = (page - 1) * page_size
     return page, page_size, offset
+
+
+_EXPORT_MAX_ROWS = 10_000
+
+
+def _purchase_window_stages(
+    d_from: str, d_to: str, *, shop_id: Optional[str], status: Optional[str]
+) -> List[dict]:
+    """Purchases in the IST business-date window (paid_at, falling back to created_at), newest first."""
+    start, end = ist_range_utc_window(d_from, d_to)
+    match: Dict[str, Any] = {}
+    if status:
+        match["status"] = status
+    if shop_id:
+        match["shop_id"] = shop_id
+    return [
+        {"$match": match},
+        {"$addFields": {"_event_at": {"$ifNull": ["$paid_at", "$created_at"]}}},
+        {"$match": {"_event_at": {"$gte": start, "$lt": end}}},
+        {"$sort": {"_event_at": -1}},
+    ]
 
 
 async def _shop_name_map(db, shop_ids: List[str]) -> Dict[str, str]:
@@ -335,18 +355,8 @@ def register_admin_routes(api: APIRouter, db) -> None:
     ):
         d_from, d_to = resolve_date_range(date, date_from, date_to)
         page, page_size, offset = _page_args(page, page_size)
-        start, end = ist_range_utc_window(d_from, d_to)
-        match: Dict[str, Any] = {}
-        if status:
-            match["status"] = status
-        if shop_id:
-            match["shop_id"] = shop_id
-
         pipeline: List[dict] = [
-            {"$match": match},
-            {"$addFields": {"_event_at": {"$ifNull": ["$paid_at", "$created_at"]}}},
-            {"$match": {"_event_at": {"$gte": start, "$lt": end}}},
-            {"$sort": {"_event_at": -1}},
+            *_purchase_window_stages(d_from, d_to, shop_id=shop_id, status=status),
             {
                 "$facet": {
                     "items": [{"$skip": offset}, {"$limit": page_size}],
@@ -362,17 +372,7 @@ def register_admin_routes(api: APIRouter, db) -> None:
         items = []
         for d in docs:
             d.pop("_id", None)
-            inv = (d.get("invoice_number") or "").strip() or None
-            if not inv and d.get("status") == "PAID":
-                paid = d.get("paid_at") or d.get("created_at")
-                short = str(d.get("id") or "").replace("-", "")[:8].upper()
-                day = ""
-                try:
-                    if paid is not None:
-                        day = paid.strftime("%Y%m%d") if hasattr(paid, "strftime") else str(paid)[:10].replace("-", "")
-                except Exception:
-                    day = ""
-                inv = f"INV-{day or 'NA'}-{short}" if short else None
+            inv = purchase_docs.invoice_number_for(d)
             items.append(
                 PurchaseListItem(
                     id=d["id"],
@@ -393,64 +393,58 @@ def register_admin_routes(api: APIRouter, db) -> None:
             )
         return PurchaseListOut(items=items, page=page, page_size=page_size, total_count=total)
 
+    @api.get("/admin/purchases/export.xlsx")
+    async def export_purchases_xlsx(
+        admin=Depends(admin_dep),
+        date: Optional[str] = None,
+        date_from: Optional[str] = Query(default=None, alias="from"),
+        date_to: Optional[str] = Query(default=None, alias="to"),
+        shop_id: Optional[str] = None,
+        status: Optional[str] = Query(default="PAID"),
+    ):
+        d_from, d_to = resolve_date_range(date, date_from, date_to)
+        pipeline = [
+            *_purchase_window_stages(d_from, d_to, shop_id=shop_id, status=status),
+            {"$limit": _EXPORT_MAX_ROWS},
+        ]
+        docs = await db.bag_purchases.aggregate(pipeline).to_list(_EXPORT_MAX_ROWS)
+        shop_ids = list({d.get("shop_id") for d in docs if d.get("shop_id")})
+        shops: Dict[str, dict] = {}
+        if shop_ids:
+            async for s in db.shops.find({"id": {"$in": shop_ids}}, {"_id": 0, "password_hash": 0}):
+                shops[s["id"]] = s
+        rows = [
+            purchase_docs.export_row(d, shops.get(d.get("shop_id")) or {}, (shops.get(d.get("shop_id")) or {}).get("shop_name"))
+            for d in docs
+        ]
+        span = d_from if d_from == d_to else f"{d_from}_to_{d_to}"
+        content = purchase_docs.render_purchases_xlsx(rows, title=f"Lemon Mandi purchases {span}")
+        return Response(
+            content=content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="lemon-purchases-{span}.xlsx"'},
+        )
+
     @api.get("/admin/purchases/{purchase_id}")
     async def get_purchase(purchase_id: str, admin=Depends(admin_dep)):
         d = await db.bag_purchases.find_one({"id": purchase_id}, {"_id": 0})
         if not d:
             raise HTTPException(404, "Purchase not found")
-        shop = await db.shops.find_one({"id": d.get("shop_id")}, {"_id": 0, "password_hash": 0}) or {}
-        settings = await db.platform_billing_settings.find_one({"id": "default"}, {"_id": 0}) or {}
-        hsn = (settings.get("service_hsn_code") or "998399").strip() or "998399"
-        inv = (d.get("invoice_number") or "").strip()
-        if not inv and d.get("status") == "PAID":
-            paid = d.get("paid_at") or d.get("created_at")
-            short = str(d.get("id") or "").replace("-", "")[:8].upper()
-            day = ""
-            try:
-                if paid is not None:
-                    day = paid.strftime("%Y%m%d") if hasattr(paid, "strftime") else str(paid)[:10].replace("-", "")
-            except Exception:
-                day = ""
-            inv = f"INV-{day or 'NA'}-{short}"
-            await db.bag_purchases.update_one({"id": purchase_id}, {"$set": {"invoice_number": inv}})
-            d["invoice_number"] = inv
-        addr_parts = [shop.get("address"), shop.get("village"), shop.get("taluk"), shop.get("district"), shop.get("state")]
-        address = ", ".join(str(p).strip() for p in addr_parts if p and str(p).strip())
-        gst_pct = float(d.get("gst_percent") or 0)
-        gst_amt = float(d.get("gst_amount") or 0)
-        gst_parts = billing_mod.split_bag_gst(
-            gst_percent=gst_pct,
-            gst_amount=gst_amt,
-            buyer_gstin=str(shop.get("gst_number") or ""),
-            buyer_state=str(shop.get("state") or ""),
+        return await purchase_docs.build_admin_invoice(db, d)
+
+    @api.get("/admin/purchases/{purchase_id}/invoice.pdf")
+    async def get_purchase_invoice_pdf(purchase_id: str, admin=Depends(admin_dep)):
+        d = await db.bag_purchases.find_one({"id": purchase_id}, {"_id": 0})
+        if not d:
+            raise HTTPException(404, "Purchase not found")
+        inv = await purchase_docs.build_admin_invoice(db, d)
+        content = purchase_docs.render_invoice_pdf(inv)
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "-", str(inv.get("invoice_number") or purchase_id))
+        return Response(
+            content=content,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{safe}.pdf"'},
         )
-        seller = billing_mod.bag_invoice_seller()
-        return {
-            **d,
-            "service_hsn_code": hsn,
-            "invoice_number": d.get("invoice_number") or inv,
-            "seller": seller,
-            "billing_to": {
-                "shop_id": shop.get("id") or d.get("shop_id"),
-                "shop_name": shop.get("shop_name") or "",
-                "owner_name": shop.get("owner_name") or "",
-                "username": shop.get("username") or "",
-                "mobile": shop.get("mobile") or "",
-                "email": shop.get("email") or "",
-                "address": address,
-                "gst_number": shop.get("gst_number") or "",
-            },
-            "calculation": {
-                "bags": int(d.get("bags") or 0),
-                "price_per_bag": float(d.get("price_per_bag") or 0),
-                "base_amount": float(d.get("base_amount") or 0),
-                "gst_percent": gst_pct,
-                "gst_amount": gst_amt,
-                "total_amount": float(d.get("total_amount") or 0),
-                **gst_parts,
-            },
-            **gst_parts,
-        }
 
     # ----- Reports -----
     @api.get("/admin/reports/merchant-wise", response_model=ReportMerchantDailyOut)

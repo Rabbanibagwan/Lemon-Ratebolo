@@ -466,3 +466,104 @@ class TestAdminAuthRoutes:
         )
         assert r.status_code == 200, r.text
         assert r.json()["total_count"] == 1
+
+
+# ---------- Purchases: invoice PDF + Excel export ----------
+def _seed_purchases(db: FakeDB):
+    db._store["shops"] = [
+        # Karnataka buyer → intra-state (CGST + SGST)
+        {"id": "s-ka", "shop_name": "MKB Lemon Co.", "username": "mkb", "active": True,
+         "gst_number": "29ABCDE1234F1Z5", "state": "Karnataka", "password_hash": "x"},
+        # Maharashtra buyer → inter-state (IGST)
+        {"id": "s-mh", "shop_name": "Pune Traders", "username": "pune", "active": True,
+         "gst_number": "27PQRST6789K1Z2", "state": "Maharashtra", "password_hash": "x"},
+    ]
+    db._store["platform_billing_settings"] = [{"id": "default", "service_hsn_code": "998399"}]
+    inside = datetime(2026, 9, 20, 6, 0, tzinfo=timezone.utc)  # 11:30 IST on 20 Sep
+    db._store["bag_purchases"] = [
+        {"id": "pur-ka-0001", "shop_id": "s-ka", "status": "PAID", "bags": 1000, "price_per_bag": 2.0,
+         "base_amount": 2000.0, "gst_percent": 18.0, "gst_amount": 360.0, "total_amount": 2360.0,
+         "invoice_number": "INV-20260920-KA000001", "payment_ref": "pay_RZP9Kx81LmQ2",
+         "paid_at": inside, "created_at": inside},
+        {"id": "pur-mh-0002", "shop_id": "s-mh", "status": "PAID", "bags": 500, "price_per_bag": 2.5,
+         "base_amount": 1250.0, "gst_percent": 18.0, "gst_amount": 225.0, "total_amount": 1475.0,
+         "paid_at": inside, "created_at": inside},
+        # Other day and unpaid purchases must not be exported.
+        {"id": "pur-other-day", "shop_id": "s-ka", "status": "PAID", "bags": 9, "price_per_bag": 2.0,
+         "base_amount": 18.0, "gst_percent": 18.0, "gst_amount": 3.24, "total_amount": 21.24,
+         "paid_at": datetime(2026, 9, 21, 6, 0, tzinfo=timezone.utc), "created_at": inside},
+        {"id": "pur-pending", "shop_id": "s-ka", "status": "PENDING", "bags": 7, "price_per_bag": 2.0,
+         "base_amount": 14.0, "gst_percent": 18.0, "gst_amount": 2.52, "total_amount": 16.52,
+         "paid_at": None, "created_at": inside},
+    ]
+
+
+class TestAdminPurchaseDocs:
+    def _client(self):
+        db = FakeDB()
+        admin = _seed_admin(db)
+        _seed_purchases(db)
+        return db, _app(db), {"Authorization": f"Bearer {make_admin_token(admin)}"}
+
+    def test_export_xlsx_rows_match_purchase_and_invoice_tax(self):
+        from io import BytesIO
+
+        from openpyxl import load_workbook
+
+        db, client, h = self._client()
+        r = client.get("/api/admin/purchases/export.xlsx?date=2026-09-20", headers=h)
+        assert r.status_code == 200, r.text
+        assert r.headers["content-type"].startswith("application/vnd.openxmlformats")
+        ws = load_workbook(BytesIO(r.content)).active
+        rows = [list(row) for row in ws.iter_rows(values_only=True)]
+        assert rows[0] == [
+            "Merchant Name", "Date of Purchase", "GST No.", "No. of Bags", "Rate",
+            "Total", "CGST", "IGST", "Grand Total", "Transaction Reference No.",
+        ]
+        data = {row[0]: row for row in rows[1:3]}
+        assert set(data) == {"MKB Lemon Co.", "Pune Traders"}
+        ka = data["MKB Lemon Co."]
+        assert ka[1].date().isoformat() == "2026-09-20"
+        assert ka[2:] == ["29ABCDE1234F1Z5", 1000, 2.0, 2000.0, 180.0, 0.0, 2360.0, "pay_RZP9Kx81LmQ2"]
+        mh = data["Pune Traders"]
+        # No stored payment reference → blank cell, nothing generated.
+        assert mh[2:] == ["27PQRST6789K1Z2", 500, 2.5, 1250.0, 0.0, 225.0, 1475.0, None]
+        assert rows[3][0] == "TOTAL" and rows[3][8] == "=SUM(I2:I3)" and rows[3][9] is None
+        assert len(rows) == 4
+
+        for pid, row in (("pur-ka-0001", ka), ("pur-mh-0002", mh)):
+            inv = client.get(f"/api/admin/purchases/{pid}", headers=h).json()
+            calc = inv["calculation"]
+            assert (calc["cgst_amount"], calc["igst_amount"]) == (row[6], row[7])
+            assert calc["total_amount"] == row[8]
+            assert (inv.get("payment_ref") or None) == row[9]
+
+    def test_export_respects_shop_filter_and_requires_auth(self):
+        from io import BytesIO
+
+        from openpyxl import load_workbook
+
+        db, client, h = self._client()
+        assert client.get("/api/admin/purchases/export.xlsx?date=2026-09-20").status_code == 401
+        r = client.get("/api/admin/purchases/export.xlsx?date=2026-09-20&shop_id=s-mh", headers=h)
+        rows = list(load_workbook(BytesIO(r.content)).active.iter_rows(values_only=True))
+        assert [row[0] for row in rows[1:-1]] == ["Pune Traders"]
+
+    def test_invoice_pdf_download(self):
+        db, client, h = self._client()
+        r = client.get("/api/admin/purchases/pur-ka-0001/invoice.pdf", headers=h)
+        assert r.status_code == 200, r.text
+        assert r.headers["content-type"] == "application/pdf"
+        assert r.content.startswith(b"%PDF")
+        assert 'filename="INV-20260920-KA000001.pdf"' in r.headers["content-disposition"]
+        assert client.get("/api/admin/purchases/missing/invoice.pdf", headers=h).status_code == 404
+
+    def test_invoice_json_unchanged_shape(self):
+        db, client, h = self._client()
+        inv = client.get("/api/admin/purchases/pur-mh-0002", headers=h).json()
+        assert inv["invoice_number"].startswith("INV-20260920-")
+        assert inv["billing_to"]["gst_number"] == "27PQRST6789K1Z2"
+        assert inv["gst_supply_type"] == "INTER" and inv["igst_amount"] == 225.0
+        assert inv["calculation"]["base_amount"] == 1250.0
+        stored = next(p for p in db._store["bag_purchases"] if p["id"] == "pur-mh-0002")
+        assert stored["invoice_number"] == inv["invoice_number"]

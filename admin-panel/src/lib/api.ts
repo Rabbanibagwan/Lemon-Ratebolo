@@ -37,4 +37,30 @@ export async function api<T>(
   return res.json() as Promise<T>;
 }
 
+/** Authenticated GET of a file (PDF/XLSX) saved under `filename`. */
+export async function apiDownload(path: string, filename: string): Promise<void> {
+  const headers = new Headers();
+  const t = getToken();
+  if (t) headers.set("Authorization", `Bearer ${t}`);
+  const res = await fetch(`${API_BASE}/api${path}`, { headers });
+  if (!res.ok) {
+    let detail = "Download failed";
+    try {
+      const data = await res.json();
+      detail = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
+    } catch {
+      /* non-JSON error body */
+    }
+    throw { status: res.status, detail } as ApiError;
+  }
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
 export { API_BASE };
