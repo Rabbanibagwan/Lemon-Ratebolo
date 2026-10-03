@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { HashRouter } from "react-router-dom";
 import App from "./App";
+import { WorkingDateProvider } from "./components/WorkingDateProvider";
 import "./index.css";
 
 // HashRouter: Render Static Site returns 404 for deep paths (/free-bags, /login)
@@ -9,7 +10,9 @@ import "./index.css";
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <HashRouter>
-      <App />
+      <WorkingDateProvider>
+        <App />
+      </WorkingDateProvider>
     </HashRouter>
   </StrictMode>,
 );

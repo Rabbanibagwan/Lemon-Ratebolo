@@ -330,7 +330,7 @@ export default function FreeBagsPage() {
   const singleMerchant = selectedMerchants.length === 1 ? selectedMerchants[0] : null;
 
   return (
-    <Shell title="FREE BAGS">
+    <Shell title="FREE BAGS" dateNote="Free bags are allocated per month (choose the allocation month below).">
       {error ? <ErrorBanner message={error} /> : null}
       {okMsg ? <div style={okBox} data-testid="free-bags-ok">{okMsg}</div> : null}
 

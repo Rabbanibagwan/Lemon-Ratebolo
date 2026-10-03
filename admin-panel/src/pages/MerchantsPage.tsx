@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Empty, ErrorBanner, Kpi, Shell } from "../components/ui";
 import { api, setToken, type ApiError } from "../lib/api";
-import { istToday, qs } from "../lib/dates";
+import { qs } from "../lib/dates";
+import { useWorkingDate } from "../lib/workingDate";
 
 type Merchant = {
   shop_id: string;
@@ -18,34 +19,45 @@ type Merchant = {
 
 export function MerchantsPage() {
   const nav = useNavigate();
+  const { date } = useWorkingDate();
   const [q, setQ] = useState("");
-  const [date, setDate] = useState(istToday());
   const [items, setItems] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [pageDate, setPageDate] = useState(date);
   const [error, setError] = useState<string | null>(null);
 
+  if (pageDate !== date) {
+    setPageDate(date);
+    setPage(1);
+  }
+
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       setError(null);
       try {
         const res = await api<{ items: any[]; total_count: number }>(
           `/admin/merchants${qs({ q, page, page_size: 50, date })}`,
         );
+        if (cancelled) return;
         setItems(res.items);
         setTotal(res.total_count);
       } catch (err) {
+        if (cancelled) return;
         const e = err as ApiError;
         if (e.status === 401) { setToken(null); nav("/login"); return; }
         setError(e.detail);
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [q, page, date, nav]);
 
   return (
     <Shell title="Merchants" actions={
       <>
-        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
         <input placeholder="Search" value={q} onChange={(e) => { setPage(1); setQ(e.target.value); }} style={{ border: "2px solid #111", padding: 6 }} />
       </>
     }>
@@ -95,33 +107,42 @@ type FreeSummary = {
 export function MerchantDetailPage() {
   const { id } = useParams();
   const nav = useNavigate();
-  const [date, setDate] = useState(istToday());
+  const { date } = useWorkingDate();
   const [data, setData] = useState<any>(null);
   const [freeSummary, setFreeSummary] = useState<FreeSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
+      setError(null);
       try {
-        setData(await api(`/admin/merchants/${id}${qs({ date })}`));
+        const res = await api(`/admin/merchants/${id}${qs({ date })}`);
+        if (cancelled) return;
+        setData(res);
         try {
-          setFreeSummary(await api<FreeSummary>(`/admin/billing/merchants/${id}/free-summary`));
+          const fs = await api<FreeSummary>(`/admin/billing/merchants/${id}/free-summary`);
+          if (!cancelled) setFreeSummary(fs);
         } catch {
-          setFreeSummary(null);
+          if (!cancelled) setFreeSummary(null);
         }
       } catch (err) {
+        if (cancelled) return;
         const e = err as ApiError;
         if (e.status === 401) { setToken(null); nav("/login"); return; }
         setError(e.detail);
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [id, date, nav]);
 
   const d = data?.dashboard;
   const m = data as Merchant & { dashboard?: any };
 
   return (
-    <Shell title={m?.shop_name || "Merchant"} actions={<input type="date" value={date} onChange={(e) => setDate(e.target.value)} />}>
+    <Shell title={m?.shop_name || "Merchant"}>
       {error ? <ErrorBanner message={error} /> : null}
       {!data ? <Empty message="Loading…" /> : (
         <>
@@ -156,11 +177,11 @@ export function MerchantDetailPage() {
             </>
           ) : null}
           <p style={{ marginTop: 16 }}>
-            <Link to={`/pattis?shop_id=${id}&date=${date}`}>View Pattis</Link>
+            <Link to={`/pattis?shop_id=${id}`}>View Pattis</Link>
             {" · "}
-            <Link to={`/vendor-bills?shop_id=${id}&date=${date}`}>View Bills</Link>
+            <Link to={`/vendor-bills?shop_id=${id}`}>View Bills</Link>
             {" · "}
-            <Link to={`/purchases?shop_id=${id}&date=${date}`}>View Purchases</Link>
+            <Link to={`/purchases?shop_id=${id}`}>View Purchases</Link>
             {" · "}
             <Link to="/free-bags">Give Free Bags</Link>
           </p>

@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Empty, ErrorBanner, Kpi, Shell } from "../components/ui";
 import { api, setToken, type ApiError } from "../lib/api";
-import { istToday, qs } from "../lib/dates";
+import { qs } from "../lib/dates";
+import { useWorkingDate } from "../lib/workingDate";
 
 type Dashboard = {
   from: string;
@@ -33,48 +34,49 @@ type Activity = {
 
 export default function DashboardPage() {
   const nav = useNavigate();
-  const [date, setDate] = useState(istToday());
+  const { date } = useWorkingDate();
   const [shopId, setShopId] = useState("");
   const [data, setData] = useState<Dashboard | null>(null);
   const [activity, setActivity] = useState<Activity | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  async function load() {
-    setLoading(true);
-    setError(null);
-    try {
-      const d = await api<Dashboard>(`/admin/dashboard${qs({ date, shop_id: shopId || undefined })}`);
-      setData(d);
-      const a = await api<Activity>(`/admin/operations/summary${qs({ date, page: 1, page_size: 50 })}`);
-      setActivity(a);
-    } catch (err) {
-      const e = err as ApiError;
-      if (e.status === 401) {
-        setToken(null);
-        nav("/login");
-        return;
-      }
-      setError(e.detail || "Failed to load dashboard");
-    } finally {
-      setLoading(false);
-    }
-  }
-
   useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      setError(null);
+      try {
+        const d = await api<Dashboard>(`/admin/dashboard${qs({ date, shop_id: shopId || undefined })}`);
+        if (cancelled) return;
+        setData(d);
+        const a = await api<Activity>(`/admin/operations/summary${qs({ date, page: 1, page_size: 50 })}`);
+        if (cancelled) return;
+        setActivity(a);
+      } catch (err) {
+        if (cancelled) return;
+        const e = err as ApiError;
+        if (e.status === 401) {
+          setToken(null);
+          nav("/login");
+          return;
+        }
+        setError(e.detail || "Failed to load dashboard");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
     load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [date, shopId]);
+    return () => {
+      cancelled = true;
+    };
+  }, [date, shopId, nav]);
 
   return (
     <Shell
       title="Dashboard"
       actions={
         <>
-          <label style={{ fontSize: 12, fontWeight: 700 }}>
-            Date (IST){" "}
-            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ marginLeft: 6 }} />
-          </label>
           <input
             placeholder="Shop ID filter (optional)"
             value={shopId}
@@ -121,7 +123,7 @@ export default function DashboardPage() {
                 {activity.items.map((r) => (
                   <tr key={r.shop_id}>
                     <td style={td}>
-                      <a href={`/merchants/${r.shop_id}`}>{r.shop_name || r.shop_id}</a>
+                      <Link to={`/merchants/${r.shop_id}`}>{r.shop_name || r.shop_id}</Link>
                     </td>
                     <td style={td}>{r.farmer_pattis}</td>
                     <td style={td}>{r.farmer_bags}</td>
