@@ -179,6 +179,7 @@ export default function Home() {
           <QuickTile icon="add-circle-outline" label="Create Action Diary" onPress={() => router.push("/action-diary")} testID="quick-action-diary" />
           <QuickTile icon="document-text-outline" label="Patti Details" onPress={() => router.push("/(tabs)/history")} testID="quick-pattis" />
           <QuickTile icon="cash-outline" label="Vendors" onPress={() => router.push("/vendors")} testID="quick-vendors" />
+          <QuickTile icon="grid-outline" label="Chart" onPress={() => router.push("/chart" as any)} testID="quick-chart" />
           {isOwner && <QuickTile icon="book-outline" label="Account Ledger" onPress={() => router.push("/account-ledger")} testID="quick-ledger" />}
           {isOwner && <QuickTile icon="bag-handle-outline" label="Bag Balance" onPress={() => router.push("/billing")} testID="quick-billing" />}
         </View>
