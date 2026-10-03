@@ -15,6 +15,7 @@ import { colors, font, money, spacing } from "@/src/theme";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
 import { DatePickerModal } from "@/src/components/DatePickerModal";
 import { formatDisplayDate, parseISODate, toISODate } from "@/src/utils/date";
+import { createEnterGate, handleEnterAdvance } from "@/src/utils/physical-keyboard";
 
 type LineDraft = {
   key: string;
@@ -40,7 +41,7 @@ export default function NewVendorBill() {
   const [date, setDate] = useState(workingDateISO);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [margin, setMargin] = useState("30");
-  const [vendorFactor, setVendorFactor] = useState("1.06");
+  const [vendorFactor, setVendorFactor] = useState("1");
   const [commission, setCommission] = useState("10");
   const [hamali, setHamali] = useState("0");
   const [cess, setCess] = useState("0");
@@ -51,6 +52,7 @@ export default function NewVendorBill() {
 
   const bagsRefs = useRef<Record<string, TextInput | null>>({});
   const rateRefs = useRef<Record<string, TextInput | null>>({});
+  const lineEnterGate = useRef(createEnterGate()).current;
 
   useEffect(() => {
     (async () => {
@@ -58,7 +60,7 @@ export default function NewVendorBill() {
         const s = await api.get<Settings>("/settings").catch(() => null);
         if (s) {
           setMargin(String(s.vendor_margin_per_bag ?? 30));
-          setVendorFactor(String(s.vendor_factor ?? 1.06));
+          setVendorFactor(String(s.vendor_factor ?? 1));
           setCommission(String(s.commission_per_bag ?? 10));
           setHamali(String(s.vendor_hamali_default ?? 0));
         }
@@ -67,13 +69,13 @@ export default function NewVendorBill() {
           setVendor({ id: b.vendor_id, name: b.vendor_name, details: b.vendor_details, phone: null, created_at: b.created_at });
           setDate(b.date);
           setMargin(String(b.margin_per_bag));
-          setVendorFactor(String(b.vendor_factor ?? 1.06));
+          setVendorFactor(String(b.vendor_factor ?? 1));
           setCommission(String(b.commission_per_bag));
           setHamali(String(b.hamali));
           setCess(String(b.cess));
           setNotes(b.notes || "");
           setLines(b.lines.map((l) => {
-            const factor = Number(b.vendor_factor ?? 1.06);
+            const factor = Number(b.vendor_factor ?? 1);
             const marginN = Number(b.margin_per_bag) || 0;
             const formula = l.auction_rate * factor + marginN;
             // Only keep an explicit override when it differs from the factor formula.
@@ -169,7 +171,7 @@ export default function NewVendorBill() {
     const payload = {
       vendor_id: vendor.id,
       date,
-      vendor_factor: Number(vendorFactor) || 1.06,
+      vendor_factor: Number(vendorFactor) || 1,
       margin_per_bag: Number(margin) || 0,
       commission_per_bag: Number(commission) || 0,
       hamali: Number(hamali) || 0,
@@ -311,7 +313,8 @@ export default function NewVendorBill() {
                     keyboardType="number-pad"
                     inputRef={(r) => { bagsRefs.current[l.key] = r; }}
                     returnKeyType="next"
-                    onSubmitEditing={() => rateRefs.current[l.key]?.focus()}
+                    blurOnSubmit={false}
+                    {...handleEnterAdvance(lineEnterGate, () => rateRefs.current[l.key]?.focus())}
                     testID={`bill-bags-${idx}`}
                   />
                 </View>
@@ -323,7 +326,11 @@ export default function NewVendorBill() {
                     keyboardType="decimal-pad"
                     inputRef={(r) => { rateRefs.current[l.key] = r; }}
                     returnKeyType="done"
-                    onSubmitEditing={() => { /* no auto-add; user must tap ADD LINE */ }}
+                    blurOnSubmit
+                    {...handleEnterAdvance(lineEnterGate, () => {
+                      /* no auto-add; user must tap ADD LINE */
+                      rateRefs.current[l.key]?.blur();
+                    })}
                     testID={`bill-rate-${idx}`}
                   />
                 </View>
@@ -363,8 +370,8 @@ export default function NewVendorBill() {
 
           <Text style={styles.section}>Totals</Text>
           <SummaryRow label="Bags" value={String(totals.bags)} />
-          <SummaryRow label={`Goods (×${totals.factorN} + ₹${totals.marginN}/bag)`} value={money(totals.goods)} />
-          <SummaryRow label={`Commission (${totals.bags} × ₹${totals.commN})`} value={money(totals.commTotal)} />
+          <SummaryRow label="Lemon" value={money(totals.goods)} />
+          <SummaryRow label="Commission" value={money(totals.commTotal)} />
           <SummaryRow label="Hamali" value={money(totals.hamaliN)} />
           {totals.cessN > 0 ? <SummaryRow label="Cess / Other" value={money(totals.cessN)} /> : null}
           <SummaryRow label="GRAND TOTAL" value={money(totals.grand)} strong />

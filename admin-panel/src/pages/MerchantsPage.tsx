@@ -19,7 +19,6 @@ type Merchant = {
 export function MerchantsPage() {
   const nav = useNavigate();
   const [q, setQ] = useState("");
-  const [date, setDate] = useState(istToday());
   const [items, setItems] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -29,8 +28,9 @@ export function MerchantsPage() {
     (async () => {
       setError(null);
       try {
+        // Merchants directory is shops-based — never pass operational date here.
         const res = await api<{ items: any[]; total_count: number }>(
-          `/admin/merchants${qs({ q, page, page_size: 50, date })}`,
+          `/admin/merchants${qs({ q, page, page_size: 50 })}`,
         );
         setItems(res.items);
         setTotal(res.total_count);
@@ -40,14 +40,11 @@ export function MerchantsPage() {
         setError(e.detail);
       }
     })();
-  }, [q, page, date, nav]);
+  }, [q, page, nav]);
 
   return (
     <Shell title="Merchants" actions={
-      <>
-        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-        <input placeholder="Search" value={q} onChange={(e) => { setPage(1); setQ(e.target.value); }} style={{ border: "2px solid #111", padding: 6 }} />
-      </>
+      <input placeholder="Search" value={q} onChange={(e) => { setPage(1); setQ(e.target.value); }} style={{ border: "2px solid #111", padding: 6 }} />
     }>
       {error ? <ErrorBanner message={error} /> : null}
       {!items.length ? <Empty message="No merchants." /> : (
@@ -57,10 +54,9 @@ export function MerchantsPage() {
               <th style={th}>Shop</th>
               <th style={th}>Username</th>
               <th style={th}>Active</th>
-              <th style={th}>Pattis</th>
-              <th style={th}>Bags</th>
-              <th style={th}>Bills</th>
-              <th style={th}>Purchased</th>
+              <th style={th}>Wallet free</th>
+              <th style={th}>Wallet purchased</th>
+              <th style={th}>Lifetime purchased bags</th>
             </tr>
           </thead>
           <tbody>
@@ -69,9 +65,8 @@ export function MerchantsPage() {
                 <td style={td}><Link to={`/merchants/${m.shop_id}`}>{m.shop_name}</Link></td>
                 <td style={td}>{m.username}</td>
                 <td style={td}>{m.active ? "Yes" : "No"}</td>
-                <td style={td}>{m.farmer_pattis ?? "—"}</td>
-                <td style={td}>{m.farmer_bags ?? "—"}</td>
-                <td style={td}>{m.vendor_bills ?? "—"}</td>
+                <td style={td}>{m.wallet_free_allocated ?? "—"}</td>
+                <td style={td}>{m.wallet_purchased_total ?? "—"}</td>
                 <td style={td}>{m.purchased_bags ?? "—"}</td>
               </tr>
             ))}
