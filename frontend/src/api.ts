@@ -271,6 +271,8 @@ export type BagWallet = {
   low_balance: boolean;
   /** Admin-allocated free bags not yet claimed (not in usable balance). */
   free_available_to_claim?: number;
+  /** Admin Bag Purchase switch; false hides Bag Balance. Missing on older backends = enabled. */
+  purchase_enabled?: boolean;
 };
 
 export type FreeBagAllocation = {

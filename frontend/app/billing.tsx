@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Pressable,
@@ -77,6 +77,13 @@ export default function BillingScreen() {
       ? (initialTab === "history" ? "purchases" : initialTab === "purchase" ? "buy" : (initialTab as BillingTab))
       : "buy",
   );
+  const bagBalanceOff = wallet?.purchase_enabled === false;
+
+  useEffect(() => {
+    if (!bagBalanceOff) return;
+    Alert.alert("Bag Balance unavailable", "Bag purchase is currently unavailable.");
+    router.replace("/");
+  }, [bagBalanceOff, router]);
 
   const load = useCallback(async () => {
     if (!isOwner) return;
@@ -186,14 +193,18 @@ export default function BillingScreen() {
       );
       setQty("1000");
       await load();
-    } catch (e) {
-      Alert.alert("Purchase failed", apiErrorMessage(e, "Could not complete purchase"));
+    } catch (e: any) {
+      if (e?.detail?.code === "BAG_PURCHASE_DISABLED") {
+        await load();
+      } else {
+        Alert.alert("Purchase failed", apiErrorMessage(e, "Could not complete purchase"));
+      }
     } finally {
       setBuying(false);
     }
   };
 
-  if (!isOwner) {
+  if (!isOwner || bagBalanceOff) {
     return <SafeAreaView style={styles.root} edges={["top"]} />;
   }
 
@@ -253,6 +264,9 @@ export default function BillingScreen() {
           </View>
         ) : null}
 
+        {/* Tabs wait for the wallet so a disabled Bag Balance never flashes before redirecting. */}
+        {wallet ? (
+        <>
         {(wallet?.free_available_to_claim || 0) > 0 ? (
           <Pressable
             style={styles.freeBanner}
@@ -505,6 +519,8 @@ export default function BillingScreen() {
               </View>
             ) : null}
           </View>
+        ) : null}
+        </>
         ) : null}
       </ScrollView>
     </SafeAreaView>
