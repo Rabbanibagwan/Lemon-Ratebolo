@@ -59,6 +59,8 @@ class WalletOut(BaseModel):
     total_available: int
     price_per_bag: float
     low_balance: bool
+    # Admin-allocated free bags not yet claimed by the merchant (not in usable balance).
+    free_available_to_claim: int = 0
 
 
 class PurchaseCreateIn(BaseModel):
@@ -89,13 +91,36 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
         await db.bag_usage.create_index([("shop_id", 1), ("at", -1)])
         await db.bag_usage.create_index([("shop_id", 1), ("patti_id", 1), ("status", 1)])
         await db.bag_usage.create_index("id", unique=True)
+        from free_bags import ensure_free_bag_indexes
+
+        await ensure_free_bag_indexes(db)
 
     def _admin_key() -> str:
         return (os.environ.get("ADMIN_API_KEY") or os.environ.get("BILLING_ADMIN_KEY") or "lemon-admin-dev").strip()
 
-    async def admin_auth(x_admin_key: Optional[str] = Header(default=None, alias="X-Admin-Key")) -> None:
-        if not x_admin_key or x_admin_key.strip() != _admin_key():
-            raise HTTPException(401, "Invalid admin key")
+    async def admin_auth(
+        authorization: Optional[str] = Header(default=None),
+        x_admin_key: Optional[str] = Header(default=None, alias="X-Admin-Key"),
+    ) -> dict:
+        """Dual auth: Admin JWT Bearer (admin SPA) OR legacy X-Admin-Key."""
+        try:
+            from admin_panel.auth import require_platform_admin
+
+            token = None
+            if authorization and authorization.lower().startswith("bearer "):
+                token = authorization.split(" ", 1)[1].strip()
+            return await require_platform_admin(db, token=token, x_admin_key=x_admin_key)
+        except ImportError:
+            if not x_admin_key or x_admin_key.strip() != _admin_key():
+                raise HTTPException(401, "Invalid admin key")
+            return {
+                "id": "legacy-admin-key",
+                "username": "legacy_x_admin_key",
+                "display_name": "Legacy Admin Key",
+                "role": "platform_admin",
+                "active": True,
+                "_auth_via": "x_admin_key",
+            }
 
     async def get_platform_settings() -> dict:
         doc = await db.platform_billing_settings.find_one({"id": "default"}, {"_id": 0})
@@ -599,7 +624,18 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
     async def get_wallet(user=Depends(owner_only)):
         settings = await get_platform_settings()
         w = await ensure_wallet(user["shop_id"])
-        return WalletOut(**(await _wallet_view(w, float(settings.get("price_per_bag") or 0))))
+        view = await _wallet_view(w, float(settings.get("price_per_bag") or 0))
+        try:
+            # PENDING = new status; AVAILABLE kept for legacy allocations.
+            unclaimed_q = {"shop_id": user["shop_id"], "status": {"$in": ["PENDING", "AVAILABLE"]}}
+            bags_to_claim = 0
+            cur = db.bag_free_allocations.find(unclaimed_q, {"_id": 0, "bags": 1})
+            async for row in cur:
+                bags_to_claim += int(row.get("bags") or 0)
+            view["free_available_to_claim"] = bags_to_claim
+        except Exception:
+            view["free_available_to_claim"] = 0
+        return WalletOut(**view)
 
     @api.get("/billing/price")
     async def get_current_price(user=Depends(current_user)):
@@ -700,3 +736,20 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
             {"shop_id": user["shop_id"]}, {"_id": 0},
         ).sort("at", -1).limit(limit)
         return [d async for d in cur]
+
+    async def _get_wallet_free_used(shop_id: str) -> int:
+        settings = await get_platform_settings()
+        w = await ensure_wallet(shop_id)
+        view = await _wallet_view(w, float(settings.get("price_per_bag") or 0), sync_counters=False)
+        return int(view.get("free_used") or 0)
+
+    from free_bags import register_free_bag_routes
+
+    register_free_bag_routes(
+        api,
+        db=db,
+        admin_auth=admin_auth,
+        owner_only=owner_only,
+        ensure_wallet=ensure_wallet,
+        get_wallet_free_used=_get_wallet_free_used,
+    )
