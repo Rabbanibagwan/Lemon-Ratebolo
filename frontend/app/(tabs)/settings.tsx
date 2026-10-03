@@ -108,10 +108,10 @@ export default function SettingsScreen() {
               <Text style={[styles.section, { marginTop: spacing.lg }]}>Vendor Bill defaults</Text>
               <Input
                 label="Vendor Commission Factor"
-                value={s ? String(s.vendor_factor ?? 1.06) : ""}
+                value={s ? String(s.vendor_factor ?? 1) : ""}
                 onChangeText={(v) => set("vendor_factor", v)}
                 keyboardType="decimal-pad"
-                hint="e.g. 1.06. Used only for Vendor Bill. Never affects Farmer Patti."
+                hint="Default 1. Editable (e.g. 1.06). Used only for Vendor Bill. Never affects Farmer Patti."
                 testID="settings-vendor-factor"
               />
               <Input
