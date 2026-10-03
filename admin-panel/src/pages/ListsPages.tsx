@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Empty, ErrorBanner, Shell } from "../components/ui";
-import { api, setToken, type ApiError } from "../lib/api";
+import { api, apiDownload, setToken, type ApiError } from "../lib/api";
 import { qs } from "../lib/dates";
 import { useWorkingDate } from "../lib/workingDate";
 
@@ -80,6 +80,9 @@ export function PurchasesPage() {
   const [detail, setDetail] = useState<any | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
 
+  const [downloading, setDownloading] = useState<string | null>(null);
+  const [docError, setDocError] = useState<string | null>(null);
+
   async function openInvoice(id: string) {
     setDetailError(null);
     try {
@@ -89,6 +92,36 @@ export function PurchasesPage() {
       if (e.status === 401) { setToken(null); nav("/login"); return; }
       setDetailError(e.detail);
     }
+  }
+
+  async function download(key: string, path: string, filename: string) {
+    if (downloading) return;
+    setDocError(null);
+    setDownloading(key);
+    try {
+      await apiDownload(path, filename);
+    } catch (err) {
+      const e = err as ApiError;
+      if (e.status === 401) { setToken(null); nav("/login"); return; }
+      setDocError(e.detail || "Download failed");
+    } finally {
+      setDownloading(null);
+    }
+  }
+
+  function downloadInvoice(row: { id?: string; invoice_number?: string | null }) {
+    if (!row?.id) return;
+    const name = String(row.invoice_number || row.id).replace(/[^A-Za-z0-9._-]+/g, "-");
+    download(`inv:${row.id}`, `/admin/purchases/${encodeURIComponent(row.id)}/invoice.pdf`, `${name}.pdf`);
+  }
+
+  function exportExcel() {
+    const shop = s.shopId.trim();
+    download(
+      "xlsx",
+      `/admin/purchases/export.xlsx${qs({ date: s.date, shop_id: shop || undefined })}`,
+      `lemon-purchases-${s.date}${shop ? `-${shop}` : ""}.xlsx`,
+    );
   }
 
   return (
@@ -105,6 +138,33 @@ export function PurchasesPage() {
           ["status", "Status"],
         ]}
         onRowClick={(row) => row?.id && openInvoice(String(row.id))}
+        extraActions={
+          <button
+            onClick={exportExcel}
+            disabled={downloading === "xlsx"}
+            style={actionBtn}
+            data-testid="purchases-export-excel"
+          >
+            {downloading === "xlsx" ? "Exporting…" : "Export Excel"}
+          </button>
+        }
+        banner={docError ? <ErrorBanner message={docError} /> : null}
+        rowAction={{
+          label: "Download",
+          render: (row) => (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                downloadInvoice(row);
+              }}
+              disabled={downloading === `inv:${row.id}`}
+              style={rowBtn}
+              data-testid={`purchase-download-${row.id}`}
+            >
+              {downloading === `inv:${row.id}` ? "…" : "Download Invoice"}
+            </button>
+          ),
+        }}
       />
       {detailError ? <div style={{ padding: 12 }}><ErrorBanner message={detailError} /></div> : null}
       {detail ? (
@@ -112,7 +172,17 @@ export function PurchasesPage() {
           <div style={modalCard} onClick={(e) => e.stopPropagation()} data-testid="admin-purchase-invoice">
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
               <strong>Bag Balance Invoice</strong>
-              <button onClick={() => setDetail(null)} style={{ border: "2px solid #111", padding: "4px 10px", fontWeight: 700 }}>Close</button>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  onClick={() => downloadInvoice(detail)}
+                  disabled={downloading === `inv:${detail.id}`}
+                  style={{ border: "2px solid #111", padding: "4px 10px", fontWeight: 700, background: "#111", color: "#fff" }}
+                  data-testid="admin-purchase-invoice-download"
+                >
+                  {downloading === `inv:${detail.id}` ? "Downloading…" : "Download PDF"}
+                </button>
+                <button onClick={() => setDetail(null)} style={{ border: "2px solid #111", padding: "4px 10px", fontWeight: 700 }}>Close</button>
+              </div>
             </div>
             <div style={{ fontSize: 13, lineHeight: 1.5 }}>
               <div style={{ fontWeight: 900, fontSize: 16 }}>{detail.seller?.brand || detail.seller?.name || "LEMON MANDI"}</div>
@@ -352,25 +422,36 @@ function ListShell({
   columns,
   hideSearch,
   onRowClick,
+  extraActions,
+  banner,
+  rowAction,
 }: {
   title: string;
   s: ReturnType<typeof useList>;
   columns: [string, string][];
   hideSearch?: boolean;
   onRowClick?: (row: any) => void;
+  extraActions?: ReactNode;
+  banner?: ReactNode;
+  rowAction?: { label: string; render: (row: any) => ReactNode };
 }) {
   return (
     <Shell title={title} actions={
       <>
         <input placeholder="Shop ID" value={s.shopId} onChange={(e) => { s.setPage(1); s.setShopId(e.target.value); }} style={{ border: "2px solid #111", padding: 6, width: 160 }} />
         {!hideSearch ? <input placeholder="Search" value={s.q} onChange={(e) => { s.setPage(1); s.setQ(e.target.value); }} style={{ border: "2px solid #111", padding: 6 }} /> : null}
+        {extraActions}
       </>
     }>
       {s.error ? <ErrorBanner message={s.error} /> : null}
+      {banner}
       {s.loading ? <Empty message="Loading…" /> : !s.items.length ? <Empty message="No rows." /> : (
         <table style={table}>
           <thead>
-            <tr>{columns.map(([, label]) => <th key={label} style={th}>{label}</th>)}</tr>
+            <tr>
+              {columns.map(([, label]) => <th key={label} style={th}>{label}</th>)}
+              {rowAction ? <th style={th}>{rowAction.label}</th> : null}
+            </tr>
           </thead>
           <tbody>
             {s.items.map((row, i) => (
@@ -380,6 +461,7 @@ function ListShell({
                 style={onRowClick ? { cursor: "pointer" } : undefined}
               >
                 {columns.map(([key]) => <td key={key} style={td}>{formatCell(row[key])}</td>)}
+                {rowAction ? <td style={td}>{rowAction.render(row)}</td> : null}
               </tr>
             ))}
           </tbody>
@@ -403,6 +485,8 @@ function formatCell(v: unknown) {
 const table: React.CSSProperties = { width: "100%", borderCollapse: "collapse", background: "#fff", border: "2px solid #111" };
 const th: React.CSSProperties = { textAlign: "left", borderBottom: "2px solid #111", padding: 8, fontSize: 12 };
 const td: React.CSSProperties = { borderBottom: "1px solid #ddd", padding: 8, fontSize: 13 };
+const actionBtn: React.CSSProperties = { border: "2px solid #111", background: "#111", color: "#fff", padding: "6px 10px", fontWeight: 800 };
+const rowBtn: React.CSSProperties = { border: "2px solid #111", background: "#fff", padding: "3px 8px", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" };
 const modalOverlay: React.CSSProperties = {
   position: "fixed",
   inset: 0,
