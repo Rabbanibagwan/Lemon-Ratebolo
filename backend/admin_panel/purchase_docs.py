@@ -258,6 +258,7 @@ EXPORT_HEADERS = [
     "Rate",
     "Total",
     "CGST",
+    "SGST",
     "IGST",
     "Grand Total",
     "Transaction Reference No.",
@@ -275,6 +276,7 @@ def export_row(d: dict, shop: dict, shop_name: Optional[str]) -> List[Any]:
         calc["price_per_bag"],
         calc["base_amount"],
         calc["cgst_amount"],
+        calc["sgst_amount"],
         calc["igst_amount"],
         calc["total_amount"],
         str(d.get("payment_ref") or "").strip() or None,
@@ -304,7 +306,7 @@ def render_purchases_xlsx(rows: Iterable[List[Any]], *, title: str) -> bytes:
     for r in rows:
         ws.append(r)
         n += 1
-    money_cols = ["E", "F", "G", "H", "I"]
+    money_cols = ["E", "F", "G", "H", "I", "J"]
     for i in range(2, n + 2):
         ws[f"B{i}"].number_format = "DD-MM-YYYY"
         ws[f"D{i}"].number_format = "#,##0"
@@ -316,15 +318,15 @@ def render_purchases_xlsx(rows: Iterable[List[Any]], *, title: str) -> bytes:
         ws[f"A{t}"] = "TOTAL"
         ws[f"D{t}"] = f"=SUM(D2:D{n + 1})"
         ws[f"D{t}"].number_format = "#,##0"
-        for col in ["F", "G", "H", "I"]:
+        for col in ["F", "G", "H", "I", "J"]:
             ws[f"{col}{t}"] = f"=SUM({col}2:{col}{n + 1})"
             ws[f"{col}{t}"].number_format = "#,##0.00"
         for c in ws[t]:
             c.font = Font(bold=True)
             c.border = Border(top=Side(style="thin", color="111111"))
-        ws.auto_filter.ref = f"A1:J{n + 1}"
+        ws.auto_filter.ref = f"A1:K{n + 1}"
 
-    widths = [32, 21, 20, 15, 10, 14, 12, 12, 17, 33]
+    widths = [32, 21, 20, 15, 10, 14, 12, 12, 12, 17, 33]
     for idx, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(idx)].width = width
     ws.freeze_panes = "A2"

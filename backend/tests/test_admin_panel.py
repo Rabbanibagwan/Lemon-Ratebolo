@@ -518,25 +518,27 @@ class TestAdminPurchaseDocs:
         rows = [list(row) for row in ws.iter_rows(values_only=True)]
         assert rows[0] == [
             "Merchant Name", "Date of Purchase", "GST No.", "No. of Bags", "Rate",
-            "Total", "CGST", "IGST", "Grand Total", "Transaction Reference No.",
+            "Total", "CGST", "SGST", "IGST", "Grand Total", "Transaction Reference No.",
         ]
         data = {row[0]: row for row in rows[1:3]}
         assert set(data) == {"MKB Lemon Co.", "Pune Traders"}
         ka = data["MKB Lemon Co."]
         assert ka[1].date().isoformat() == "2026-09-20"
-        assert ka[2:] == ["29ABCDE1234F1Z5", 1000, 2.0, 2000.0, 180.0, 0.0, 2360.0, "pay_RZP9Kx81LmQ2"]
+        assert ka[2:] == ["29ABCDE1234F1Z5", 1000, 2.0, 2000.0, 180.0, 180.0, 0.0, 2360.0, "pay_RZP9Kx81LmQ2"]
         mh = data["Pune Traders"]
         # No stored payment reference → blank cell, nothing generated.
-        assert mh[2:] == ["27PQRST6789K1Z2", 500, 2.5, 1250.0, 0.0, 225.0, 1475.0, None]
-        assert rows[3][0] == "TOTAL" and rows[3][8] == "=SUM(I2:I3)" and rows[3][9] is None
+        assert mh[2:] == ["27PQRST6789K1Z2", 500, 2.5, 1250.0, 0.0, 0.0, 225.0, 1475.0, None]
+        assert rows[3][0] == "TOTAL" and rows[3][7] == "=SUM(H2:H3)" and rows[3][9] == "=SUM(J2:J3)"
+        assert rows[3][10] is None
         assert len(rows) == 4
 
         for pid, row in (("pur-ka-0001", ka), ("pur-mh-0002", mh)):
             inv = client.get(f"/api/admin/purchases/{pid}", headers=h).json()
             calc = inv["calculation"]
-            assert (calc["cgst_amount"], calc["igst_amount"]) == (row[6], row[7])
-            assert calc["total_amount"] == row[8]
-            assert (inv.get("payment_ref") or None) == row[9]
+            assert (calc["cgst_amount"], calc["sgst_amount"], calc["igst_amount"]) == (row[6], row[7], row[8])
+            assert calc["total_amount"] == row[9]
+            assert round(row[5] + row[6] + row[7] + row[8], 2) == row[9]
+            assert (inv.get("payment_ref") or None) == row[10]
 
     def test_export_respects_shop_filter_and_requires_auth(self):
         from io import BytesIO
