@@ -171,8 +171,13 @@ export default function VendorBillDetail() {
           <View style={styles.rowSpread}>
             <View>
               <Text style={styles.shopName}>{(profile?.shop_name || session?.shop_name || "").toUpperCase()}</Text>
-              <Text style={styles.subInfo}>{profile?.address || ""}</Text>
-              <Text style={styles.subInfo}>{profile?.mobile || ""}</Text>
+              {(() => {
+                const addr = [profile?.address, profile?.village, profile?.taluk, profile?.district, profile?.state]
+                  .filter(Boolean)
+                  .join(", ");
+                return addr ? <Text style={styles.subInfo}>{addr}</Text> : null;
+              })()}
+              {profile?.mobile ? <Text style={styles.subInfo}>Mobile: {profile.mobile}</Text> : null}
             </View>
             <View style={styles.billBox}>
               <Text style={styles.billBoxLbl}>BILL</Text>
@@ -201,8 +206,8 @@ export default function VendorBillDetail() {
             </View>
           ))}
           <View style={styles.divider} />
-          <Row label={`Goods (×${b.vendor_factor ?? 1} + ₹${b.margin_per_bag}/bag)`} value={money(b.goods_total)} />
-          <Row label={`Commission (${b.total_bags} × ₹${b.commission_per_bag})`} value={money(b.commission_total)} />
+          <Row label="Lemon" value={money(b.goods_total)} />
+          <Row label="Commission" value={money(b.commission_total)} />
           <Row label="Hamali" value={money(b.hamali)} />
           {b.cess > 0 ? <Row label="Cess / Other" value={money(b.cess)} /> : null}
           <View style={styles.netBox}>

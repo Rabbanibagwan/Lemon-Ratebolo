@@ -9,6 +9,12 @@ import { printThermalDocument } from "@/src/utils/thermal-connection";
 import { encodeFarmerPattiEscPos } from "@/src/utils/thermal-escpos-docs";
 import { resolvePrintPaperMm } from "@/src/utils/printer-prefs";
 import {
+  buildFarmerPattiPrintDocument,
+  logPrintDocument,
+  pattiDisplayAmount,
+  pattiDisplayRate,
+} from "@/src/utils/print-document";
+import {
   thermalBaseCss,
   thermalMetrics,
 } from "@/src/utils/thermal-print";
@@ -70,8 +76,8 @@ export function renderPattiHtml(p: Patti, profile: ShopProfile, qrUri: string, u
     lot.sales.map((s, i) => `
       <tr>
         <td class="mono lotEmph">${i === 0 ? escapeHtml(lot.lot_no) : ""}</td>
-        <td class="mono right"><span class="bagsEmph">${s.bags}</span> × ${fmt(s.rate_per_bag * p.payment_factor)}</td>
-        <td class="mono right strong">${fmt(s.bags * s.rate_per_bag * p.payment_factor)}</td>
+        <td class="mono right"><span class="bagsEmph">${s.bags}</span> × ${fmt(pattiDisplayRate(s.rate_per_bag, p.payment_factor))}</td>
+        <td class="mono right strong">${fmt(pattiDisplayAmount(s.bags, s.rate_per_bag, p.payment_factor))}</td>
       </tr>`).join("")
   ).join("");
   const addr = [profile.address, profile.village, profile.taluk, profile.district, profile.state]
@@ -175,8 +181,8 @@ export function renderThermalPattiHtml(
     lot.sales.map((s, i) => `
       <div class="row">
         <span class="lot">${i === 0 ? escapeHtml(String(lot.lot_no || `${lot.lot_serial_no}/${lot.total_bags}`)) : ""}</span>
-        <span class="mid"><span class="bags">${s.bags}</span> × ${fmt(s.rate_per_bag * p.payment_factor)}</span>
-        <span class="right">${fmt(s.bags * s.rate_per_bag * p.payment_factor)}</span>
+        <span class="mid"><span class="bags">${s.bags}</span> × ${fmt(pattiDisplayRate(s.rate_per_bag, p.payment_factor))}</span>
+        <span class="right">${fmt(pattiDisplayAmount(s.bags, s.rate_per_bag, p.payment_factor))}</span>
       </div>`).join(""),
   ).join("");
   const addr = [profile.address, profile.village, profile.taluk, profile.district, profile.state].filter(Boolean).join(", ");
@@ -230,6 +236,8 @@ export async function thermalPrintPatti(
 ): Promise<void> {
   const mm = await resolvePrintPaperMm(paperMm);
   const m = thermalMetrics(mm);
+  // Canonical document — shared values for HTML + ESC/POS (no dual total math).
+  logPrintDocument(buildFarmerPattiPrintDocument(p, profile, { detailed, paperMm: mm }));
   // Always generate QR — previous working format required it on the slip.
   const qrUri = await qrDataUriThermal(p.qr_token, Math.max(220, m.qrPx * 2));
   const html = renderThermalPattiHtml(p, profile, qrUri, mm, detailed);
