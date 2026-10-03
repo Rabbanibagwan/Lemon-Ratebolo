@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView,
+  ActivityIndicator, Alert, Image, Modal, Platform, Pressable, ScrollView,
   StyleSheet, Text, View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -14,6 +14,7 @@ import { colors, font, money, spacing } from "@/src/theme";
 import { Button, Input } from "@/src/components/ui";
 import { qrDataUri } from "@/src/utils/qr";
 import { thermalPrintAndMark, sharePattiPdf, canUserPrintPatti, canUserSharePatti, staffPrintBlockedMessage, staffShareBlockedMessage } from "@/src/utils/patti-print";
+import { pattiDisplayAmount, pattiDisplayRate } from "@/src/utils/print-document";
 import { clampPaperMm, thermalPrintUserMessage } from "@/src/utils/thermal-print";
 import { routeParam } from "@/src/utils/route-params";
 
@@ -348,19 +349,21 @@ export default function PattiDetail() {
 
         {/* Patti body — NO vendor names */}
         <View style={styles.pattiCard} testID="patti-body">
+          <View style={styles.merchantHead}>
+            <Text style={styles.shopName} numberOfLines={2}>{(profile?.shop_name || session?.shop_name || "").toUpperCase()}</Text>
+            {(() => {
+              const addr = [profile?.address, profile?.village, profile?.taluk, profile?.district, profile?.state]
+                .filter(Boolean).join(", ");
+              return addr ? (
+                <Text style={styles.shopMeta} numberOfLines={3}>{addr}</Text>
+              ) : null;
+            })()}
+            {profile?.mobile ? (
+              <Text style={styles.shopMeta} numberOfLines={1}>Mobile: {profile.mobile}</Text>
+            ) : null}
+          </View>
           <View style={styles.pattiHeader}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.shopName} numberOfLines={2}>{(profile?.shop_name || session?.shop_name || "").toUpperCase()}</Text>
-              {(() => {
-                const addr = [profile?.address, profile?.village, profile?.taluk, profile?.district, profile?.state]
-                  .filter(Boolean).join(", ");
-                return addr ? (
-                  <Text style={styles.shopMeta} numberOfLines={3}>{addr}</Text>
-                ) : null;
-              })()}
-              {profile?.mobile ? (
-                <Text style={styles.shopMeta} numberOfLines={1}>Mobile: {profile.mobile}</Text>
-              ) : null}
               <Text style={styles.pattiKind}>PATTI / BILL</Text>
             </View>
             <View style={styles.pattiNumBox}>
@@ -398,13 +401,13 @@ export default function PattiDetail() {
                   <Text style={[styles.lineCell, styles.lineLot, styles.mono, { flex: 0.9 }]}>
                     {si === 0 ? lot.lot_no : ""}
                   </Text>
-                  <Text style={[styles.lineCell, styles.mono, { flex: 1.6, textAlign: "right" }]}>
+                  <Text style={[styles.lineCell, styles.lineBagsRate, styles.mono, { flex: 1.6, textAlign: "right" }]}>
                     <Text style={styles.lineBags}>{s.bags}</Text>
                     {" × "}
-                    {money(s.rate_per_bag * p.payment_factor)}
+                    {money(pattiDisplayRate(s.rate_per_bag, p.payment_factor))}
                   </Text>
-                  <Text style={[styles.lineCell, styles.mono, { flex: 1, textAlign: "right" }]}>
-                    {money(s.bags * s.rate_per_bag * p.payment_factor)}
+                  <Text style={[styles.lineCell, styles.lineAmount, styles.mono, { flex: 1, textAlign: "right" }]}>
+                    {money(pattiDisplayAmount(s.bags, s.rate_per_bag, p.payment_factor))}
                   </Text>
                 </View>
               ))}
@@ -414,17 +417,19 @@ export default function PattiDetail() {
           <View style={styles.divider} />
 
           <Row label="Gross total" value={money(p.farmer_gross)} strong />
+          <View style={styles.divider} />
           <Row
             label={settings?.detailed_print_format ? `Hamali (${p.total_bags} × ${money(p.hamali_per_bag)})` : "Hamali"}
             value={"− " + money(p.hamali_total)}
           />
           <Row label="Bhada" value={"− " + money(p.bhada_total)} />
           <Row label="Stationery" value={"− " + money(p.stationery_total)} />
+          <View style={styles.divider} />
           <Row label="Total deduction" value={"− " + money(p.deductions_total)} strong />
 
           <View style={styles.netBox}>
             <Text style={styles.netLabel}>NET PAYABLE</Text>
-            <Text style={styles.netValue}>{money(p.net_payable)}</Text>
+            <Text style={styles.netValue} numberOfLines={1}>{money(p.net_payable)}</Text>
           </View>
 
           <View style={styles.metaRow}>
@@ -531,9 +536,16 @@ const styles = StyleSheet.create({
   editReceiverText: { color: colors.onSurfaceInverse, fontFamily: font.display, fontWeight: "800", fontSize: 11, letterSpacing: 1 },
 
   pattiCard: { borderWidth: 2, borderColor: colors.borderStrong, padding: spacing.lg, backgroundColor: colors.surface },
+  merchantHead: { width: "100%", alignItems: "center", marginBottom: spacing.sm },
   pattiHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", gap: spacing.md },
-  shopName: { fontSize: 20, fontWeight: "900", color: colors.onSurface, fontFamily: font.display, letterSpacing: -0.5 },
-  shopMeta: { fontSize: 10.5, color: colors.muted, fontFamily: font.display, marginTop: 2, lineHeight: 14 },
+  shopName: {
+    fontSize: 20, fontWeight: "900", color: colors.onSurface, fontFamily: font.display, letterSpacing: -0.5,
+    textAlign: "center", width: "100%",
+  },
+  shopMeta: {
+    fontSize: 10.5, color: colors.muted, fontFamily: font.display, marginTop: 2, lineHeight: 14,
+    textAlign: "center", width: "100%",
+  },
   pattiKind: { fontSize: 10, letterSpacing: 2, color: colors.muted, fontWeight: "800", fontFamily: font.display, marginTop: 2 },
   pattiNumBox: { borderWidth: 2, borderColor: colors.borderStrong, paddingHorizontal: 10, paddingVertical: 4, alignItems: "flex-end" },
   pattiNumLabel: { fontSize: 9, letterSpacing: 1, color: colors.muted, fontWeight: "800", fontFamily: font.display },
@@ -552,26 +564,57 @@ const styles = StyleSheet.create({
   metaLabel: { fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: colors.muted, fontWeight: "800", fontFamily: font.display },
   metaValue: { fontSize: 14, fontWeight: "700", color: colors.onSurface, fontFamily: font.display },
   metaValueFarmer: {
-    fontSize: 24, fontWeight: "900", letterSpacing: -0.3, color: colors.onSurface,
-    fontFamily: font.display, lineHeight: 28, flexShrink: 1, flex: 1, textAlign: "right",
+    // ≈ merchant shopName size (20) — large, bold, right-aligned.
+    fontSize: 20, fontWeight: "900", letterSpacing: -0.3, color: colors.onSurface,
+    fontFamily: font.display, lineHeight: 24, flexShrink: 1, flex: 1, textAlign: "right",
   },
   thRow: { flexDirection: "row", borderBottomWidth: 2, borderBottomColor: colors.borderStrong, paddingBottom: 6 },
-  th: { fontSize: 10, letterSpacing: 1, color: colors.muted, fontWeight: "800", fontFamily: font.display },
+  th: { fontSize: 11, letterSpacing: 1, color: colors.muted, fontWeight: "800", fontFamily: font.display },
   lineRow: { flexDirection: "row", paddingVertical: 4, alignItems: "baseline" },
-  lineCell: { fontSize: 13, color: colors.onSurface },
+  lineCell: { fontSize: 14, color: colors.onSurface },
   lineLot: { fontSize: 16, fontWeight: "900" },
   lineBags: { fontSize: 16, fontWeight: "900", fontFamily: font.mono, color: colors.onSurface },
+  lineBagsRate: { fontWeight: "900", fontSize: 14 },
+  lineAmount: { fontWeight: "900", fontSize: 14 },
   mono: { fontFamily: font.mono },
   monoStrong: { fontFamily: font.mono, fontWeight: "800" },
   rowFlex: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 3 },
-  rowLabel: { fontSize: 13, color: colors.onSurfaceTertiary, fontFamily: font.display, flex: 1 },
-  rowValue: { fontSize: 14, fontFamily: font.mono, color: colors.onSurface },
+  rowLabel: { fontSize: 14, color: colors.onSurfaceTertiary, fontFamily: font.display, flex: 1 },
+  rowValue: { fontSize: 15, fontFamily: font.mono, color: colors.onSurface },
   netBox: {
-    backgroundColor: colors.surfaceInverse, padding: spacing.md, marginTop: spacing.md,
-    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
+    backgroundColor: colors.surface,
+    paddingVertical: spacing.md + 2,
+    paddingHorizontal: 0,
+    marginTop: spacing.md,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    // Continuous full-width board frame (matches thermal ESC/POS + HTML).
+    borderTopWidth: 2,
+    borderBottomWidth: 2,
+    borderTopColor: colors.borderStrong,
+    borderBottomColor: colors.borderStrong,
+    borderLeftWidth: 0,
+    borderRightWidth: 0,
   },
-  netLabel: { color: colors.onSurfaceInverse, fontFamily: font.display, fontWeight: "900", letterSpacing: 1.5, fontSize: 13 },
-  netValue: { color: colors.onSurfaceInverse, fontFamily: font.mono, fontWeight: "900", fontSize: 24 },
+  netLabel: {
+    color: colors.onSurface,
+    // Closest device Times Roman / serif for NET PAYABLE hierarchy.
+    fontFamily: Platform.select({ ios: "Times New Roman", android: "serif", default: "Times New Roman" }) as string,
+    fontWeight: "900",
+    letterSpacing: 1.2,
+    fontSize: 20,
+    flexShrink: 0,
+  },
+  netValue: {
+    color: colors.onSurface,
+    fontFamily: Platform.select({ ios: "Times New Roman", android: "serif", default: "Times New Roman" }) as string,
+    fontWeight: "900",
+    fontSize: 20,
+    textAlign: "right",
+    flexShrink: 1,
+    marginLeft: 8,
+  },
 
   qrBox: {
     flexDirection: "row", alignItems: "center", gap: spacing.md,

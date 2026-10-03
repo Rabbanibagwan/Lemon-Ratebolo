@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert, Platform, Pressable,
   StyleSheet, Text, TextInput, View,
+  type NativeSyntheticEvent,
+  type TextInputKeyPressEventData,
 } from "react-native";
 import { KeyboardAwareScrollView, KeyboardStickyView } from "react-native-keyboard-controller";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -16,6 +18,13 @@ import { useAuth } from "@/src/context/AuthContext";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
 import { handleBagBillingError } from "@/src/utils/bag-billing";
 import { canUserPrintPatti } from "@/src/utils/patti-print";
+import {
+  createEnterGate,
+  handleEnterAdvance,
+  isArrowLeftKey,
+  isArrowRightKey,
+  isEnterKey,
+} from "@/src/utils/physical-keyboard";
 
 type LocalSale = { key: string; vendor_id: string | null; vendor_name: string; bags: string; rate: string };
 type FooterAction = "save" | "print";
@@ -66,6 +75,8 @@ export default function AddLot() {
   const rateRefs = useRef<Record<string, TextInput | null>>({});
   const footerKeyRef = useRef<TextInput | null>(null);
   const footerActionRef = useRef<FooterAction>("save");
+  const formEnterGate = useRef(createEnterGate()).current;
+  const footerEnterGate = useRef(createEnterGate()).current;
   footerActionRef.current = footerAction;
 
   const deactivateFooterKeys = () => setFooterKeysActive(false);
@@ -253,16 +264,18 @@ export default function AddLot() {
     save(action);
   };
 
-  const handleFooterKeyPress = (key: string) => {
-    if (key === "ArrowLeft") {
+  const handleFooterKeyPress = (e: NativeSyntheticEvent<TextInputKeyPressEventData>) => {
+    const key = e.nativeEvent.key;
+    if (isArrowLeftKey(key)) {
       setFooterAction("save");
       return;
     }
-    if (key === "ArrowRight") {
+    if (isArrowRightKey(key)) {
       setFooterAction("print");
       return;
     }
-    if (key === "Enter") {
+    if (isEnterKey(key)) {
+      if (!footerEnterGate.claim()) return;
       runFooterAction(footerActionRef.current);
     }
   };
@@ -393,7 +406,7 @@ export default function AddLot() {
                 returnKeyType="next"
                 blurOnSubmit={false}
                 onFocus={deactivateFooterKeys}
-                onSubmitEditing={() => totalBagsRef.current?.focus()}
+                {...handleEnterAdvance(formEnterGate, () => totalBagsRef.current?.focus())}
               />
             </View>
             <View style={{ flex: 1 }}>
@@ -408,7 +421,7 @@ export default function AddLot() {
                 returnKeyType="next"
                 blurOnSubmit={false}
                 onFocus={deactivateFooterKeys}
-                onSubmitEditing={() => bhadaRef.current?.focus()}
+                {...handleEnterAdvance(formEnterGate, () => bhadaRef.current?.focus())}
               />
             </View>
             <View style={{ flex: 1 }}>
@@ -423,10 +436,10 @@ export default function AddLot() {
                 returnKeyType="next"
                 blurOnSubmit={false}
                 onFocus={deactivateFooterKeys}
-                onSubmitEditing={() => {
+                {...handleEnterAdvance(formEnterGate, () => {
                   deactivateFooterKeys();
                   setFarmerPickerOpen(true);
-                }}
+                })}
               />
             </View>
           </View>
@@ -512,7 +525,7 @@ export default function AddLot() {
                     returnKeyType="next"
                     blurOnSubmit={false}
                     onFocus={deactivateFooterKeys}
-                    onSubmitEditing={() => advanceAfterBagsEntry(s.key)}
+                    {...handleEnterAdvance(formEnterGate, () => advanceAfterBagsEntry(s.key))}
                   />
                 </View>
                 <View style={{ flex: 1.4 }}>
@@ -527,7 +540,7 @@ export default function AddLot() {
                     returnKeyType={idx < sales.length - 1 ? "next" : "done"}
                     blurOnSubmit={idx >= sales.length - 1}
                     onFocus={deactivateFooterKeys}
-                    onSubmitEditing={() => {
+                    {...handleEnterAdvance(formEnterGate, () => {
                       const next = sales[idx + 1];
                       if (next) {
                         if (!next.vendor_id) setVendorPickerFor(next.key);
@@ -539,8 +552,9 @@ export default function AddLot() {
                         return;
                       }
                       rateRefs.current[s.key]?.blur();
+                      footerEnterGate.suppressFor(280);
                       activateFooterKeys("save");
-                    }}
+                    })}
                   />
                 </View>
               </View>
@@ -570,7 +584,7 @@ export default function AddLot() {
               caretHidden
               accessible={false}
               importantForAccessibility="no-hide-descendants"
-              onKeyPress={(e) => handleFooterKeyPress(e.nativeEvent.key)}
+              onKeyPress={handleFooterKeyPress}
               testID="add-lot-footer-key-trap"
             />
           ) : null}
