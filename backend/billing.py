@@ -157,6 +157,8 @@ class PlatformBillingSettingsIn(BaseModel):
     service_hsn_code: str = Field(default=_DEFAULT_SERVICE_HSN, min_length=4, max_length=16)
     allow_test_payments: bool = True
     billing_active: bool = True
+    # None = leave unchanged, so older admin clients cannot flip it by omission.
+    bag_purchase_enabled: Optional[bool] = None
 
 
 class PlatformBillingSettingsOut(BaseModel):
@@ -166,7 +168,19 @@ class PlatformBillingSettingsOut(BaseModel):
     service_hsn_code: str
     allow_test_payments: bool
     billing_active: bool
+    bag_purchase_enabled: bool = True
     updated_at: Optional[datetime] = None
+
+
+class BagPurchaseToggleIn(BaseModel):
+    enabled: bool
+
+
+BAG_PURCHASE_DISABLED_MESSAGE = "Bag purchase is currently unavailable."
+
+
+def bag_purchase_enabled(settings: dict) -> bool:
+    return bool(settings.get("bag_purchase_enabled", True))
 
 
 class WalletOut(BaseModel):
@@ -182,6 +196,7 @@ class WalletOut(BaseModel):
     low_balance: bool
     # Admin-allocated free bags not yet claimed by the merchant (not in usable balance).
     free_available_to_claim: int = 0
+    purchase_enabled: bool = True
 
 
 class PurchaseCreateIn(BaseModel):
@@ -274,6 +289,7 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
                 "service_hsn_code": _DEFAULT_SERVICE_HSN,
                 "allow_test_payments": True,
                 "billing_active": True,
+                "bag_purchase_enabled": True,
                 "updated_at": now,
             }
             await db.platform_billing_settings.update_one(
@@ -808,6 +824,7 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
             service_hsn_code=(s.get("service_hsn_code") or _DEFAULT_SERVICE_HSN).strip() or _DEFAULT_SERVICE_HSN,
             allow_test_payments=bool(s.get("allow_test_payments", True)),
             billing_active=bool(s.get("billing_active", True)),
+            bag_purchase_enabled=bag_purchase_enabled(s),
             updated_at=s.get("updated_at"),
         )
 
@@ -818,17 +835,20 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
     ):
         now = _utc_now()
         hsn = (payload.service_hsn_code or _DEFAULT_SERVICE_HSN).strip() or _DEFAULT_SERVICE_HSN
+        fields = {
+            "price_per_bag": float(payload.price_per_bag),
+            "new_merchant_free_bags": int(payload.new_merchant_free_bags),
+            "gst_percent": float(payload.gst_percent),
+            "service_hsn_code": hsn,
+            "allow_test_payments": bool(payload.allow_test_payments),
+            "billing_active": bool(payload.billing_active),
+            "updated_at": now,
+        }
+        if payload.bag_purchase_enabled is not None:
+            fields["bag_purchase_enabled"] = bool(payload.bag_purchase_enabled)
         await db.platform_billing_settings.update_one(
             {"id": "default"},
-            {"$set": {
-                "price_per_bag": float(payload.price_per_bag),
-                "new_merchant_free_bags": int(payload.new_merchant_free_bags),
-                "gst_percent": float(payload.gst_percent),
-                "service_hsn_code": hsn,
-                "allow_test_payments": bool(payload.allow_test_payments),
-                "billing_active": bool(payload.billing_active),
-                "updated_at": now,
-            }},
+            {"$set": fields},
             upsert=True,
         )
         try:
@@ -847,6 +867,33 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
                     "gst_percent": float(payload.gst_percent),
                     "service_hsn_code": hsn,
                 },
+            )
+        except Exception:
+            pass
+        return await admin_get_billing_settings(admin)
+
+    @api.put("/admin/billing/bag-purchase", response_model=PlatformBillingSettingsOut)
+    async def admin_set_bag_purchase(
+        payload: BagPurchaseToggleIn,
+        admin: dict = Depends(admin_auth),
+    ):
+        await get_platform_settings()
+        await db.platform_billing_settings.update_one(
+            {"id": "default"},
+            {"$set": {"bag_purchase_enabled": bool(payload.enabled), "updated_at": _utc_now()}},
+            upsert=True,
+        )
+        try:
+            from admin_panel.audit import write_admin_audit
+
+            await write_admin_audit(
+                db,
+                admin_user_id=admin.get("id"),
+                admin_username=admin.get("username"),
+                action="BAG_PURCHASE_ENABLED" if payload.enabled else "BAG_PURCHASE_DISABLED",
+                resource_type="platform_billing_settings",
+                resource_id="default",
+                metadata={"bag_purchase_enabled": bool(payload.enabled)},
             )
         except Exception:
             pass
@@ -903,6 +950,7 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
             view["free_available_to_claim"] = bags_to_claim
         except Exception:
             view["free_available_to_claim"] = 0
+        view["purchase_enabled"] = bag_purchase_enabled(settings)
         return WalletOut(**view)
 
     @api.get("/billing/price")
@@ -913,11 +961,20 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
             "gst_percent": float(s.get("gst_percent") if s.get("gst_percent") is not None else _DEFAULT_GST),
             "service_hsn_code": (s.get("service_hsn_code") or _DEFAULT_SERVICE_HSN).strip() or _DEFAULT_SERVICE_HSN,
             "new_merchant_free_bags": int(s.get("new_merchant_free_bags") or 0),
+            "purchase_enabled": bag_purchase_enabled(s),
         }
+
+    def _purchase_disabled() -> HTTPException:
+        return HTTPException(
+            status_code=403,
+            detail={"code": "BAG_PURCHASE_DISABLED", "message": BAG_PURCHASE_DISABLED_MESSAGE},
+        )
 
     @api.post("/billing/purchases", response_model=PurchaseOut, status_code=201)
     async def create_purchase(payload: PurchaseCreateIn, user=Depends(owner_only)):
         settings = await get_platform_settings()
+        if not bag_purchase_enabled(settings):
+            raise _purchase_disabled()
         price = float(settings.get("price_per_bag") or 0)
         gst_pct = float(settings.get("gst_percent") if settings.get("gst_percent") is not None else _DEFAULT_GST)
         bags = int(payload.bags)
@@ -947,6 +1004,8 @@ def attach_billing(api: APIRouter, *, db, current_user, owner_only) -> None:
     @api.post("/billing/purchases/{purchase_id}/confirm-test", response_model=PurchaseOut)
     async def confirm_test_purchase(purchase_id: str, user=Depends(owner_only)):
         settings = await get_platform_settings()
+        if not bag_purchase_enabled(settings):
+            raise _purchase_disabled()
         if not settings.get("allow_test_payments", True):
             raise HTTPException(403, "Test payments disabled — use live payment gateway")
         purchase = await db.bag_purchases.find_one(

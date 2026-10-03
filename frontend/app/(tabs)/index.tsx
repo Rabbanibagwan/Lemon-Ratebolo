@@ -19,6 +19,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const isOwner = session?.role === "owner";
+  const bagBalanceOn = !!wallet && wallet.purchase_enabled !== false;
 
   const load = useCallback(async (iso?: string) => {
     const day = iso || workingDateISO;
@@ -104,7 +105,7 @@ export default function Home() {
           <KPI label="Pending" value={String(data?.today_pending ?? 0)} accent={(data?.today_pending ?? 0) > 0} testID="kpi-pending" />
         </View>
 
-        {isOwner && wallet ? (
+        {isOwner && wallet && bagBalanceOn ? (
           <>
             <Text style={[styles.sectionLabel, { marginTop: spacing.xl }]}>Bag Balance</Text>
             {(wallet.free_available_to_claim || 0) > 0 ? (
@@ -202,7 +203,7 @@ export default function Home() {
           <QuickTile icon="cash-outline" label="Vendors" onPress={() => router.push("/vendors")} testID="quick-vendors" />
           <QuickTile icon="grid-outline" label="Chart" onPress={() => router.push("/chart" as any)} testID="quick-chart" />
           {isOwner && <QuickTile icon="book-outline" label="Account Ledger" onPress={() => router.push("/account-ledger")} testID="quick-ledger" />}
-          {isOwner && <QuickTile icon="bag-handle-outline" label="Bag Balance" onPress={() => router.push("/billing")} testID="quick-billing" />}
+          {isOwner && bagBalanceOn && <QuickTile icon="bag-handle-outline" label="Bag Balance" onPress={() => router.push("/billing")} testID="quick-billing" />}
         </View>
       </ScrollView>
 

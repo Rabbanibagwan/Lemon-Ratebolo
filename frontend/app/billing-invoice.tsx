@@ -4,7 +4,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
-import { api, apiErrorMessage, BagInvoice } from "@/src/api";
+import { api, apiErrorMessage, BagInvoice, BagWallet } from "@/src/api";
 import { Button } from "@/src/components/ui";
 import { colors, font, money, spacing } from "@/src/theme";
 import {
@@ -47,6 +47,12 @@ export default function BillingInvoiceScreen() {
     }
     try {
       setLoading(true);
+      const wallet = await api.get<BagWallet>("/billing/wallet");
+      if (wallet.purchase_enabled === false) {
+        Alert.alert("Bag Balance unavailable", "Bag purchase is currently unavailable.");
+        router.replace("/");
+        return;
+      }
       const data = await api.get<BagInvoice>(`/billing/purchases/${purchaseId}/invoice`);
       setInv(data);
     } catch (e) {

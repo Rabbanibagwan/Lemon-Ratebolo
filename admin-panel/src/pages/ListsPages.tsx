@@ -227,6 +227,7 @@ export function SettingsPage() {
   const [form, setForm] = useState<any>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [togglingPurchase, setTogglingPurchase] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -251,12 +252,55 @@ export function SettingsPage() {
     }
   }
 
+  async function setBagPurchase(enabled: boolean) {
+    if (!enabled && !window.confirm(
+      "Disable Bag Purchase?\n\nThe entire Bag Balance section will be hidden from the merchant app "
+      + "and new purchases will be rejected. No data is deleted; enabling again restores it.",
+    )) return;
+    setMsg(null); setError(null); setTogglingPurchase(true);
+    try {
+      const res = await api<any>("/admin/billing/bag-purchase", { method: "PUT", body: JSON.stringify({ enabled }) });
+      setForm((f: any) => ({ ...f, bag_purchase_enabled: res.bag_purchase_enabled, updated_at: res.updated_at }));
+      setMsg(res.bag_purchase_enabled ? "Bag Purchase enabled" : "Bag Purchase disabled");
+    } catch (err) {
+      setError((err as ApiError).detail);
+    } finally {
+      setTogglingPurchase(false);
+    }
+  }
+
+  const purchaseOn = form?.bag_purchase_enabled !== false;
+
   return (
     <Shell title="Settings">
       {error ? <ErrorBanner message={error} /> : null}
       {msg ? <div style={{ background: "#d1fae5", border: "2px solid #059669", padding: 8, marginBottom: 12 }}>{msg}</div> : null}
       {!form ? <Empty message="Loading…" /> : (
         <div style={{ maxWidth: 420, display: "flex", flexDirection: "column", gap: 10 }}>
+          <div data-testid="bag-purchase-control" style={{ border: "2px solid #111", padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <span style={{ fontWeight: 900, letterSpacing: 1 }}>BAG PURCHASE</span>
+              <span
+                data-testid="bag-purchase-status"
+                style={{ fontWeight: 900, padding: "4px 10px", color: "#fff", background: purchaseOn ? "#059669" : "#b91c1c" }}
+              >
+                {purchaseOn ? "ENABLED" : "DISABLED"}
+              </span>
+            </div>
+            <div style={{ fontSize: 12, color: "#444" }}>
+              {purchaseOn
+                ? "Bag Balance is visible in the merchant app and merchants can buy bags."
+                : "Bag Balance is hidden from the merchant app and new purchases are rejected. Data is kept."}
+            </div>
+            <button
+              data-testid="bag-purchase-toggle"
+              disabled={togglingPurchase}
+              onClick={() => setBagPurchase(!purchaseOn)}
+              style={{ border: "2px solid #111", background: purchaseOn ? "#fff" : "#111", color: purchaseOn ? "#111" : "#fff", padding: 8, fontWeight: 800 }}
+            >
+              {togglingPurchase ? "Saving…" : purchaseOn ? "Disable Bag Purchase" : "Enable Bag Purchase"}
+            </button>
+          </div>
           {(["price_per_bag", "new_merchant_free_bags", "gst_percent"] as const).map((k) => (
             <label key={k} style={{ fontWeight: 700, fontSize: 12 }}>
               {k}
