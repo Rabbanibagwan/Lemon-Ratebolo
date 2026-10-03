@@ -5,11 +5,12 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Response, UploadFile
 from fastapi.security import HTTPAuthorizationCredentials
 
 from admin_panel.auth import admin_bearer, require_platform_admin
 from admin_panel.dates import ist_range_utc_window, resolve_date_range
+from admin_panel import directory_import as directory_import_mod
 from admin_panel import purchase_docs, queries
 from admin_panel.schemas import (
     ActivityListOut,
@@ -17,6 +18,9 @@ from admin_panel.schemas import (
     AuditLogItem,
     AuditLogOut,
     DashboardOut,
+    DirectoryImportConfirmIn,
+    DirectoryImportConfirmOut,
+    DirectoryImportPreviewOut,
     MerchantDetailOut,
     MerchantListItem,
     MerchantListOut,
@@ -520,3 +524,57 @@ def register_admin_routes(api: APIRouter, db) -> None:
     @api.get("/admin/health")
     async def admin_health(admin=Depends(admin_dep)):
         return {"ok": True, "admin": admin.get("username"), "auth_via": admin.get("_auth_via")}
+
+    # ----- Directory Import (Farmers / Vendors master data; not working-date scoped) -----
+    @api.get("/admin/directory/import/template")
+    async def directory_import_template(
+        admin=Depends(admin_dep),
+        kind: str = Query(..., pattern=r"^(farmers|vendors)$"),
+    ):
+        data = directory_import_mod.build_template_xlsx(kind)  # type: ignore[arg-type]
+        filename = "farmer_directory_import.xlsx" if kind == "farmers" else "vendor_directory_import.xlsx"
+        return Response(
+            content=data,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @api.post("/admin/directory/import/preview", response_model=DirectoryImportPreviewOut)
+    async def directory_import_preview(
+        admin=Depends(admin_dep),
+        shop_id: str = Form(...),
+        kind: str = Form(...),
+        file: UploadFile = File(...),
+    ):
+        if kind not in ("farmers", "vendors"):
+            raise HTTPException(400, "kind must be farmers or vendors")
+        shop = await db.shops.find_one({"id": shop_id}, {"_id": 0, "id": 1})
+        if not shop:
+            raise HTTPException(404, "Merchant not found")
+        name = (file.filename or "").lower()
+        if name and not (name.endswith(".xlsx") or name.endswith(".xlsm")):
+            raise HTTPException(400, "Upload a .xlsx Excel file")
+        raw = await file.read()
+        try:
+            result = await directory_import_mod.preview_import(db, shop_id, kind, raw)  # type: ignore[arg-type]
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        return DirectoryImportPreviewOut.model_validate(result)
+
+    @api.post("/admin/directory/import/confirm", response_model=DirectoryImportConfirmOut)
+    async def directory_import_confirm(
+        body: DirectoryImportConfirmIn,
+        admin=Depends(admin_dep),
+    ):
+        shop = await db.shops.find_one({"id": body.shop_id}, {"_id": 0, "id": 1})
+        if not shop:
+            raise HTTPException(404, "Merchant not found")
+        if len(body.rows) > directory_import_mod.MAX_IMPORT_ROWS:
+            raise HTTPException(400, f"Too many rows (max {directory_import_mod.MAX_IMPORT_ROWS})")
+        result = await directory_import_mod.confirm_import(
+            db,
+            body.shop_id,
+            body.kind,  # type: ignore[arg-type]
+            [r.model_dump() for r in body.rows],
+        )
+        return DirectoryImportConfirmOut.model_validate(result)
