@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Empty, ErrorBanner, Shell } from "../components/ui";
 import { api, setToken, type ApiError } from "../lib/api";
@@ -99,6 +99,8 @@ export default function FreeBagsPage() {
 
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<MerchantHit[]>([]);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const searchSeq = useRef(0);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bags, setBags] = useState("100");
   const [periodKey, setPeriodKey] = useState(defaultPeriod);
@@ -131,8 +133,13 @@ export default function FreeBagsPage() {
   );
 
   async function searchMerchants(term: string) {
+    const seq = ++searchSeq.current;
     try {
-      const res = await api<MerchantHit[]>(`/admin/billing/merchant-search${qs({ q: term || undefined, limit: 80 })}`);
+      const res = await api<MerchantHit[]>(
+        `/admin/billing/merchant-search${qs({ q: term.trim() || undefined, limit: 80 })}`,
+      );
+      if (seq !== searchSeq.current) return;
+      setSearchError(null);
       setHits(res);
       setSelectedIds((prev) => {
         const next = new Set<string>();
@@ -143,11 +150,15 @@ export default function FreeBagsPage() {
         return next;
       });
     } catch (err) {
+      if (seq !== searchSeq.current) return;
       const e = err as ApiError;
       if (e.status === 401) {
         setToken(null);
         nav("/login");
+        return;
       }
+      setHits([]);
+      setSearchError(e.detail || "Merchant search failed. Please try again.");
     }
   }
 
@@ -395,6 +406,8 @@ export default function FreeBagsPage() {
                 );
               })}
             </div>
+          ) : searchError ? (
+            <ErrorBanner message={searchError} />
           ) : (
             <Empty message="No merchants match this search." />
           )}

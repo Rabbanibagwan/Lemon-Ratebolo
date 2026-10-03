@@ -5,6 +5,7 @@ CLAIMED allocations $inc merchant_bag_wallets.free_allocated once (idempotent).
 """
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -521,19 +522,21 @@ def register_free_bag_routes(
         term = (q or "").strip()
         filt: Dict[str, Any] = {}
         if term:
+            # Literal, case-insensitive substring; any run of spaces matches any run of spaces.
+            pattern = r"\s+".join(re.escape(part) for part in term.split())
             filt["$or"] = [
-                {"shop_name": {"$regex": term, "$options": "i"}},
-                {"username": {"$regex": term, "$options": "i"}},
-                {"owner_name": {"$regex": term, "$options": "i"}},
-                {"mobile": {"$regex": term, "$options": "i"}},
+                {"shop_name": {"$regex": pattern, "$options": "i"}},
+                {"username": {"$regex": pattern, "$options": "i"}},
+                {"owner_name": {"$regex": pattern, "$options": "i"}},
+                {"mobile": {"$regex": pattern, "$options": "i"}},
                 {"id": term},
             ]
         cur = (
             db.shops.find(
                 filt,
+                # Inclusion-only: MongoDB rejects mixing inclusions with "password_hash": 0.
                 {
                     "_id": 0,
-                    "password_hash": 0,
                     "id": 1,
                     "shop_name": 1,
                     "username": 1,
