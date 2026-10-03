@@ -1,8 +1,14 @@
 /**
  * Generic ESC/POS command builder. Not tied to any printer brand.
  * Column count follows paper width (58 / 80 / 100 mm).
+ * Note: clampPaperMm is local so Node verify scripts do not pull react-native via thermal-print.
  */
-import { clampPaperMm } from "@/src/utils/thermal-print";
+
+function clampPaperMm(n: unknown, fallback = 80): number {
+  const v = typeof n === "number" ? n : Number(n);
+  if (!Number.isFinite(v)) return fallback;
+  return Math.max(40, Math.min(120, Math.round(v)));
+}
 
 export function escposCols(paperMm: number): number {
   const w = clampPaperMm(paperMm);
