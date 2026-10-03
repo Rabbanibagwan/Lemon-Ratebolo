@@ -168,12 +168,18 @@ export default function VendorBillDetail() {
 
       <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 140 }}>
         <View style={styles.card}>
+          <View style={styles.merchantHead}>
+            <Text style={styles.shopName}>{(profile?.shop_name || session?.shop_name || "").toUpperCase()}</Text>
+            {(() => {
+              const addr = [profile?.address, profile?.village, profile?.taluk, profile?.district, profile?.state]
+                .filter(Boolean)
+                .join(", ");
+              return addr ? <Text style={styles.shopMeta}>{addr}</Text> : null;
+            })()}
+            {profile?.mobile ? <Text style={styles.shopMeta}>Mobile: {profile.mobile}</Text> : null}
+          </View>
           <View style={styles.rowSpread}>
-            <View>
-              <Text style={styles.shopName}>{(profile?.shop_name || session?.shop_name || "").toUpperCase()}</Text>
-              <Text style={styles.subInfo}>{profile?.address || ""}</Text>
-              <Text style={styles.subInfo}>{profile?.mobile || ""}</Text>
-            </View>
+            <Text style={styles.kindLbl}>VENDOR BILL</Text>
             <View style={styles.billBox}>
               <Text style={styles.billBoxLbl}>BILL</Text>
               <Text style={styles.billBoxNo}>{b.bill_code}</Text>
@@ -201,8 +207,8 @@ export default function VendorBillDetail() {
             </View>
           ))}
           <View style={styles.divider} />
-          <Row label={`Goods (×${b.vendor_factor ?? 1} + ₹${b.margin_per_bag}/bag)`} value={money(b.goods_total)} />
-          <Row label={`Commission (${b.total_bags} × ₹${b.commission_per_bag})`} value={money(b.commission_total)} />
+          <Row label="Lemon" value={money(b.goods_total)} />
+          <Row label="Commission" value={money(b.commission_total)} />
           <Row label="Hamali" value={money(b.hamali)} />
           {b.cess > 0 ? <Row label="Cess / Other" value={money(b.cess)} /> : null}
           <View style={styles.netBox}>
@@ -212,7 +218,7 @@ export default function VendorBillDetail() {
           <Row label="Paid" value={money(b.paid)} />
           <Row label="Balance Due" value={money(b.balance)} strong />
 
-          {profile?.bank_account_holder || profile?.bank_account_number ? (
+          {profile?.bank_account_holder || profile?.bank_account_number || profile?.bank_ifsc || profile?.bank_name || profile?.bank_branch ? (
             <>
               <View style={styles.divider} />
               <Text style={styles.section}>Bank</Text>
@@ -220,6 +226,7 @@ export default function VendorBillDetail() {
               {profile?.bank_account_number ? <Text style={styles.subInfo}>A/c No: {profile.bank_account_number}</Text> : null}
               {profile?.bank_ifsc ? <Text style={styles.subInfo}>IFSC: {profile.bank_ifsc}</Text> : null}
               {profile?.bank_name ? <Text style={styles.subInfo}>Bank: {profile.bank_name}</Text> : null}
+              {profile?.bank_branch ? <Text style={styles.subInfo}>Branch: {profile.bank_branch}</Text> : null}
             </>
           ) : null}
 
@@ -306,9 +313,18 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 20, fontWeight: "900", color: colors.onSurface, fontFamily: font.display, letterSpacing: -0.3 },
   headerSub: { fontSize: 11, color: colors.muted, letterSpacing: 1, fontWeight: "700" },
   card: { borderWidth: 2, borderColor: colors.borderStrong, padding: spacing.lg, backgroundColor: colors.surface },
+  merchantHead: { width: "100%", alignItems: "center", marginBottom: spacing.sm },
   rowSpread: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
-  shopName: { fontSize: 20, fontWeight: "900", color: colors.onSurface, fontFamily: font.display, letterSpacing: -0.5 },
+  shopName: {
+    fontSize: 20, fontWeight: "900", color: colors.onSurface, fontFamily: font.display, letterSpacing: -0.5,
+    textAlign: "center", width: "100%",
+  },
+  shopMeta: {
+    fontSize: 11, color: colors.muted, marginTop: 2, fontFamily: font.display,
+    textAlign: "center", width: "100%",
+  },
   subInfo: { fontSize: 11, color: colors.muted, marginTop: 2, fontFamily: font.display },
+  kindLbl: { fontSize: 10, letterSpacing: 2, color: colors.muted, fontWeight: "800", fontFamily: font.display, marginTop: 2 },
   billBox: { borderWidth: 2, borderColor: colors.borderStrong, paddingHorizontal: 10, paddingVertical: 6, alignItems: "flex-end" },
   billBoxLbl: { fontSize: 9, letterSpacing: 1, color: colors.muted, fontWeight: "800" },
   billBoxNo: { fontSize: 15, fontFamily: font.mono, fontWeight: "800", color: colors.onSurface },
@@ -327,11 +343,11 @@ const styles = StyleSheet.create({
   rowLabel: { fontSize: 13, color: colors.muted, fontFamily: font.display },
   rowValue: { fontSize: 14, color: colors.onSurface, fontFamily: font.mono, fontWeight: "700" },
   netBox: {
-    backgroundColor: colors.surfaceInverse, padding: spacing.md, marginTop: 8, marginBottom: 8,
+    backgroundColor: colors.surface, paddingVertical: spacing.md, paddingHorizontal: 0, marginTop: 8, marginBottom: 8,
     flexDirection: "row", justifyContent: "space-between", alignItems: "center",
   },
-  netLbl: { color: colors.onSurfaceInverse, fontFamily: font.display, letterSpacing: 1.5, fontWeight: "900", fontSize: 12 },
-  netVal: { color: colors.onSurfaceInverse, fontFamily: font.mono, fontWeight: "900", fontSize: 22 },
+  netLbl: { color: colors.onSurface, fontFamily: font.display, letterSpacing: 1.5, fontWeight: "900", fontSize: 12 },
+  netVal: { color: colors.onSurface, fontFamily: font.mono, fontWeight: "900", fontSize: 22 },
   footer: { borderTopWidth: 2, borderTopColor: colors.borderStrong, padding: spacing.lg, backgroundColor: colors.surface },
   modalRoot: { flex: 1, justifyContent: "flex-end" },
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.45)" },
