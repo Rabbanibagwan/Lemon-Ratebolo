@@ -14,6 +14,7 @@ import { colors, font, money, spacing } from "@/src/theme";
 import { Button, Input } from "@/src/components/ui";
 import { clampPaperMm, thermalPrintUserMessage } from "@/src/utils/thermal-print";
 import { shareVendorBillPdf, thermalPrintVendorBill } from "@/src/utils/vendor-bill-print";
+import { vendorBillNoBags } from "@/src/utils/vendor-bill-totals";
 import { routeParam } from "@/src/utils/route-params";
 
 export default function VendorBillDetail() {
@@ -208,8 +209,9 @@ export default function VendorBillDetail() {
             </View>
           ))}
           <View style={styles.divider} />
-          <Row label={`Goods (×${b.vendor_factor ?? 1} + ₹${b.margin_per_bag}/bag)`} value={money(b.goods_total)} />
-          <Row label={`Commission (${b.total_bags} × ₹${b.commission_per_bag})`} value={money(b.commission_total)} />
+          <Row label="No. Bags" value={String(vendorBillNoBags(b))} testID="bill-no-bags" />
+          <Row label="Lemon" value={money(b.goods_total)} testID="bill-lemon" />
+          <Row label="Commission" value={money(b.commission_total)} />
           <Row label="Hamali" value={money(b.hamali)} />
           {b.cess > 0 ? <Row label="Cess / Other" value={money(b.cess)} /> : null}
           <View style={styles.netBox}>
@@ -292,9 +294,19 @@ function MetaRow({ label, value }: { label: string; value: string }) {
     </View>
   );
 }
-function Row({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
+function Row({
+  label,
+  value,
+  strong,
+  testID,
+}: {
+  label: string;
+  value: string;
+  strong?: boolean;
+  testID?: string;
+}) {
   return (
-    <View style={styles.rowFlex}>
+    <View style={styles.rowFlex} testID={testID}>
       <Text style={styles.rowLabel}>{label}</Text>
       <Text style={[styles.rowValue, strong && { fontWeight: "900", fontSize: 15 }]}>{value}</Text>
     </View>

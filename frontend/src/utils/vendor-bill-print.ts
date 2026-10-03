@@ -11,6 +11,9 @@ import {
   thermalBaseCss,
   thermalMetrics,
 } from "@/src/utils/thermal-print";
+import { vendorBillNoBags } from "@/src/utils/vendor-bill-totals";
+
+export { vendorBillNoBags } from "@/src/utils/vendor-bill-totals";
 
 function fmt(n: number): string {
   return "₹" + (Number.isFinite(n) ? n : 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -106,7 +109,8 @@ export function renderVendorBillPdfHtml(b: VendorBill, profile: ShopProfile, use
       <tbody>${rows}</tbody>
     </table>
     <div style="margin-top:10px">
-      <div class="trow"><span>Goods</span><span class="mono">${fmt(b.goods_total)}</span></div>
+      <div class="trow"><span>No. Bags</span><span class="mono">${vendorBillNoBags(b)}</span></div>
+      <div class="trow"><span>Lemon</span><span class="mono">${fmt(b.goods_total)}</span></div>
       <div class="trow"><span>Commission</span><span class="mono">${fmt(b.commission_total)}</span></div>
       <div class="trow"><span>Hamali</span><span class="mono">${fmt(b.hamali)}</span></div>
       ${b.cess > 0 ? `<div class="trow"><span>Cess / Other</span><span class="mono">${fmt(b.cess)}</span></div>` : ""}
@@ -150,7 +154,7 @@ export function renderThermalVendorBillHtml(b: VendorBill, profile: ShopProfile,
     <div class="row th"><span class="lot">LOT</span><span class="mid">DETAIL</span><span class="right">AMOUNT</span></div>
     ${lines}
     <div class="hr"></div>
-    <div class="kv"><span>Bags</span><span>${b.total_bags}</span></div>
+    <div class="kv"><span>No. Bags</span><span>${vendorBillNoBags(b)}</span></div>
     <div class="kv"><span>Lemon</span><span>${fmt(b.goods_total)}</span></div>
     <div class="kv"><span>Commission</span><span>${fmt(b.commission_total)}</span></div>
     <div class="kv"><span>Hamali</span><span>${fmt(b.hamali)}</span></div>
