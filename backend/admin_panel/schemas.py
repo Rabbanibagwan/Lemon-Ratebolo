@@ -203,3 +203,48 @@ class ReportMerchantDailyOut(BaseModel):
     from_: str = Field(alias="from")
     to: str
     items: List[ReportMerchantDailyRow]
+
+
+# ----- Directory Import (master data; not working-date scoped) -----
+class DirectoryImportSummary(BaseModel):
+    total_rows: int = 0
+    blank: int = 0
+    invalid: int = 0
+    duplicate: int = 0
+    ready: int = 0
+
+
+class DirectoryImportPreviewRow(BaseModel):
+    row_number: int
+    name: str = ""
+    details: Optional[str] = None
+    status: str
+    message: Optional[str] = None
+
+
+class DirectoryImportPreviewOut(BaseModel):
+    shop_id: str
+    kind: str
+    summary: DirectoryImportSummary
+    rows: List[DirectoryImportPreviewRow]
+
+
+class DirectoryImportConfirmRow(BaseModel):
+    name: str = ""
+    details: Optional[str] = None
+
+
+class DirectoryImportConfirmIn(BaseModel):
+    shop_id: str = Field(min_length=1)
+    kind: str = Field(pattern=r"^(farmers|vendors)$")
+    rows: List[DirectoryImportConfirmRow] = Field(default_factory=list)
+
+
+class DirectoryImportConfirmOut(BaseModel):
+    shop_id: str
+    kind: str
+    imported: int
+    skipped_duplicate: int
+    skipped_invalid: int
+    skipped_blank: int = 0
+    errors: List[Dict[str, Any]] = Field(default_factory=list)

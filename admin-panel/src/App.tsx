@@ -12,6 +12,7 @@ import {
   VendorBillsPage,
 } from "./pages/ListsPages";
 import FreeBagsPage from "./pages/FreeBagsPage";
+import DirectoryImportPage from "./pages/DirectoryImportPage";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const token = localStorage.getItem("lm.admin.token");
@@ -27,6 +28,7 @@ export default function App() {
       <Route path="/dashboard" element={<RequireAuth><DashboardPage /></RequireAuth>} />
       <Route path="/merchants" element={<RequireAuth><MerchantsPage /></RequireAuth>} />
       <Route path="/merchants/:id" element={<RequireAuth><MerchantDetailPage /></RequireAuth>} />
+      <Route path="/directory" element={<RequireAuth><DirectoryImportPage /></RequireAuth>} />
       <Route path="/operations" element={<RequireAuth><OperationsPage /></RequireAuth>} />
       <Route path="/pattis" element={<RequireAuth><PattisPage /></RequireAuth>} />
       <Route path="/vendor-bills" element={<RequireAuth><VendorBillsPage /></RequireAuth>} />

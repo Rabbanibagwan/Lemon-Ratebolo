@@ -49,6 +49,9 @@ export function Shell({
         <NavLink href="/merchants" onNavigate={() => setNavOpen(false)}>
           Merchants
         </NavLink>
+        <NavLink href="/directory" onNavigate={() => setNavOpen(false)}>
+          Directory
+        </NavLink>
         <NavLink href="/operations" onNavigate={() => setNavOpen(false)}>
           Operations
         </NavLink>
