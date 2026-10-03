@@ -280,7 +280,9 @@ class ShopProfile(BaseModel):
     bank_account_number: Optional[str] = Field(default=None, max_length=40)
     bank_ifsc: Optional[str] = Field(default=None, max_length=20)
     bank_branch: Optional[str] = Field(default=None, max_length=120)
+    # Public Merchant UPI VPA for Vendor Bill payment QR (never store PIN/OTP/secrets).
     upi_id: Optional[str] = Field(default=None, max_length=120)
+    upi_name: Optional[str] = Field(default=None, max_length=120)  # optional display name for pn=
     upi_qr_base64: Optional[str] = Field(default=None, max_length=500_000)
 
 
@@ -858,9 +860,21 @@ async def get_shop_profile(user=Depends(current_user)):
 
 @api.put("/shop/profile", response_model=ShopProfileOut)
 async def update_shop_profile(body: ShopProfile, user=Depends(owner_only)):
+    data = body.model_dump()
+    # Normalize/validate public Merchant UPI VPA only (never store PIN/OTP/secrets).
+    upi_raw = (data.get("upi_id") or "").strip()
+    if upi_raw:
+        upi_id = upi_raw.lower()
+        if not re.match(r"^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z][a-zA-Z0-9.\-]{1,63}$", upi_id):
+            raise HTTPException(400, "Invalid Merchant UPI ID (example: merchant@upi)")
+        data["upi_id"] = upi_id
+    else:
+        data["upi_id"] = None
+    if data.get("upi_name"):
+        data["upi_name"] = str(data["upi_name"]).strip() or None
     shop = await db.shops.find_one_and_update(
         {"id": user["shop_id"]},
-        {"$set": {**body.model_dump(), "updated_at": utc_now()}},
+        {"$set": {**data, "updated_at": utc_now()}},
         return_document=True, projection={"_id": 0, "password_hash": 0},
     )
     if not shop:

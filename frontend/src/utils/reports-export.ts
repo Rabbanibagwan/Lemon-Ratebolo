@@ -552,6 +552,7 @@ export async function thermalPrintDriverReport(
 
   const mm = await resolvePrintPaperMm(settings?.thermal_paper_width_mm);
   const html = renderDriverThermalHtml(d, dateISO, shopName, mm, drivers);
+  const escposBase64 = encodeDriverReportEscPos(d, dateISO, shopName, mm, drivers);
 
   if (Platform.OS === "web") {
     if (preview && !preview.closed) {
@@ -563,12 +564,14 @@ export async function thermalPrintDriverReport(
     return;
   }
 
-  // Native: always print the compact Roman HTML table (same as Share / Preview).
+  // Native Android/iOS: DIRECT Bluetooth ESC/POS only.
+  // Never preferHtml / Print.printAsync — that opens Android "Select a printer" (Letter/A4).
+  // Share/PDF remains on shareDriverThermalReport.
   await printThermalDocument({
     html,
-    escposBase64: encodeDriverReportEscPos(d, dateISO, shopName, mm, drivers),
+    escposBase64,
     paperMm: mm,
-    preferHtml: true,
+    requireBluetooth: true,
   });
 }
 
@@ -652,16 +655,19 @@ export function encodeDriverReportEscPos(
     return clip(pt, wPt) + clip(lot, wLot) + clip(farm, wFarm) + payCell + clip(recv, wRecv);
   };
 
+  // Same size hierarchy as Farmer Patti / Vendor Bill merchant header (GS ! big).
   b.init()
     .align("center")
     .bold(true)
-    .size("tall")
+    .size("big")
     .line(ascii((shopName || "LEMON MANDI").toUpperCase()))
     .size("normal")
+    .bold(true)
     .line("DRIVER DETAILS")
     .bold(false)
     .hr()
     .align("left")
+    .applyPrintArea()
     .kv("Driver", ascii(d.driver_name));
   if (d.place) b.kv("Place", ascii(d.place));
   b.kv("Date", dateISO)
@@ -688,8 +694,11 @@ export function encodeDriverReportEscPos(
     .bold(true)
     .kv("TOTAL NET PAYABLE", rupees(totals.total_net_payable))
     .kv("DRV NET RECVD", rupees(totals.driver_received))
-    .bold(false)
-    .cut();
+    .bold(false);
+  // Clearance then cut — same finalize path as Patti / Vendor Bill.
+  b.normalState();
+  b.feed(b.contentClearanceFeed());
+  b.cut();
   return b.toBase64();
 }
 

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Lemon Mandi">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#d4f06a"/>
+      <stop offset="55%" stop-color="#8bc34a"/>
+      <stop offset="100%" stop-color="#2f6b2f"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#102416"/>
+  <ellipse cx="32" cy="34" rx="18" ry="14" fill="url(#g)" transform="rotate(-18 32 34)"/>
+  <path d="M40 18c4 1 7 4 8 8-5-1-9-4-11-8z" fill="#4d7c0f"/>
+  <circle cx="26" cy="30" r="1.4" fill="#1a331a" opacity=".35"/>
+  <circle cx="33" cy="36" r="1.2" fill="#1a331a" opacity=".28"/>
+</svg>
