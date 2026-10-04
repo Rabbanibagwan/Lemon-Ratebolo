@@ -92,7 +92,8 @@ export function encodeFarmerPattiEscPos(
 /**
  * ESC/POS Vendor Bill — same shared layout engine as Farmer Patti.
  * Structure mirrors on-screen Vendor Bill preview (4-col table, Lemon, GRAND TOTAL).
- * No QR. Calculations unchanged.
+ * Merchant QR (uploaded or UPI) is last content, then minimal feed + CUT.
+ * Calculations unchanged.
  */
 export function encodeVendorBillEscPos(bill: VendorBill, profile: ShopProfile, paperMm: number): string {
   // Fresh builder per print — never reuse a prior ESC/POS buffer.
@@ -142,6 +143,7 @@ export function encodeVendorBillEscPos(bill: VendorBill, profile: ShopProfile, p
   }
 
   // Bottom of slip: merchant-uploaded QR (preferred), else generated UPI deep-link QR.
+  // Merchant QR is the LAST printable content — no bank/notes/padding after it.
   const uploaded = String(profile.upi_qr_base64 || "").trim();
   if (uploaded) {
     b.merchantUploadedQrSection(uploaded, paperMm);
@@ -157,10 +159,9 @@ export function encodeVendorBillEscPos(bill: VendorBill, profile: ShopProfile, p
     }
   }
 
-  // Finalize only after last content line — clearance for head→cutter, then cut.
-  b.normalState();
-  b.feed(b.contentClearanceFeed());
-  b.cut();
+  // Immediate cut after last content (Merchant QR). No contentClearanceFeed /
+  // qrClearanceFeed stack — those produced a long blank tail before the cutter.
+  b.cutAfterLastContent();
   return b.toBase64();
 }
 

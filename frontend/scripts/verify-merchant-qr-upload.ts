@@ -51,9 +51,7 @@ async function main() {
     b.bold(true).kv("Balance Due", rupees(23360)).bold(false);
     b.bankDetailsSection(["A/c Name: Test Mandi", "A/c No: 1234567895"]);
     b.merchantUploadedQrSection(b64, mm);
-    b.normalState();
-    b.feed(b.contentClearanceFeed());
-    b.cut();
+    b.cutAfterLastContent();
     const out = b.toBase64();
     const text = Buffer.from(out, "base64").toString("latin1");
     assert(text.includes("BANK DETAILS"), `${mm} bank before QR`);
@@ -63,7 +61,18 @@ async function main() {
     const bankIdx = text.indexOf("BANK DETAILS");
     const qrIdx = text.indexOf("MERCHANT QR CODE");
     assert(bankIdx >= 0 && qrIdx > bankIdx, `${mm} uploaded QR after bank`);
-    console.log(`${mm}mm: PASS raster w=${bmp!.width} h=${bmp!.height} contentDots=${cfg.contentDots}`);
+    // CUT immediately after QR block: GS V 0 (not GS V 65 feed-and-cut).
+    const bin = Buffer.from(out, "base64");
+    let cutAt = -1;
+    for (let i = 0; i < bin.length - 2; i++) {
+      if (bin[i] === 0x1d && bin[i + 1] === 0x56) {
+        cutAt = i;
+        assert(bin[i + 2] === 0x00, `${mm} GS V 0 after Merchant QR`);
+        break;
+      }
+    }
+    assert(cutAt > 0, `${mm} has CUT`);
+    console.log(`${mm}mm: PASS raster w=${bmp!.width} h=${bmp!.height} contentDots=${cfg.contentDots} cut=GS V 0`);
   }
 
   const shop = readFileSync(join(__dirname, "../app/shop-profile.tsx"), "utf8");

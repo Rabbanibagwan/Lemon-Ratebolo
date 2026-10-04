@@ -115,9 +115,7 @@ function encodeBillWithUpi(paperMm: number, upiId: string | null): string {
     });
     if (p) b.merchantUpiQrSection(p, upiId, paperMm);
   }
-  b.normalState();
-  b.feed(b.contentClearanceFeed());
-  b.cut();
+  b.cutAfterLastContent();
   return b.toBase64();
 }
 

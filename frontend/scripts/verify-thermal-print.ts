@@ -132,9 +132,7 @@ function encodeBill(paperMm: number, bankLines: string[]): { b64: string; builde
     amount: bill.balance,
   });
   if (upiPayload) b.merchantUpiQrSection(upiPayload, TEST_MERCHANT_UPI, paperMm);
-  b.normalState();
-  b.feed(b.contentClearanceFeed());
-  b.cut();
+  b.cutAfterLastContent();
   return { b64: b.toBase64(), builder: b };
 }
 
@@ -146,6 +144,29 @@ const LONG_BANK = [
   "Bank: HDFC Bank",
   "Branch: Vijayapura",
 ];
+
+/** Count trailing LF bytes between the last printable ASCII char and the first CUT. */
+function trailingBlankLfBeforeCut(b64: string): number {
+  const bin = Buffer.from(b64, "base64");
+  let cutAt = bin.length;
+  for (let i = 0; i < bin.length - 1; i++) {
+    if (bin[i] === 0x1d && bin[i + 1] === 0x56) {
+      cutAt = i;
+      break;
+    }
+  }
+  let lastPrintable = -1;
+  for (let i = 0; i < cutAt; i++) {
+    const c = bin[i];
+    if (c >= 32 && c < 127) lastPrintable = i;
+  }
+  if (lastPrintable < 0) return cutAt;
+  let lf = 0;
+  for (let i = lastPrintable + 1; i < cutAt; i++) {
+    if (bin[i] === 0x0a) lf++;
+  }
+  return lf;
+}
 
 /** True when every needle appears in decoded text before the first CUT in the buffer. */
 function contentBeforeCut(b64: string, needles: string[]): boolean {
@@ -563,7 +584,9 @@ for (const mm of widths) {
   assert(billAnalysis.lfAfterQrPrint > 0, `${mm} vendor ESC/POS contains QR print (GS ( k)`);
   assert(billAnalysis.shopHeaderCentered, `${mm} vendor merchant header centered`);
   assert(!billAnalysis.netPayableUsesReverse && billAnalysis.reverseOnCount === 0, `${mm} bill no inverse`);
-  assert(billAnalysis.hasCut && billAnalysis.cutIsFeedAndCut, `${mm} vendor cut`);
+  // Vendor Bill: GS V 0 immediately after Merchant QR (not feed-and-cut GS V 65).
+  assert(billAnalysis.hasCut && !billAnalysis.cutIsFeedAndCut, `${mm} vendor cut after QR (GS V 0)`);
+  assert(trailingBlankLfBeforeCut(longEnc.b64) <= 2, `${mm} vendor minimal blank before cut: ${trailingBlankLfBeforeCut(longEnc.b64)}`);
   assert(billAnalysis.gsWDots === cfg.contentDots, `${mm} vendor GS W`);
   assert(billAnalysis.gsLDots === cfg.leftMarginDots, `${mm} vendor GS L`);
   assert(contentBeforeCut(longEnc.b64, ["BANK DETAILS", ...LONG_BANK]), `${mm} long bank before CUT`);
@@ -620,7 +643,12 @@ assert(docs.includes("GRAND TOTAL"), "docs GRAND TOTAL");
 assert(docs.includes("qrSection"), "docs qrSection");
 assert(docs.includes("normalState"), "docs normalState");
 assert(docs.includes("bankDetailsSection"), "docs bankDetailsSection");
-assert(docs.includes("contentClearanceFeed"), "docs contentClearanceFeed");
+assert(docs.includes("cutAfterLastContent"), "Vendor Bill cuts immediately after Merchant QR");
+assert(
+  !/encodeVendorBillEscPos[\s\S]*?feed\(\s*b\.contentClearanceFeed\(\)/.test(docs),
+  "Vendor Bill must not stack contentClearanceFeed after QR",
+);
+assert(/encodeVendorBillEscPos[\s\S]*cutAfterLastContent\(\)/.test(docs), "Vendor Bill calls cutAfterLastContent");
 assert(docs.includes("bank_branch"), "docs bank_branch");
 
 const escposSrc = readFileSync(join(__dirname, "../src/utils/escpos.ts"), "utf8");
@@ -633,7 +661,12 @@ assert(escposSrc.includes("vendorNameRow"), "vendorNameRow present");
 assert(escposSrc.includes("framedMajorTotal"), "framedMajorTotal present");
 assert(escposSrc.includes("merchantUpiQrSection"), "EscPosBuilder.merchantUpiQrSection present");
 assert(escposSrc.includes("merchantUploadedQrSection"), "EscPosBuilder.merchantUploadedQrSection present");
+assert(escposSrc.includes("cutAfterLastContent"), "EscPosBuilder.cutAfterLastContent present");
 assert(escposSrc.includes("rasterBitmap"), "EscPosBuilder.rasterBitmap present");
+const cutAfterSrc = escposSrc.match(/cutAfterLastContent\(\):\s*this\s*\{[\s\S]*?^  \}/m)?.[0] || "";
+assert(/0x1d,\s*0x56,\s*0x00/.test(cutAfterSrc), "cutAfterLastContent uses GS V 0 (no feed-and-cut units)");
+assert(!/qrClearanceFeed/.test(escposSrc.match(/merchantUploadedQrSection\(imageBase64[\s\S]*?^  \}/m)?.[0] || ""), "uploaded QR section has no qrClearanceFeed");
+assert(!/qrClearanceFeed/.test(escposSrc.match(/merchantUpiQrSection\(payload[\s\S]*?^  \}/m)?.[0] || ""), "UPI QR section has no qrClearanceFeed");
 assert(!/reverse\(true\)/.test(escposSrc.match(/majorTotalBox[\s\S]*?^  \}/m)?.[0] || ""), "majorTotalBox no reverse(true)");
 assert(!/reverse\(true\)/.test(escposSrc.match(/framedMajorTotal[\s\S]*?^  \}/m)?.[0] || ""), "framedMajorTotal no reverse(true)");
 const framedSrc = escposSrc.match(/framedMajorTotal[\s\S]*?^  \}/m)?.[0] || "";

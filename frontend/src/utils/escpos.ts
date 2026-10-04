@@ -710,7 +710,8 @@ export class EscPosBuilder {
 
   /**
    * Merchant UPI payment QR on Vendor Bill (ESC/POS GS ( k).
-   * Payload should already be a upi://pay?... deep link. Does not cut.
+   * Payload should already be a upi://pay?... deep link. Does not cut or pad —
+   * caller finalizes with cutAfterLastContent() immediately after this section.
    * Prefer merchantUploadedQrSection when the shop has an uploaded QR image.
    */
   merchantUpiQrSection(payload: string, upiId: string, paperMm?: number): this {
@@ -721,13 +722,12 @@ export class EscPosBuilder {
     this.align("center").bold(true).size("normal").line("PAY VIA UPI").bold(false);
     const module = this.qrModuleSize(paperMm ?? this.paperMm);
     this.normalState().align("center").qr(data, module);
+    // Last printable content: SCAN label (+ optional VPA). No trailing hr/feed.
     this.normalState().align("center").bold(true).line("SCAN TO PAY").bold(false);
     if (vpa) {
       this.align("center").size("normal").wrapped(`Merchant UPI: ${vpa}`);
     }
-    this.normalState().align("left").hr("-");
     this.normalState();
-    this.feed(this.qrClearanceFeed());
     return this;
   }
 
@@ -752,11 +752,13 @@ export class EscPosBuilder {
 
   /**
    * Merchant-uploaded QR image on Vendor Bill (ESC/POS raster).
-   * Printed at the bottom after bank details. Does not cut.
+   * Printed at the bottom after bank details. Quiet zone comes from the image
+   * margins (width capped below contentDots). Does not cut or pad — caller
+   * finalizes with cutAfterLastContent() immediately after this section.
    */
   merchantUploadedQrSection(imageBase64: string, paperMm?: number): this {
     const mm = paperMm ?? this.paperMm;
-    // Leave quiet zone: target ~70% of content width, max per paper.
+    // Quiet zone via margins: target ~70% of content width, max per paper.
     const maxDots =
       mm <= 58 ? Math.min(this.printDots - 16, 288) :
       mm <= 80 ? Math.min(this.printDots - 24, 384) :
@@ -766,10 +768,9 @@ export class EscPosBuilder {
     this.normalState().align("left").hr("-");
     this.align("center").bold(true).size("normal").line("MERCHANT QR CODE").bold(false);
     this.rasterBitmap(bmp);
+    // Last printable content: SCAN label. No trailing hr / clearance feed.
     this.normalState().align("center").bold(true).line("SCAN TO PAY").bold(false);
-    this.normalState().align("left").hr("-");
     this.normalState();
-    this.feed(this.qrClearanceFeed());
     return this;
   }
 
@@ -791,6 +792,8 @@ export class EscPosBuilder {
   /**
    * End of document: restore normal state → short final feed → full cut.
    * Uses GS V 65 n (feed-and-cut). Keeps total slip near ~6" (no huge blank tail).
+   * Farmer Patti / Driver Report use this. Vendor Bill after Merchant QR must use
+   * cutAfterLastContent() instead (GS V 0 — no extra feed-and-cut units).
    */
   cut(): this {
     this.normalState();
@@ -798,6 +801,17 @@ export class EscPosBuilder {
     // GS V 65 n — feed n motion units then full cut (~6–8 mm cutter clearance).
     const n = this.paperMm <= 58 ? 48 : this.paperMm <= 80 ? 56 : 64;
     return this.raw(u8(0x1d, 0x56, 0x41, n & 0xff));
+  }
+
+  /**
+   * Vendor Bill finalize after last content (Merchant QR): minimal LF then CUT.
+   * Uses GS V 0 (full cut, no feed-and-cut units) so the cutter does not dump a
+   * long blank tail. Do not stack contentClearanceFeed / qrClearanceFeed before this.
+   */
+  cutAfterLastContent(): this {
+    this.normalState();
+    // Minimum head→cutter clearance (~1 line). Quiet zone stays in the QR image.
+    return this.feed(1).raw(u8(0x1d, 0x56, 0x00));
   }
 
   /**
