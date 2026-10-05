@@ -3,19 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Payment Information — Lemon Mandi Bag Balance</title>
+    <title>Bag Balance &amp; GST — Lemon Mandi prepaid platform service</title>
     <meta
       name="description"
-      content="Payment information for Lemon Mandi prepaid Bag Balance. Supported payment providers may be enabled for production purchases."
+      content="Bag Balance is a prepaid digital platform service for Lemon Mandi merchants. Pricing reference, GST, and invoice information from Rbolo Info Services Private Limited."
     />
-    <link rel="canonical" href="https://lemonmandi.ratebolo.com/payment.html" />
+    <link rel="canonical" href="https://lemonmandi.ratebolo.com/bag-balance.html" />
     <meta property="og:type" content="website" />
-    <meta property="og:title" content="Payment Information — Lemon Mandi" />
+    <meta property="og:title" content="Bag Balance & GST — Lemon Mandi" />
     <meta
       property="og:description"
-      content="How prepaid Bag Balance purchases work for Lemon Mandi merchants."
+      content="Prepaid digital Bag Balance for Lemon Mandi merchants, including GST and invoice information."
     />
-    <meta property="og:url" content="https://lemonmandi.ratebolo.com/payment.html" />
+    <meta property="og:url" content="https://lemonmandi.ratebolo.com/bag-balance.html" />
     <meta property="og:image" content="https://lemonmandi.ratebolo.com/favicon.svg" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -26,9 +26,9 @@
     />
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
-  <body data-page="payment">
+  <body data-page="bag-balance">
     <a class="skip-link" href="#main">Skip to content</a>
-        <header class="site-header">
+    <header class="site-header">
       <div class="header-inner">
         <a class="brand" href="/" aria-label="Lemon Mandi home">
           <img class="brand-mark" src="/favicon.svg" width="42" height="42" alt="" />
@@ -51,70 +51,86 @@
     </header>
     <main id="main">
       <section class="hero">
-        <p class="hero-kicker">Billing</p>
-        <h1>Payment Information</h1>
+        <p class="hero-kicker">Platform billing</p>
+        <h1>Bag Balance</h1>
         <p class="hero-lead">
-          How Lemon Mandi merchants pay for prepaid Bag Balance — a digital platform service —
-          and how invoices and GST are handled.
+          Bag Balance is a <strong>prepaid digital platform service</strong> for Lemon Mandi
+          merchants. It is not a physical bag product sold over the counter — it is credit used
+          inside the Lemon Mandi application for platform usage.
         </p>
       </section>
       <section class="prose">
-        <h2>What you pay for</h2>
+        <h2>What Bag Balance is</h2>
         <p>
-          Merchants may purchase <strong>prepaid Bag Balance</strong> inside Lemon Mandi. Bag
-          Balance is a prepaid digital platform service for Lemon Mandi merchants (not a physical
-          retail bag shipment). Full explanation, pricing reference, and GST details:
-          <a href="/bag-balance.html">Bag Balance &amp; GST</a>.
+          Lemon Mandi merchants may purchase prepaid “bags” that form a digital wallet balance
+          inside the app. That balance is consumed when eligible merchant activity uses platform
+          capacity (for example owner-side auction / billing workflows configured by the platform).
+          Staff accounts do not consume bags.
         </p>
-        <ul>
-          <li>Reference price in default platform settings: ₹0.25 per bag (exclusive of tax)</li>
-          <li>Default GST: 18% (CGST+SGST or IGST as applicable)</li>
-          <li>Live price, GST rate, free allocation, and purchase availability are controlled by platform billing settings and shown in-app before payment</li>
-        </ul>
-
-        <h2>Payment providers</h2>
         <p>
-          Lemon Mandi may process Bag Balance payments through supported Indian payment providers
-          when those integrations are enabled in production.
-        </p>
-        <p class="meta-note">
-          <strong>Current status:</strong> This website is the public business and policy URL for
-          Lemon Mandi / Rbolo Info Services Private Limited. It does
-          <strong>not</strong> claim that PhonePe (or any other) checkout is already live inside the
-          Lemon Mandi app. Gateway go-live is a separate technical step after onboarding approval.
+          After a successful purchase, merchants can view purchase history and tax invoices inside
+          Lemon Mandi. Unused prepaid bags remain in the merchant wallet according to product rules.
         </p>
 
-        <h2>Confirmation and invoices</h2>
-        <p>
-          Bag balance is credited only after Lemon Mandi’s backend confirms a successful purchase.
-          Tax invoices for paid Bag Balance purchases are available in the application after a
-          purchase is marked paid. Supplier on invoices:
-        </p>
+        <h2>Who sells Bag Balance</h2>
         <p>
           <strong>LEMON MANDI</strong><br />
           Rbolo Info Services Private Limited<br />
-          GSTIN: 29AAMCR3486L1ZI<br />
+          GSTIN: <strong>29AAMCR3486L1ZI</strong><br />
           MUJAWAR MOHALLA BABALESHWAR NAKA IBRAHIM ROZA VIJAYPUR,<br />
           BIJAPUR - 586101
         </p>
 
-        <h2>Security</h2>
+        <h2>Pricing reference</h2>
         <p>
-          When a payment provider is enabled, card/UPI credentials are entered on that provider’s
-          secure checkout experience. Lemon Mandi does not ask merchants to share payment card PINs
-          or UPI PINs with Lemon Mandi staff.
+          Bag Balance pricing is controlled by Lemon Mandi’s platform billing settings and is shown
+          to the merchant in the app before purchase. The application’s default billing
+          configuration uses:
+        </p>
+        <ul>
+          <li><strong>Reference price:</strong> ₹0.25 (INR) per bag (exclusive of tax)</li>
+          <li><strong>GST:</strong> 18% (CGST + SGST for intra-state Karnataka supply, or IGST for inter-state supply, as applicable)</li>
+          <li><strong>HSN / SAC reference:</strong> 998399 (other information technology services), subject to platform configuration</li>
+        </ul>
+        <p>
+          Example for illustration only (₹0.25/bag + 18% GST): buying 1,000 bags → taxable value
+          ₹250.00 → GST ₹45.00 → total payable ₹295.00. Actual amounts on a merchant’s invoice may
+          differ if platform administrators change the live price, GST rate, free allocation, or
+          purchase availability.
+        </p>
+        <p class="meta-note">
+          Free bag allocations (if enabled for a shop) are promotional platform credit and are not
+          the same as a paid Bag Balance purchase.
         </p>
 
-        <h2>Refunds &amp; support</h2>
+        <h2>GST &amp; invoices</h2>
         <p>
-          See the <a href="/refund.html">Refund &amp; Cancellation Policy</a>. For billing help,
-          email <a href="mailto:support@ratebolo.com">support@ratebolo.com</a> or use
+          Paid Bag Balance purchases are treated as a taxable digital platform service sold by
+          Rbolo Info Services Private Limited (GSTIN 29AAMCR3486L1ZI). Tax invoices generated by
+          Lemon Mandi after a purchase is marked paid show supplier details, buyer details (when
+          available), bags × price, GST split, and total.
+        </p>
+
+        <h2>Payments</h2>
+        <p>
+          Merchants complete Bag Balance purchases through the Lemon Mandi application when purchase
+          is enabled. See
+          <a href="/payment.html">Payment Information</a> for how confirmation and invoices work.
+          This page does <strong>not</strong> claim that any specific payment gateway checkout is
+          already live.
+        </p>
+
+        <h2>Refunds</h2>
+        <p>
+          Prepaid Bag Balance is generally non-refundable after bags are credited, except in limited
+          cases described in the
+          <a href="/refund.html">Refund &amp; Cancellation Policy</a>. To request a review, use
           <a href="/contact.html">Contact Us</a>.
         </p>
 
-        <h2>Policies</h2>
+        <h2>Related pages</h2>
         <ul>
-          <li><a href="/bag-balance.html">Bag Balance &amp; GST</a></li>
+          <li><a href="/payment.html">Payment Information</a></li>
           <li><a href="/refund.html">Refund &amp; Cancellation Policy</a></li>
           <li><a href="/terms.html">Terms &amp; Conditions</a></li>
           <li><a href="/privacy.html">Privacy Policy</a></li>
@@ -122,7 +138,7 @@
         </ul>
       </section>
     </main>
-        <footer class="site-footer">
+    <footer class="site-footer">
       <div class="footer-inner">
         <div>
           <div class="footer-brand">LEMON MANDI</div>

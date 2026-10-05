@@ -75,20 +75,26 @@ Then in Render → Static Site → Custom Domains → add `lemonmandi.ratebolo.c
 - GSTIN: 29AAMCR3486L1ZI
 - Address: MUJAWAR MOHALLA BABALESHWAR NAKA IBRAHIM ROZA VIJAYPUR, BIJAPUR - 586101
 
-No public support email/phone is committed here unless already present as an official contact in the Lemon Mandi project.
+No public phone number is invented here. Support email used on this site:
+`support@ratebolo.com` (already published on ratebolo.com).
 
 ## Pages
 
-- `/` Home
-- `/about.html`
+- `/` Home (includes company + policy link section)
+- `/about.html` — About / Business
 - `/features.html`
-- `/contact.html`
-- `/privacy.html`
-- `/terms.html`
-- `/refund.html`
-- `/payment.html`
+- `/contact.html` — Contact Us (`support@ratebolo.com` + registered address)
+- `/bag-balance.html` — Bag Balance prepaid service, pricing reference, GST
+- `/payment.html` — Payment Information
+- `/privacy.html` — Privacy Policy
+- `/terms.html` — Terms & Conditions
+- `/refund.html` — Refund & Cancellation Policy
+
+Header and footer links are **static HTML** (not JavaScript-only) so payment-gateway crawlers can discover policy pages without executing scripts.
 
 ## PhonePe note
 
 This website alone does **not** mean PhonePe checkout is live in the app.
 Use the production URL for onboarding/policy disclosure; implement and verify the gateway separately.
+
+Public support contact used on this site: `support@ratebolo.com` (same domain contact already published on ratebolo.com for Rbolo / RateBolo).

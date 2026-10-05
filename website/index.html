@@ -30,7 +30,27 @@
   </head>
   <body data-page="home">
     <a class="skip-link" href="#main">Skip to content</a>
-    <div id="site-header"></div>
+        <header class="site-header">
+      <div class="header-inner">
+        <a class="brand" href="/" aria-label="Lemon Mandi home">
+          <img class="brand-mark" src="/favicon.svg" width="42" height="42" alt="" />
+          <span class="brand-text">
+            <span class="brand-name">LEMON MANDI</span>
+            <span class="brand-legal">Rbolo Info Services Private Limited</span>
+          </span>
+        </a>
+        <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+        <nav class="site-nav" id="site-nav" aria-label="Primary">
+          <a href="/" data-nav="home">Home</a>
+          <a href="/about.html" data-nav="about">About</a>
+          <a href="/features.html" data-nav="features">Features</a>
+          <a href="/bag-balance.html" data-nav="bag-balance">Bag Balance</a>
+          <a href="/payment.html" data-nav="payment">Payments</a>
+          <a href="/contact.html" data-nav="contact">Contact</a>
+          <a class="btn btn-primary" href="/contact.html">Get started</a>
+        </nav>
+      </div>
+    </header>
     <main id="main">
       <section class="hero">
         <p class="hero-kicker">Product by Rbolo Info Services Private Limited</p>
@@ -71,7 +91,11 @@
           </article>
           <article class="card">
             <h3>Bag Balance</h3>
-            <p>Prepaid bag usage wallet for platform billing, purchases, invoices, and history.</p>
+            <p>
+              Prepaid digital platform credit for Lemon Mandi merchants — purchases, GST invoices,
+              and usage history.
+              <a href="/bag-balance.html">Bag Balance &amp; GST details</a>
+            </p>
           </article>
           <article class="card">
             <h3>Reports</h3>
@@ -89,7 +113,7 @@
       </section>
 
       <section class="section">
-        <h2>Company</h2>
+        <h2>Company / Business</h2>
         <div class="prose">
           <p><strong>LEMON MANDI</strong></p>
           <p>Rbolo Info Services Private Limited</p>
@@ -98,11 +122,79 @@
             MUJAWAR MOHALLA BABALESHWAR NAKA IBRAHIM ROZA VIJAYPUR,<br />
             BIJAPUR - 586101
           </p>
-          <p><a href="/contact.html">Full contact details</a> · <a href="/payment.html">Payment information</a></p>
+          <p>
+            Email:
+            <a href="mailto:support@ratebolo.com">support@ratebolo.com</a>
+          </p>
+          <p>
+            <a href="/about.html">About / Business</a> ·
+            <a href="/contact.html">Contact Us</a> ·
+            <a href="/payment.html">Payment Information</a> ·
+            <a href="/bag-balance.html">Bag Balance &amp; GST</a>
+          </p>
+        </div>
+      </section>
+
+      <section class="section" id="policies">
+        <h2>Policies &amp; information</h2>
+        <p>
+          These pages are publicly available for customers and payment-gateway verification.
+          Every link below is also listed in the site footer.
+        </p>
+        <div class="feature-grid policy-grid">
+          <article class="card">
+            <h3><a href="/about.html">About / Business</a></h3>
+            <p>Who Lemon Mandi is for and the legal business entity behind the product.</p>
+          </article>
+          <article class="card">
+            <h3><a href="/contact.html">Contact Us</a></h3>
+            <p>Registered address, GSTIN, and support email for business and refund requests.</p>
+          </article>
+          <article class="card">
+            <h3><a href="/privacy.html">Privacy Policy</a></h3>
+            <p>How Lemon Mandi handles merchant and application data.</p>
+          </article>
+          <article class="card">
+            <h3><a href="/terms.html">Terms &amp; Conditions</a></h3>
+            <p>Basic terms for using the Lemon Mandi application and related services.</p>
+          </article>
+          <article class="card">
+            <h3><a href="/refund.html">Refund &amp; Cancellation</a></h3>
+            <p>When Bag Balance purchases may or may not be refunded, and how to request support.</p>
+          </article>
+          <article class="card">
+            <h3><a href="/payment.html">Payment Information</a></h3>
+            <p>How prepaid Bag Balance payments and invoices work for merchants.</p>
+          </article>
+          <article class="card">
+            <h3><a href="/bag-balance.html">Bag Balance &amp; GST</a></h3>
+            <p>Prepaid digital platform service explanation, pricing reference, and GST details.</p>
+          </article>
         </div>
       </section>
     </main>
-    <div id="site-footer"></div>
+        <footer class="site-footer">
+      <div class="footer-inner">
+        <div>
+          <div class="footer-brand">LEMON MANDI</div>
+          <div class="footer-legal">Rbolo Info Services Private Limited</div>
+          <div class="footer-legal footer-gstin">GSTIN: 29AAMCR3486L1ZI</div>
+          <div class="footer-legal">MUJAWAR MOHALLA BABALESHWAR NAKA IBRAHIM ROZA VIJAYPUR, BIJAPUR - 586101</div>
+          <div class="footer-legal"><a href="mailto:support@ratebolo.com">support@ratebolo.com</a></div>
+        </div>
+        <nav class="footer-links" aria-label="Footer">
+          <a href="/about.html" data-nav="about">About / Business</a>
+          <a href="/contact.html" data-nav="contact">Contact Us</a>
+          <a href="/bag-balance.html" data-nav="bag-balance">Bag Balance &amp; GST</a>
+          <a href="/payment.html" data-nav="payment">Payment Information</a>
+          <a href="/privacy.html" data-nav="privacy">Privacy Policy</a>
+          <a href="/terms.html" data-nav="terms">Terms &amp; Conditions</a>
+          <a href="/refund.html" data-nav="refund">Refund &amp; Cancellation</a>
+          <a href="/features.html" data-nav="features">Features</a>
+        </nav>
+        <p class="footer-legal">© <span data-footer-year>2026</span> Rbolo Info Services Private Limited. Lemon Mandi is a product of Rbolo Info Services Private Limited.</p>
+      </div>
+    </footer>
     <script type="module" src="/src/site.js"></script>
   </body>
 </html>

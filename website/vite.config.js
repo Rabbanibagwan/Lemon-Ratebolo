@@ -13,6 +13,7 @@ const pages = [
   "terms",
   "refund",
   "payment",
+  "bag-balance",
 ];
 
 export default defineConfig({
