@@ -77,12 +77,6 @@ export default function Auction() {
     load(`${yyyy}-${mm}-${dd}`);
   };
 
-  const openDriverModal = () => {
-    setDrivers(day?.drivers?.length ? [...day.drivers] : [{ range_from: 1, range_to: 100, name: "", place: "", bhada_per_bag: 0 }]);
-    setSaveDriverError(null);
-    setShowDriverModal(true);
-  };
-
   const closeDriverModal = (opts?: { returnHome?: boolean }) => {
     setShowDriverModal(false);
     setSaveDriverError(null);
@@ -166,10 +160,8 @@ export default function Auction() {
             <Ionicons name="calendar-outline" size={14} color={colors.onSurface} />
           </Pressable>
         </View>
-        <Pressable style={styles.headerBtn} onPress={openDriverModal} testID="edit-drivers">
-          <Ionicons name="car-outline" size={16} color={colors.onSurface} />
-          <Text style={styles.headerBtnText}>DRIVERS</Text>
-        </Pressable>
+        {/* SET DRIVER / Driver Day Setup is opened from Dashboard only (quick-set-driver).
+            Keep modal + editDrivers=1 param handling so Dashboard shortcut still works. */}
       </View>
 
       {showDatePicker ? (
@@ -193,7 +185,9 @@ export default function Auction() {
       {stats.drivers === 0 ? (
         <View style={styles.warnBox}>
           <Ionicons name="warning-outline" size={16} color={colors.warning} />
-          <Text style={styles.warnText}>Set up drivers first (top-right) — driver + bhada auto-fills per lot.</Text>
+          <Text style={styles.warnText}>
+            Set up drivers from Dashboard → SET DRIVER — driver + bhada auto-fills per lot.
+          </Text>
         </View>
       ) : null}
 
@@ -274,7 +268,7 @@ export default function Auction() {
         }}
       />
 
-      {/* Driver Setup Modal — single source of truth for Dashboard SET DRIVER + Auction DRIVERS */}
+      {/* Driver Setup Modal — opened from Dashboard SET DRIVER (editDrivers=1). Not shown as an Auction header action. */}
       <Modal visible={showDriverModal} transparent animationType="slide" onRequestClose={() => closeDriverModal()}>
         <View style={styles.modalRoot}>
           <Pressable style={styles.backdrop} onPress={() => closeDriverModal()} />
@@ -385,11 +379,6 @@ const styles = StyleSheet.create({
   title: { fontSize: 22, fontWeight: "900", color: colors.onSurface, fontFamily: font.display, letterSpacing: -0.5 },
   subtitle: { fontSize: 12, color: colors.muted, fontFamily: font.mono, fontWeight: "700" },
   dateTap: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 2, alignSelf: "flex-start" },
-  headerBtn: {
-    flexDirection: "row", alignItems: "center", gap: 6,
-    borderWidth: 2, borderColor: colors.borderStrong, paddingHorizontal: 12, paddingVertical: 8,
-  },
-  headerBtnText: { color: colors.onSurface, fontFamily: font.display, fontWeight: "800", letterSpacing: 1, fontSize: 12 },
 
   statsRow: {
     flexDirection: "row", gap: spacing.sm,
