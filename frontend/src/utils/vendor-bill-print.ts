@@ -7,6 +7,7 @@ import { ShopProfile, VendorBill } from "@/src/api";
 import { printThermalDocument } from "@/src/utils/thermal-connection";
 import { encodeVendorBillEscPos } from "@/src/utils/thermal-escpos-docs";
 import { resolvePrintPaperMm } from "@/src/utils/printer-prefs";
+import { buildVendorBillPrintDocument, logPrintDocument } from "@/src/utils/print-document";
 import {
   thermalBaseCss,
   thermalMetrics,
@@ -19,13 +20,14 @@ function escapeHtml(s: string): string {
   return String(s || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
 }
 
-/** Shop Profile bank block — same fields as Vendor Bill screen. */
+/** Shop Profile bank block — same fields as Vendor Bill screen + ESC/POS. */
 function bankLines(profile: ShopProfile): { label: string; value: string }[] {
   const rows: { label: string; value: string }[] = [];
   if (profile.bank_account_holder) rows.push({ label: "A/c Name", value: profile.bank_account_holder });
   if (profile.bank_account_number) rows.push({ label: "A/c No", value: profile.bank_account_number });
   if (profile.bank_ifsc) rows.push({ label: "IFSC", value: profile.bank_ifsc });
   if (profile.bank_name) rows.push({ label: "Bank", value: profile.bank_name });
+  if (profile.bank_branch) rows.push({ label: "Branch", value: profile.bank_branch });
   return rows;
 }
 
@@ -44,8 +46,8 @@ function renderBankThermalHtml(profile: ShopProfile): string {
   if (!rows.length) return "";
   return `
     <div class="hr"></div>
-    <div class="center bold">BANK DETAILS</div>
-    ${rows.map((r) => `<div class="kv"><span class="k">${escapeHtml(r.label)}</span><span class="v wrap">${escapeHtml(r.value)}</span></div>`).join("")}
+    <div class="center bold bankTitle">BANK DETAILS</div>
+    ${rows.map((r) => `<div class="kv bankRow"><span class="k">${escapeHtml(r.label)}</span><span class="v wrap">${escapeHtml(r.value)}</span></div>`).join("")}
   `;
 }
 
@@ -106,7 +108,7 @@ export function renderVendorBillPdfHtml(b: VendorBill, profile: ShopProfile, use
       <tbody>${rows}</tbody>
     </table>
     <div style="margin-top:10px">
-      <div class="trow"><span>Goods</span><span class="mono">${fmt(b.goods_total)}</span></div>
+      <div class="trow"><span>Lemon</span><span class="mono">${fmt(b.goods_total)}</span></div>
       <div class="trow"><span>Commission</span><span class="mono">${fmt(b.commission_total)}</span></div>
       <div class="trow"><span>Hamali</span><span class="mono">${fmt(b.hamali)}</span></div>
       ${b.cess > 0 ? `<div class="trow"><span>Cess / Other</span><span class="mono">${fmt(b.cess)}</span></div>` : ""}
@@ -121,14 +123,17 @@ export function renderVendorBillPdfHtml(b: VendorBill, profile: ShopProfile, use
   </body></html>`;
 }
 
-/** Thermal Vendor Bill for 58 / 80 / 100 mm — no app UI. */
+/** Thermal Vendor Bill for 58 / 80 / 100 mm — mirrors on-screen preview (master). */
 export function renderThermalVendorBillHtml(b: VendorBill, profile: ShopProfile, paperMm: number = 80): string {
   const m = thermalMetrics(paperMm);
   const addr = [profile.address, profile.village, profile.taluk, profile.district, profile.state].filter(Boolean).join(", ");
+  const shop = (profile.shop_name || "").trim().toUpperCase();
+  const mobile = (profile.mobile || "").trim();
   const lines = b.lines.map((l) => `
     <div class="row">
       <span class="lot">${escapeHtml(l.lot_no)}</span>
-      <span class="mid wrap">${escapeHtml(l.farmer_name)} · ${l.bags}×${fmt(l.vendor_rate)}</span>
+      <span class="farm">${escapeHtml(l.farmer_name)}</span>
+      <span class="bags">${l.bags} × ${fmt(l.vendor_rate)}</span>
       <span class="right">${fmt(l.amount)}</span>
     </div>`).join("");
   return `
@@ -137,27 +142,32 @@ export function renderThermalVendorBillHtml(b: VendorBill, profile: ShopProfile,
   <title>${escapeHtml(b.bill_code)}</title>
   <style>${thermalBaseCss(m)}</style></head><body>
   <div id="slip" class="vendor">
-    <div class="center big bold wrap">${escapeHtml((profile.shop_name || "").toUpperCase())}</div>
-    ${addr ? `<div class="center addr wrap">${escapeHtml(addr)}</div>` : ""}
-    ${profile.mobile ? `<div class="center addr">${escapeHtml(profile.mobile)}</div>` : ""}
-    <div class="center bold">VENDOR BILL</div>
+    <div class="merchant-head">
+      ${shop ? `<div class="shop wrap">${escapeHtml(shop)}</div>` : ""}
+      ${addr ? `<div class="addr wrap">${escapeHtml(addr)}</div>` : ""}
+      ${mobile ? `<div class="addr">Mobile: ${escapeHtml(mobile)}</div>` : ""}
+    </div>
+    <div class="patti-head">
+      <div class="patti-head-main">
+        <div class="kind">VENDOR BILL</div>
+      </div>
+      <div class="numBox"><div class="numLabel">BILL</div><div class="num">${escapeHtml(b.bill_code)}</div></div>
+    </div>
     <div class="hr"></div>
-    <div class="kv"><span class="k">Bill</span><span class="bold">${escapeHtml(b.bill_code)}</span></div>
-    <div class="kv"><span class="k">Date</span><span class="v">${escapeHtml(b.date)}</span></div>
-    <div class="kv vendor"><span class="k">Vendor</span><span class="bold v wrap">${escapeHtml(b.vendor_name)}</span></div>
-    ${b.vendor_details ? `<div class="kv"><span class="k">Details</span><span class="v wrap">${escapeHtml(b.vendor_details)}</span></div>` : ""}
+    <div class="kv vendor"><span class="k">VENDOR</span><span class="bold v wrap">${escapeHtml(b.vendor_name)}</span></div>
+    ${b.vendor_details ? `<div class="kv"><span class="k">DETAILS</span><span class="v wrap">${escapeHtml(b.vendor_details)}</span></div>` : ""}
+    <div class="kv"><span class="k">DATE</span><span class="v">${escapeHtml(b.date)}</span></div>
     <div class="hr"></div>
-    <div class="row th"><span class="lot">LOT</span><span class="mid">DETAIL</span><span class="right">AMOUNT</span></div>
+    <div class="row th"><span class="lot">LOT</span><span class="farm">FARMER</span><span class="bags">BAGS × RATE</span><span class="right">AMOUNT</span></div>
     ${lines}
     <div class="hr"></div>
-    <div class="kv"><span>Bags</span><span>${b.total_bags}</span></div>
     <div class="kv"><span>Lemon</span><span>${fmt(b.goods_total)}</span></div>
     <div class="kv"><span>Commission</span><span>${fmt(b.commission_total)}</span></div>
     <div class="kv"><span>Hamali</span><span>${fmt(b.hamali)}</span></div>
-    ${b.cess > 0 ? `<div class="kv"><span>Cess</span><span>${fmt(b.cess)}</span></div>` : ""}
-    <div class="netbox"><span class="bold">TOTAL</span><span class="huge">${fmt(b.grand_total)}</span></div>
+    ${b.cess > 0 ? `<div class="kv"><span>Cess / Other</span><span>${fmt(b.cess)}</span></div>` : ""}
+    <div class="netbox"><span class="bold">GRAND TOTAL</span><span class="huge">${fmt(b.grand_total)}</span></div>
     <div class="kv"><span>Paid</span><span>${fmt(b.paid)}</span></div>
-    <div class="kv bold"><span>Balance</span><span>${fmt(b.balance)}</span></div>
+    <div class="kv bold"><span>Balance Due</span><span>${fmt(b.balance)}</span></div>
     ${renderBankThermalHtml(profile)}
     ${b.notes ? `<div class="center wrap" style="margin-top:4px">${escapeHtml(b.notes)}</div>` : ""}
   </div>
@@ -170,6 +180,8 @@ export async function thermalPrintVendorBill(
   paperMm?: number,
 ): Promise<void> {
   const mm = await resolvePrintPaperMm(paperMm);
+  // Canonical document — shared values for HTML + ESC/POS (no dual total math).
+  logPrintDocument(buildVendorBillPrintDocument(b, profile, { paperMm: mm }));
   const html = renderThermalVendorBillHtml(b, profile, mm);
   await printThermalDocument({
     html,
