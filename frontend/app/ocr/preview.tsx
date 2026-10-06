@@ -15,6 +15,7 @@ import { PartyPicker, findExactParty } from "@/src/components/PartyPicker";
 import { colors, font, spacing } from "@/src/theme";
 import { thermalPrintAndMark, canUserPrintPatti } from "@/src/utils/patti-print";
 import { clampPaperMm } from "@/src/utils/thermal-print";
+import { fuzzyMatchVendorId, resolveOcrFarmerId } from "@/src/utils/ocr-party-match";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
 import { useAuth } from "@/src/context/AuthContext";
 import { handleBagBillingError, isInsufficientBagBalance } from "@/src/utils/bag-billing";
@@ -63,38 +64,6 @@ function splitLegacyLot(s?: string | null): { serial: string; total: string } {
   if (m) return { serial: m[1], total: m[2] };
   const m2 = String(s).trim().match(/^(\d+)/);
   return { serial: m2 ? m2[1] : "", total: "" };
-}
-
-function norm(s: string): string { return (s || "").toLowerCase().replace(/[^a-z0-9]/g, ""); }
-function lev(a: string, b: string): number {
-  if (a === b) return 0;
-  if (!a.length) return b.length;
-  if (!b.length) return a.length;
-  const dp = new Array(b.length + 1).fill(0).map((_, i) => i);
-  for (let i = 1; i <= a.length; i++) {
-    let prev = dp[0]; dp[0] = i;
-    for (let j = 1; j <= b.length; j++) {
-      const tmp = dp[j];
-      dp[j] = a[i - 1] === b[j - 1] ? prev : Math.min(prev, dp[j - 1], dp[j]) + 1;
-      prev = tmp;
-    }
-  }
-  return dp[b.length];
-}
-function fuzzyMatchId(input: string, list: { id: string; name: string }[]): string | null {
-  const q = norm(input);
-  if (!q || q.length < 2 || !list.length) return null;
-  let best: { id: string; score: number } | null = null;
-  for (const item of list) {
-    const t = norm(item.name);
-    if (!t) continue;
-    if (t === q) return item.id;
-    if (t.startsWith(q) || q.startsWith(t) || t.includes(q) || q.includes(t)) return item.id;
-    const d = lev(q, t);
-    const rel = 1 - d / Math.max(q.length, t.length);
-    if (rel >= 0.72 && (!best || rel > best.score)) best = { id: item.id, score: rel };
-  }
-  return best ? best.id : null;
 }
 
 function rowsToLots(raw: any[]): LotDraft[] {
@@ -209,12 +178,15 @@ export default function OcrPreview() {
           api.get<Vendor[]>("/vendors"),
         ]);
         setDay(d); setFarmers(f); setVendors(v);
+        const farmerList = f.map((x) => ({ id: x.id, name: x.name }));
+        const vendorList = v.map((x) => ({ id: x.id, name: x.name }));
         setLots((xs) => xs.map((lot) => ({
           ...lot,
-          farmer_id: lot.farmer_id || fuzzyMatchId(lot.farmer_name, f.map((x) => ({ id: x.id, name: x.name }))),
+          // Exact match only — never auto-upgrade OCR "AAM" to master "AAMG".
+          farmer_id: resolveOcrFarmerId(lot.farmer_name, lot.farmer_id, farmerList),
           vendors: lot.vendors.map((vd) => ({
             ...vd,
-            vendor_id: vd.vendor_id || fuzzyMatchId(vd.vendor_name, v.map((x) => ({ id: x.id, name: x.name }))),
+            vendor_id: vd.vendor_id || fuzzyMatchVendorId(vd.vendor_name, vendorList),
           })),
         })));
       } catch { /* silent */ }
@@ -467,18 +439,17 @@ export default function OcrPreview() {
 
       updateLot(lot.key, { saving: true, status: "saving", error: null });
       try {
-        let fid =
-          lot.farmer_id ||
-          fuzzyMatchId(lot.farmer_name, farmers.map((x) => ({ id: x.id, name: x.name })));
+        const farmerList = farmers.map((x) => ({ id: x.id, name: x.name }));
+        // Exact OCR name only — do not fuzzy-link to a longer existing farmer master.
+        let fid = resolveOcrFarmerId(lot.farmer_name, lot.farmer_id, farmerList);
         if (!fid) fid = await findOrCreateFarmer(lot.farmer_name);
         if (!fid) throw new Error("Failed to find/create farmer");
 
         const sales: { vendor_id: string; bags: number; rate_per_bag: number }[] = [];
+        const vendorList = vendors.map((x) => ({ id: x.id, name: x.name }));
         for (const v of lot.vendors) {
           if (!v.vendor_name.trim() || !(Number(v.bags) > 0)) continue;
-          let vid =
-            v.vendor_id ||
-            fuzzyMatchId(v.vendor_name, vendors.map((x) => ({ id: x.id, name: x.name })));
+          let vid = v.vendor_id || fuzzyMatchVendorId(v.vendor_name, vendorList);
           if (!vid) vid = await findOrCreateVendor(v.vendor_name);
           if (!vid) throw new Error("Failed to find/create vendor");
           sales.push({ vendor_id: vid, bags: Number(v.bags), rate_per_bag: Number(v.rate_per_bag) });
