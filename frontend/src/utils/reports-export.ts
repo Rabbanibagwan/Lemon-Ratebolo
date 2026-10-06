@@ -14,8 +14,6 @@ import {
   estimateThermalHeightMm,
   clampPaperMm,
   openThermalPreviewWindow,
-  fillThermalPreviewAndPrint,
-  showInPageThermalPreview,
   openPdfBytesPreviewWeb,
 } from "@/src/utils/thermal-print";
 import { buildXlsxBytes, bytesToBase64 } from "@/src/utils/simple-xlsx";
@@ -545,30 +543,15 @@ export async function thermalPrintDriverReport(
   settings?: Settings | null,
   drivers?: DriverRangeRef[],
 ): Promise<void> {
-  // CRITICAL (web): open the preview window synchronously during the button click
-  // before any await — otherwise browsers block / null the popup.
-  const preview =
-    Platform.OS === "web" ? openThermalPreviewWindow(`Driver ${d.driver_name || "report"}`) : null;
-
+  // Driver Details PRINT must use the connected Bluetooth thermal printer (ESC/POS),
+  // same connection path as Farmer Patti — never the OS/system print dialog.
   const mm = await resolvePrintPaperMm(settings?.thermal_paper_width_mm);
   const html = renderDriverThermalHtml(d, dateISO, shopName, mm, drivers);
-
-  if (Platform.OS === "web") {
-    if (preview && !preview.closed) {
-      await fillThermalPreviewAndPrint(preview, html, mm);
-      return;
-    }
-    // Popup blocked (Cursor/embedded browser, strict blockers): visible in-page preview.
-    showInPageThermalPreview(html, `Driver ${d.driver_name || "report"} — Print`);
-    return;
-  }
-
-  // Native: always print the compact Roman HTML table (same as Share / Preview).
   await printThermalDocument({
     html,
     escposBase64: encodeDriverReportEscPos(d, dateISO, shopName, mm, drivers),
     paperMm: mm,
-    preferHtml: true,
+    requireBluetooth: true,
   });
 }
 
@@ -687,8 +670,13 @@ export function encodeDriverReportEscPos(
     .kv("TOTAL BHADA", rupees(totals.total_bhada))
     .bold(true)
     .kv("TOTAL NET PAYABLE", rupees(totals.total_net_payable))
-    .kv("DRV NET RECVD", rupees(totals.driver_received))
     .bold(false)
+    .wrapped("TOTAL NET PAYABLE RECEIVED BY DRIVER")
+    .bold(true)
+    .align("right")
+    .line(rupees(totals.driver_received))
+    .bold(false)
+    .align("left")
     .cut();
   return b.toBase64();
 }
