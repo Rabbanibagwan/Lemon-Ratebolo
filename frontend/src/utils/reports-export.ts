@@ -14,11 +14,15 @@ import {
   estimateThermalHeightMm,
   clampPaperMm,
   openThermalPreviewWindow,
-  fillThermalPreviewAndPrint,
-  showInPageThermalPreview,
   openPdfBytesPreviewWeb,
 } from "@/src/utils/thermal-print";
 import { buildXlsxBytes, bytesToBase64 } from "@/src/utils/simple-xlsx";
+import {
+  encodeDriverDetailsReportEscPos,
+  encodeVendorDetailsReportEscPos,
+} from "@/src/utils/reports-thermal-escpos";
+
+export { encodeDriverDetailsReportEscPos, encodeVendorDetailsReportEscPos };
 
 /** Auction-day driver ranges used for Entry Book "driver receiving". */
 export type DriverRangeRef = Pick<DriverRange, "range_from" | "range_to" | "name">;
@@ -545,30 +549,164 @@ export async function thermalPrintDriverReport(
   settings?: Settings | null,
   drivers?: DriverRangeRef[],
 ): Promise<void> {
-  // CRITICAL (web): open the preview window synchronously during the button click
-  // before any await — otherwise browsers block / null the popup.
-  const preview =
-    Platform.OS === "web" ? openThermalPreviewWindow(`Driver ${d.driver_name || "report"}`) : null;
-
+  // Legacy per-driver detail layout — kept for SHARE PDF parity helpers.
+  // Reports → Driver Details PRINT uses thermalPrintDriverDetailsReport (summary columns).
   const mm = await resolvePrintPaperMm(settings?.thermal_paper_width_mm);
   const html = renderDriverThermalHtml(d, dateISO, shopName, mm, drivers);
-
-  if (Platform.OS === "web") {
-    if (preview && !preview.closed) {
-      await fillThermalPreviewAndPrint(preview, html, mm);
-      return;
-    }
-    // Popup blocked (Cursor/embedded browser, strict blockers): visible in-page preview.
-    showInPageThermalPreview(html, `Driver ${d.driver_name || "report"} — Print`);
-    return;
-  }
-
-  // Native: always print the compact Roman HTML table (same as Share / Preview).
   await printThermalDocument({
     html,
     escposBase64: encodeDriverReportEscPos(d, dateISO, shopName, mm, drivers),
     paperMm: mm,
-    preferHtml: true,
+    requireBluetooth: true,
+  });
+}
+
+export function renderDriverDetailsReportThermalHtml(
+  drivers: DriverSummary[],
+  dateISO: string,
+  shopName: string,
+  paperMm: number = 80,
+): string {
+  const m = thermalMetrics(paperMm);
+  const compact = paperMm <= 58;
+  const thFs = compact ? 7 : paperMm <= 80 ? 7.5 : 8.5;
+  const tdFs = compact ? 8 : paperMm <= 80 ? 8.5 : 9.5;
+  const headFs = compact ? 13 : paperMm <= 80 ? 15 : 17;
+  let totalBags = 0;
+  let totalBhada = 0;
+  const rows = drivers
+    .map((d) => {
+      totalBags += d.total_bags || 0;
+      totalBhada += d.total_bhada || 0;
+      return `<tr>
+        <td class="name">${escHtml(d.driver_name || "-")}</td>
+        <td class="num">${escHtml(d.lot_from || "-")}</td>
+        <td class="num">${escHtml(d.lot_to || "-")}</td>
+        <td class="num">${d.total_bags ?? 0}</td>
+        <td class="amt">${fmtMoney(d.total_bhada || 0)}</td>
+      </tr>`;
+    })
+    .join("");
+  return `<!doctype html><html><head><meta charset="utf-8"/>
+  <meta name="viewport" content="width=${m.widthPx}, initial-scale=1"/>
+  <title>Driver Details</title>
+  <style>${thermalBaseCss(m)}
+    .shop { font-size:${headFs}px; font-weight:900; text-align:center; }
+    .title { font-size:${tdFs}px; font-weight:900; text-align:center; }
+    table { width:100%; border-collapse:collapse; table-layout:fixed; margin-top:4px; }
+    col.c-name { width:34%; } col.c-from { width:14%; } col.c-to { width:14%; }
+    col.c-bags { width:14%; } col.c-bhada { width:24%; }
+    th { font-size:${thFs}px; font-weight:900; text-align:left; border-bottom:1.5px solid #000; padding:2px 1px; }
+    th.num, td.num, th.amt, td.amt { text-align:right; }
+    td { font-size:${tdFs}px; font-weight:700; border-bottom:0.5px solid #000; padding:2px 1px; vertical-align:top; }
+    td.name { overflow-wrap:anywhere; word-break:break-word; }
+  </style></head><body><div id="slip">
+    <div class="shop">${escHtml((shopName || "LEMON MANDI").toUpperCase())}</div>
+    <div class="title">DRIVER DETAILS</div>
+    <div class="hr"></div>
+    <div class="kv"><span class="k">Date</span><span>${escHtml(dateISO)}</span></div>
+    <div class="hr"></div>
+    <table>
+      <colgroup>
+        <col class="c-name"/><col class="c-from"/><col class="c-to"/><col class="c-bags"/><col class="c-bhada"/>
+      </colgroup>
+      <thead><tr>
+        <th>Driver Name</th><th class="num">From</th><th class="num">To</th>
+        <th class="num">No. of Bags</th><th class="amt">Total Bhada</th>
+      </tr></thead>
+      <tbody>${rows || `<tr><td colspan="5" style="text-align:center">No drivers</td></tr>`}</tbody>
+    </table>
+    <div class="hr"></div>
+    <div class="kv"><span>TOTAL BAGS</span><span class="bold">${totalBags}</span></div>
+    <div class="kv"><span>TOTAL BHADA</span><span class="bold">${fmtMoney(totalBhada)}</span></div>
+  </div></body></html>`;
+}
+
+export async function thermalPrintDriverDetailsReport(
+  drivers: DriverSummary[],
+  dateISO: string,
+  shopName: string,
+  settings?: Settings | null,
+): Promise<void> {
+  const mm = await resolvePrintPaperMm(settings?.thermal_paper_width_mm);
+  const html = renderDriverDetailsReportThermalHtml(drivers, dateISO, shopName, mm);
+  await printThermalDocument({
+    html,
+    escposBase64: encodeDriverDetailsReportEscPos(drivers, dateISO, shopName, mm),
+    paperMm: mm,
+    requireBluetooth: true,
+  });
+}
+
+export function renderVendorDetailsReportThermalHtml(
+  bills: VendorBill[],
+  dateISO: string,
+  shopName: string,
+  paperMm: number = 80,
+): string {
+  const m = thermalMetrics(paperMm);
+  const compact = paperMm <= 58;
+  const thFs = compact ? 7 : paperMm <= 80 ? 7.5 : 8.5;
+  const tdFs = compact ? 8 : paperMm <= 80 ? 8.5 : 9.5;
+  const headFs = compact ? 13 : paperMm <= 80 ? 15 : 17;
+  const totals = vendorTotals(bills);
+  const rows = bills
+    .map(
+      (bill) => `<tr>
+        <td class="bill">${escHtml(bill.bill_code || "-")}</td>
+        <td class="name">${escHtml(bill.vendor_name || "-")}</td>
+        <td class="num">${bill.total_bags ?? 0}</td>
+        <td class="amt">${fmtMoney(bill.grand_total || 0)}</td>
+      </tr>`,
+    )
+    .join("");
+  return `<!doctype html><html><head><meta charset="utf-8"/>
+  <meta name="viewport" content="width=${m.widthPx}, initial-scale=1"/>
+  <title>Vendor Details</title>
+  <style>${thermalBaseCss(m)}
+    .shop { font-size:${headFs}px; font-weight:900; text-align:center; }
+    .title { font-size:${tdFs}px; font-weight:900; text-align:center; }
+    table { width:100%; border-collapse:collapse; table-layout:fixed; margin-top:4px; }
+    col.c-bill { width:22%; } col.c-name { width:36%; } col.c-bags { width:14%; } col.c-total { width:28%; }
+    th { font-size:${thFs}px; font-weight:900; text-align:left; border-bottom:1.5px solid #000; padding:2px 1px; }
+    th.num, td.num, th.amt, td.amt { text-align:right; }
+    td { font-size:${tdFs}px; font-weight:700; border-bottom:0.5px solid #000; padding:2px 1px; vertical-align:top; }
+    td.name { overflow-wrap:anywhere; word-break:break-word; }
+    td.bill { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  </style></head><body><div id="slip">
+    <div class="shop">${escHtml((shopName || "LEMON MANDI").toUpperCase())}</div>
+    <div class="title">VENDOR DETAILS</div>
+    <div class="hr"></div>
+    <div class="kv"><span class="k">Date</span><span>${escHtml(dateISO)}</span></div>
+    <div class="hr"></div>
+    <table>
+      <colgroup>
+        <col class="c-bill"/><col class="c-name"/><col class="c-bags"/><col class="c-total"/>
+      </colgroup>
+      <thead><tr>
+        <th>Bill No.</th><th>Vendor Name</th><th class="num">No. of Bags</th><th class="amt">Grand Total</th>
+      </tr></thead>
+      <tbody>${rows || `<tr><td colspan="4" style="text-align:center">No vendor bills</td></tr>`}</tbody>
+    </table>
+    <div class="hr"></div>
+    <div class="kv"><span>TOTAL BAGS</span><span class="bold">${totals.total_bags}</span></div>
+    <div class="kv"><span>GRAND TOTAL</span><span class="bold">${fmtMoney(totals.bill_amount)}</span></div>
+  </div></body></html>`;
+}
+
+export async function thermalPrintVendorDetailsReport(
+  bills: VendorBill[],
+  dateISO: string,
+  shopName: string,
+  settings?: Settings | null,
+): Promise<void> {
+  const mm = await resolvePrintPaperMm(settings?.thermal_paper_width_mm);
+  const html = renderVendorDetailsReportThermalHtml(bills, dateISO, shopName, mm);
+  await printThermalDocument({
+    html,
+    escposBase64: encodeVendorDetailsReportEscPos(bills, dateISO, shopName, mm),
+    paperMm: mm,
+    requireBluetooth: true,
   });
 }
 

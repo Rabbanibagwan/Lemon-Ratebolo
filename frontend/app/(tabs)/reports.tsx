@@ -29,8 +29,9 @@ import {
   lotLabel,
   receiverDisplay,
   shareXlsx,
-  thermalPrintDriverReport,
   shareDriverThermalReport,
+  thermalPrintDriverDetailsReport,
+  thermalPrintVendorDetailsReport,
   vendorReportAoa,
   vendorTotals,
 } from "@/src/utils/reports-export";
@@ -40,6 +41,7 @@ import { useAuth } from "@/src/context/AuthContext";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
 import { Empty, Input } from "@/src/components/ui";
 import { colors, font, money, spacing } from "@/src/theme";
+import { canUserAccessAuditReport, canUserExportReport } from "@/src/utils/patti-print";
 
 type Mode = "entry" | "driver" | "farmer" | "vendor" | "audit";
 type ExportKind = "farmer" | "vendor" | "audit";
@@ -91,7 +93,6 @@ function pdfDateStamp(iso: string): string {
 export default function Reports() {
   const router = useRouter();
   const { session } = useAuth();
-  const isOwner = session?.role === "owner";
   const { workingDateISO, displayDate } = useWorkingDate();
 
   const [mode, setMode] = useState<Mode>("entry");
@@ -214,24 +215,59 @@ export default function Reports() {
     }
   };
 
-  const exportDriver = (d: DriverSummary, action: "print" | "share") => {
-    if (!isOwner) return;
+  const printDriverDetailsThermal = () => {
+    if (!canUserExportReport(session, "driver")) return;
     void runExport(async () => {
-      if (action === "print") {
-        await thermalPrintDriverReport(d, workingDateISO, merchant, settings, auctionDrivers);
-        notify("Printed", "Driver report preview is open — use Print from that window.");
-      } else {
-        const result = await shareDriverThermalReport(d, workingDateISO, merchant, settings, auctionDrivers);
-        if (result === "shared") notify("Shared", "Driver report PDF preview is open.");
-        else if (result === "downloaded") {
-          notify("Downloaded", "Driver report PDF downloaded.");
-        } else notify("Ready", "Driver report PDF is ready.");
-      }
+      const freshSettings = await api.get<Settings>("/settings").catch(() => settings);
+      if (freshSettings) setSettings(freshSettings);
+      await thermalPrintDriverDetailsReport(
+        drivers,
+        workingDateISO,
+        merchant,
+        freshSettings || settings,
+      );
+      notify("Printed", "Driver Details sent to the connected thermal printer.");
+    });
+  };
+
+  const printVendorDetailsThermal = () => {
+    if (!canUserExportReport(session, "vendor")) return;
+    void runExport(async () => {
+      const freshSettings = await api.get<Settings>("/settings").catch(() => settings);
+      if (freshSettings) setSettings(freshSettings);
+      await thermalPrintVendorDetailsReport(
+        bills || [],
+        workingDateISO,
+        merchant,
+        freshSettings || settings,
+      );
+      notify("Printed", "Vendor Details sent to the connected thermal printer.");
+    });
+  };
+
+  /** Driver detail SHARE only — unchanged thermal PDF share path. */
+  const shareDriverDetail = (d: DriverSummary) => {
+    if (!canUserExportReport(session, "driver")) return;
+    void runExport(async () => {
+      const freshSettings = await api.get<Settings>("/settings").catch(() => settings);
+      if (freshSettings) setSettings(freshSettings);
+      const paperSettings = freshSettings || settings;
+      const result = await shareDriverThermalReport(
+        d,
+        workingDateISO,
+        merchant,
+        paperSettings,
+        auctionDrivers,
+      );
+      if (result === "shared") notify("Shared", "Driver report PDF preview is open.");
+      else if (result === "downloaded") {
+        notify("Downloaded", "Driver report PDF downloaded.");
+      } else notify("Ready", "Driver report PDF is ready.");
     });
   };
 
   const runDetailExport = (kind: ExportKind, action: ExportAction, format: ExportFormat) => {
-    if (!isOwner) return;
+    if (!canUserExportReport(session, kind)) return;
     setFormatPicker(null);
     void runExport(async () => {
       const title =
@@ -278,9 +314,14 @@ export default function Reports() {
     });
   };
 
-  // Merchant only: Print / Save (PDF·Excel) / Share. Staff may view + search only.
-  const showActions =
-    !!isOwner &&
+  // Entry Book: no Print/Share. Driver/Farmer/Vendor: owner + staff. Audit: owner only.
+  const canExportMode = canUserExportReport(session, mode);
+  const showDriverThermalPrint = canUserExportReport(session, "driver") && mode === "driver";
+  const showVendorThermalPrint =
+    canUserExportReport(session, "vendor") && mode === "vendor" && !selectedDriver;
+  // SAVE / SHARE — same behavior as before (format picker for farmer/vendor/audit; driver SHARE on detail).
+  const showSaveShare =
+    canExportMode &&
     ((mode === "farmer" && !selectedDriver) ||
       (mode === "vendor" && !selectedDriver) ||
       (mode === "audit" && !selectedDriver) ||
@@ -315,42 +356,61 @@ export default function Reports() {
               <Text style={styles.actionBtnText}>DRIVERS</Text>
             </Pressable>
           ) : null}
-          {showActions ? (
+          {showDriverThermalPrint || showVendorThermalPrint || showSaveShare ? (
           <View style={styles.headerActions}>
-            <Pressable
-              style={styles.actionBtn}
-              disabled={exporting}
-              onPress={() => {
-                if (mode === "driver" && driverDetail) exportDriver(driverDetail, "print");
-                else if (mode === "farmer") setFormatPicker({ kind: "farmer", action: "save" });
-                else if (mode === "vendor") setFormatPicker({ kind: "vendor", action: "save" });
-                else if (mode === "audit") setFormatPicker({ kind: "audit", action: "save" });
-              }}
-              testID="reports-save"
-            >
-              <Ionicons
-                name={mode === "driver" ? "print-outline" : "download-outline"}
-                size={14}
-                color={colors.onSurfaceInverse}
-              />
-              <Text style={styles.actionBtnText}>
-                {exporting ? "…" : mode === "driver" ? "PRINT" : "SAVE"}
-              </Text>
-            </Pressable>
-            <Pressable
-              style={styles.actionBtn}
-              disabled={exporting}
-              onPress={() => {
-                if (mode === "driver" && driverDetail) exportDriver(driverDetail, "share");
-                else if (mode === "farmer") setFormatPicker({ kind: "farmer", action: "share" });
-                else if (mode === "vendor") setFormatPicker({ kind: "vendor", action: "share" });
-                else if (mode === "audit") setFormatPicker({ kind: "audit", action: "share" });
-              }}
-              testID="reports-share"
-            >
-              <Ionicons name="share-outline" size={14} color={colors.onSurfaceInverse} />
-              <Text style={styles.actionBtnText}>{exporting ? "…" : "SHARE"}</Text>
-            </Pressable>
+            {showDriverThermalPrint ? (
+              <Pressable
+                style={styles.actionBtn}
+                disabled={exporting}
+                onPress={printDriverDetailsThermal}
+                testID="reports-driver-thermal-print"
+              >
+                <Ionicons name="print-outline" size={14} color={colors.onSurfaceInverse} />
+                <Text style={styles.actionBtnText}>{exporting ? "…" : "PRINT"}</Text>
+              </Pressable>
+            ) : null}
+            {showVendorThermalPrint ? (
+              <Pressable
+                style={styles.actionBtn}
+                disabled={exporting}
+                onPress={printVendorDetailsThermal}
+                testID="reports-vendor-thermal-print"
+              >
+                <Ionicons name="print-outline" size={14} color={colors.onSurfaceInverse} />
+                <Text style={styles.actionBtnText}>{exporting ? "…" : "PRINT"}</Text>
+              </Pressable>
+            ) : null}
+            {showSaveShare && mode !== "driver" ? (
+              <Pressable
+                style={styles.actionBtn}
+                disabled={exporting}
+                onPress={() => {
+                  if (mode === "farmer") setFormatPicker({ kind: "farmer", action: "save" });
+                  else if (mode === "vendor") setFormatPicker({ kind: "vendor", action: "save" });
+                  else if (mode === "audit") setFormatPicker({ kind: "audit", action: "save" });
+                }}
+                testID="reports-save"
+              >
+                <Ionicons name="download-outline" size={14} color={colors.onSurfaceInverse} />
+                <Text style={styles.actionBtnText}>{exporting ? "…" : "SAVE"}</Text>
+              </Pressable>
+            ) : null}
+            {showSaveShare ? (
+              <Pressable
+                style={styles.actionBtn}
+                disabled={exporting}
+                onPress={() => {
+                  if (mode === "driver" && driverDetail) shareDriverDetail(driverDetail);
+                  else if (mode === "farmer") setFormatPicker({ kind: "farmer", action: "share" });
+                  else if (mode === "vendor") setFormatPicker({ kind: "vendor", action: "share" });
+                  else if (mode === "audit") setFormatPicker({ kind: "audit", action: "share" });
+                }}
+                testID="reports-share"
+              >
+                <Ionicons name="share-outline" size={14} color={colors.onSurfaceInverse} />
+                <Text style={styles.actionBtnText}>{exporting ? "…" : "SHARE"}</Text>
+              </Pressable>
+            ) : null}
           </View>
         ) : null}
       </View>
@@ -411,7 +471,7 @@ export default function Reports() {
           <Seg label="DRIVER DETAILS" active={mode === "driver"} onPress={() => { setMode("driver"); setSelectedDriver(null); setSearch(""); }} testID="report-seg-driver" />
           <Seg label="FARMER DETAILS" active={mode === "farmer"} onPress={() => { setMode("farmer"); setSelectedDriver(null); setSearch(""); }} testID="report-seg-farmer" />
           <Seg label="VENDOR DETAILS" active={mode === "vendor"} onPress={() => { setMode("vendor"); setSelectedDriver(null); setSearch(""); }} testID="report-seg-vendor" />
-          {isOwner ? (
+          {canUserAccessAuditReport(session) ? (
             <Seg label="AUDIT LOG" active={mode === "audit"} onPress={() => { setMode("audit"); setSelectedDriver(null); setSearch(""); }} testID="report-seg-audit" />
           ) : null}
         </ScrollView>
