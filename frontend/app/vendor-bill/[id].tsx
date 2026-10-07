@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  ActivityIndicator, Alert, Modal, Pressable, ScrollView,
+  ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView,
   StyleSheet, Text, View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -12,8 +12,16 @@ import { KeyboardFormAvoid } from "@/src/components/KeyboardForm";
 import { useAuth } from "@/src/context/AuthContext";
 import { colors, font, money, spacing } from "@/src/theme";
 import { Button, Input } from "@/src/components/ui";
+import {
+  buildMerchantUpiPayUrl,
+  merchantUpiDisplayName,
+  normalizeUpiId,
+} from "@/src/utils/merchant-upi";
+import { imageDataUri } from "@/src/utils/png-mono";
+import { qrDataUri } from "@/src/utils/qr";
 import { clampPaperMm, thermalPrintUserMessage } from "@/src/utils/thermal-print";
 import { shareVendorBillPdf, thermalPrintVendorBill } from "@/src/utils/vendor-bill-print";
+import { vendorBillNoBags } from "@/src/utils/vendor-bill-totals";
 import { routeParam } from "@/src/utils/route-params";
 
 export default function VendorBillDetail() {
@@ -31,6 +39,8 @@ export default function VendorBillDetail() {
   const [loading, setLoading] = useState(true);
   const [sharing, setSharing] = useState(false);
   const [autoActionRan, setAutoActionRan] = useState(false);
+  const [upiQrUri, setUpiQrUri] = useState<string>("");
+  const [upiIdShown, setUpiIdShown] = useState<string>("");
 
   const [showDelete, setShowDelete] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
@@ -49,6 +59,55 @@ export default function VendorBillDetail() {
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Merchant QR preview — uploaded image preferred; else generated UPI deep-link.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!b || !profile) {
+        setUpiQrUri("");
+        setUpiIdShown("");
+        return;
+      }
+      const upiId = normalizeUpiId(profile.upi_id);
+      const uploaded = imageDataUri(profile.upi_qr_base64);
+      if (uploaded) {
+        if (!cancelled) {
+          setUpiQrUri(uploaded);
+          setUpiIdShown(upiId);
+        }
+        return;
+      }
+      if (!upiId) {
+        setUpiQrUri("");
+        setUpiIdShown("");
+        return;
+      }
+      const payload = buildMerchantUpiPayUrl({
+        upiId,
+        merchantName: merchantUpiDisplayName(profile),
+        amount: b.balance,
+      });
+      if (!payload) {
+        setUpiQrUri("");
+        setUpiIdShown("");
+        return;
+      }
+      try {
+        const uri = await qrDataUri(payload, 220);
+        if (!cancelled) {
+          setUpiQrUri(uri);
+          setUpiIdShown(upiId);
+        }
+      } catch {
+        if (!cancelled) {
+          setUpiQrUri("");
+          setUpiIdShown(upiId);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [b, profile]);
 
   const share = async () => {
     if (!b || !session) return;
@@ -70,12 +129,19 @@ export default function VendorBillDetail() {
     if (!b || !session) return;
     try {
       setSharing(true);
-      let pf = profile;
-      if (!pf?.bank_account_holder && !pf?.bank_account_number) {
-        pf = await api.get<ShopProfile>("/shop/profile").catch(() => pf);
-        if (pf) setProfile(pf);
-      }
-      const paperMm = clampPaperMm(settings?.thermal_paper_width_mm || 80);
+      // Fresh settings at print time so selected paper width (58/80/100) always applies.
+      const [freshProfile, freshSettings] = await Promise.all([
+        api.get<ShopProfile>("/shop/profile").catch(() => profile),
+        api.get("/settings").catch(() => settings),
+      ]);
+      const pf = freshProfile || profile;
+      if (freshProfile) setProfile(freshProfile);
+      if (freshSettings) setSettings(freshSettings);
+      const paperMm = clampPaperMm(
+        (freshSettings as any)?.thermal_paper_width_mm ||
+          settings?.thermal_paper_width_mm ||
+          80,
+      );
       await thermalPrintVendorBill(b, pf || { shop_name: session.shop_name } as any, paperMm);
     } catch (e) {
       console.warn("thermal print error", e);
@@ -168,12 +234,18 @@ export default function VendorBillDetail() {
 
       <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 140 }}>
         <View style={styles.card}>
+          <View style={styles.merchantHead}>
+            <Text style={styles.shopName}>{(profile?.shop_name || session?.shop_name || "").toUpperCase()}</Text>
+            {(() => {
+              const addr = [profile?.address, profile?.village, profile?.taluk, profile?.district, profile?.state]
+                .filter(Boolean)
+                .join(", ");
+              return addr ? <Text style={styles.shopMeta}>{addr}</Text> : null;
+            })()}
+            {profile?.mobile ? <Text style={styles.shopMeta}>Mobile: {profile.mobile}</Text> : null}
+          </View>
           <View style={styles.rowSpread}>
-            <View>
-              <Text style={styles.shopName}>{(profile?.shop_name || session?.shop_name || "").toUpperCase()}</Text>
-              <Text style={styles.subInfo}>{profile?.address || ""}</Text>
-              <Text style={styles.subInfo}>{profile?.mobile || ""}</Text>
-            </View>
+            <Text style={styles.kindLbl}>VENDOR BILL</Text>
             <View style={styles.billBox}>
               <Text style={styles.billBoxLbl}>BILL</Text>
               <Text style={styles.billBoxNo}>{b.bill_code}</Text>
@@ -201,8 +273,9 @@ export default function VendorBillDetail() {
             </View>
           ))}
           <View style={styles.divider} />
-          <Row label={`Goods (×${b.vendor_factor ?? 1} + ₹${b.margin_per_bag}/bag)`} value={money(b.goods_total)} />
-          <Row label={`Commission (${b.total_bags} × ₹${b.commission_per_bag})`} value={money(b.commission_total)} />
+          <Row label="No. Bags" value={String(vendorBillNoBags(b))} testID="bill-no-bags" />
+          <Row label="Lemon" value={money(b.goods_total)} testID="bill-lemon" />
+          <Row label="Commission" value={money(b.commission_total)} />
           <Row label="Hamali" value={money(b.hamali)} />
           {b.cess > 0 ? <Row label="Cess / Other" value={money(b.cess)} /> : null}
           <View style={styles.netBox}>
@@ -212,7 +285,7 @@ export default function VendorBillDetail() {
           <Row label="Paid" value={money(b.paid)} />
           <Row label="Balance Due" value={money(b.balance)} strong />
 
-          {profile?.bank_account_holder || profile?.bank_account_number ? (
+          {profile?.bank_account_holder || profile?.bank_account_number || profile?.bank_ifsc || profile?.bank_name || profile?.bank_branch ? (
             <>
               <View style={styles.divider} />
               <Text style={styles.section}>Bank</Text>
@@ -220,6 +293,7 @@ export default function VendorBillDetail() {
               {profile?.bank_account_number ? <Text style={styles.subInfo}>A/c No: {profile.bank_account_number}</Text> : null}
               {profile?.bank_ifsc ? <Text style={styles.subInfo}>IFSC: {profile.bank_ifsc}</Text> : null}
               {profile?.bank_name ? <Text style={styles.subInfo}>Bank: {profile.bank_name}</Text> : null}
+              {profile?.bank_branch ? <Text style={styles.subInfo}>Branch: {profile.bank_branch}</Text> : null}
             </>
           ) : null}
 
@@ -228,6 +302,22 @@ export default function VendorBillDetail() {
               <View style={styles.divider} />
               <Text style={styles.section}>Notes</Text>
               <Text style={styles.subInfo}>{b.notes}</Text>
+            </>
+          ) : null}
+
+          {upiQrUri || upiIdShown ? (
+            <>
+              <View style={styles.divider} />
+              <View style={styles.upiBox} testID="bill-upi-qr">
+                <Text style={styles.upiTitle}>MERCHANT QR CODE</Text>
+                {upiQrUri ? (
+                  <Image source={{ uri: upiQrUri }} style={styles.upiQr} accessibilityLabel="Merchant QR" />
+                ) : (
+                  <ActivityIndicator color={colors.brandPrimary} style={{ marginVertical: spacing.md }} />
+                )}
+                <Text style={styles.upiScan}>SCAN TO PAY</Text>
+                {upiIdShown ? <Text style={styles.upiId}>Merchant UPI: {upiIdShown}</Text> : null}
+              </View>
             </>
           ) : null}
         </View>
@@ -285,9 +375,19 @@ function MetaRow({ label, value }: { label: string; value: string }) {
     </View>
   );
 }
-function Row({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
+function Row({
+  label,
+  value,
+  strong,
+  testID,
+}: {
+  label: string;
+  value: string;
+  strong?: boolean;
+  testID?: string;
+}) {
   return (
-    <View style={styles.rowFlex}>
+    <View style={styles.rowFlex} testID={testID}>
       <Text style={styles.rowLabel}>{label}</Text>
       <Text style={[styles.rowValue, strong && { fontWeight: "900", fontSize: 15 }]}>{value}</Text>
     </View>
@@ -306,9 +406,18 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 20, fontWeight: "900", color: colors.onSurface, fontFamily: font.display, letterSpacing: -0.3 },
   headerSub: { fontSize: 11, color: colors.muted, letterSpacing: 1, fontWeight: "700" },
   card: { borderWidth: 2, borderColor: colors.borderStrong, padding: spacing.lg, backgroundColor: colors.surface },
+  merchantHead: { width: "100%", alignItems: "center", marginBottom: spacing.sm },
   rowSpread: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
-  shopName: { fontSize: 20, fontWeight: "900", color: colors.onSurface, fontFamily: font.display, letterSpacing: -0.5 },
+  shopName: {
+    fontSize: 20, fontWeight: "900", color: colors.onSurface, fontFamily: font.display, letterSpacing: -0.5,
+    textAlign: "center", width: "100%",
+  },
+  shopMeta: {
+    fontSize: 11, color: colors.muted, marginTop: 2, fontFamily: font.display,
+    textAlign: "center", width: "100%",
+  },
   subInfo: { fontSize: 11, color: colors.muted, marginTop: 2, fontFamily: font.display },
+  kindLbl: { fontSize: 10, letterSpacing: 2, color: colors.muted, fontWeight: "800", fontFamily: font.display, marginTop: 2 },
   billBox: { borderWidth: 2, borderColor: colors.borderStrong, paddingHorizontal: 10, paddingVertical: 6, alignItems: "flex-end" },
   billBoxLbl: { fontSize: 9, letterSpacing: 1, color: colors.muted, fontWeight: "800" },
   billBoxNo: { fontSize: 15, fontFamily: font.mono, fontWeight: "800", color: colors.onSurface },
@@ -327,11 +436,22 @@ const styles = StyleSheet.create({
   rowLabel: { fontSize: 13, color: colors.muted, fontFamily: font.display },
   rowValue: { fontSize: 14, color: colors.onSurface, fontFamily: font.mono, fontWeight: "700" },
   netBox: {
-    backgroundColor: colors.surfaceInverse, padding: spacing.md, marginTop: 8, marginBottom: 8,
+    backgroundColor: colors.surface, paddingVertical: spacing.md, paddingHorizontal: 0, marginTop: 8, marginBottom: 8,
     flexDirection: "row", justifyContent: "space-between", alignItems: "center",
   },
-  netLbl: { color: colors.onSurfaceInverse, fontFamily: font.display, letterSpacing: 1.5, fontWeight: "900", fontSize: 12 },
-  netVal: { color: colors.onSurfaceInverse, fontFamily: font.mono, fontWeight: "900", fontSize: 22 },
+  netLbl: { color: colors.onSurface, fontFamily: font.display, letterSpacing: 1.5, fontWeight: "900", fontSize: 12 },
+  netVal: { color: colors.onSurface, fontFamily: font.mono, fontWeight: "900", fontSize: 22 },
+  upiBox: { alignItems: "center", paddingVertical: spacing.sm, width: "100%" },
+  upiTitle: {
+    fontSize: 12, letterSpacing: 1.5, fontWeight: "900", color: colors.onSurface,
+    fontFamily: font.display, marginBottom: spacing.sm,
+  },
+  upiQr: { width: 180, height: 180, marginBottom: spacing.sm },
+  upiScan: { fontSize: 13, fontWeight: "800", color: colors.onSurface, fontFamily: font.display },
+  upiId: {
+    fontSize: 12, fontWeight: "700", color: colors.muted, fontFamily: font.display,
+    marginTop: 4, textAlign: "center",
+  },
   footer: { borderTopWidth: 2, borderTopColor: colors.borderStrong, padding: spacing.lg, backgroundColor: colors.surface },
   modalRoot: { flex: 1, justifyContent: "flex-end" },
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.45)" },

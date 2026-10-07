@@ -214,7 +214,10 @@ export type ShopProfile = {
   address?: string | null; village?: string | null; taluk?: string | null; district?: string | null; state?: string | null;
   gst_number?: string | null; pan_number?: string | null; logo_base64?: string | null;
   bank_name?: string | null; bank_account_holder?: string | null; bank_account_number?: string | null;
-  bank_ifsc?: string | null; bank_branch?: string | null; upi_id?: string | null; upi_qr_base64?: string | null;
+  bank_ifsc?: string | null; bank_branch?: string | null; upi_id?: string | null;
+  /** Payee name for generated UPI deep-link QR (optional). */
+  upi_name?: string | null;
+  upi_qr_base64?: string | null;
 };
 
 export type DriverRange = { range_from: number; range_to: number; name: string; place?: string | null; bhada_per_bag: number };
