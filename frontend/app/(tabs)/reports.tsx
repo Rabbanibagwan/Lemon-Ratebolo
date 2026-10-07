@@ -308,7 +308,12 @@ export default function Reports() {
           {mode === "driver" && !driverDetail ? (
             <Pressable
               style={styles.actionBtn}
-              onPress={() => router.push({ pathname: "/(tabs)/auction", params: { editDrivers: "1" } })}
+              onPress={() =>
+                router.push({
+                  pathname: "/(tabs)/auction",
+                  params: { editDrivers: "1", source: "reports" },
+                })
+              }
               testID="reports-edit-drivers"
             >
               <Ionicons name="car-outline" size={14} color={colors.onSurfaceInverse} />
