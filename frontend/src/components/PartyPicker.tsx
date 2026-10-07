@@ -389,9 +389,10 @@ export function PartyPicker({
         onRequestClose={onClose}
         onShow={handleSearchModalShown}
       >
-        <View style={styles.modalRoot}>
+        {/* Lift LINK FARMER/VENDOR sheet above the IME so search + suggestions stay visible. */}
+        <KeyboardFormAvoid style={styles.modalRoot} behavior="padding">
           <Pressable style={styles.backdrop} onPress={onClose} />
-          <View style={styles.sheet}>
+          <View style={styles.sheet} testID={isFarmer ? "farmer-link-sheet" : "vendor-link-sheet"}>
             <View style={styles.header}>
               <Text style={styles.title}>{title}</Text>
               <Pressable onPress={onClose} hitSlop={12} testID="party-picker-close">
@@ -438,7 +439,9 @@ export function PartyPicker({
               data={filtered}
               keyExtractor={(x) => x.id}
               keyboardShouldPersistTaps="handled"
-              style={{ maxHeight: 360 }}
+              keyboardDismissMode="none"
+              // Shrink with the avoided sheet so suggestions stay above the keyboard (not under it).
+              style={styles.suggestList}
               contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.xl, gap: spacing.sm }}
               onScrollToIndexFailed={() => {
                 /* ignore — list may still be measuring */
@@ -474,7 +477,7 @@ export function PartyPicker({
               )}
             />
           </View>
-        </View>
+        </KeyboardFormAvoid>
       </Modal>
 
       <Modal
@@ -637,6 +640,13 @@ const styles = StyleSheet.create({
   sheet: {
     backgroundColor: colors.surface, borderTopWidth: 2, borderColor: colors.borderStrong,
     paddingBottom: spacing.md, maxHeight: "82%",
+    // Keep header + search pinned; FlatList below absorbs keyboard height loss.
+    flexShrink: 1,
+  },
+  suggestList: {
+    flexGrow: 0,
+    flexShrink: 1,
+    maxHeight: 360,
   },
   createCard: {
     backgroundColor: colors.surface, borderTopWidth: 2, borderColor: colors.borderStrong,

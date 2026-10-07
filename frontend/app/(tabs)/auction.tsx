@@ -14,11 +14,13 @@ import { Button, Empty, Input } from "@/src/components/ui";
 import { colors, font, money, spacing } from "@/src/theme";
 import { DatePickerModal } from "@/src/components/DatePickerModal";
 import { routeParam } from "@/src/utils/route-params";
+import { shouldAutoOpenDriverDaySetup } from "@/src/utils/set-driver-nav";
 
 export default function Auction() {
   const router = useRouter();
-  const routeParams = useLocalSearchParams<{ editDrivers?: string }>();
+  const routeParams = useLocalSearchParams<{ editDrivers?: string; source?: string }>();
   const editDrivers = routeParam(routeParams.editDrivers);
+  const navSource = routeParam(routeParams.source);
   const editDriversOpened = useRef(false);
   const { workingDate, workingDateISO, displayDate, isWorkingToday, setWorkingDate } = useWorkingDate();
 
@@ -29,6 +31,8 @@ export default function Auction() {
   const [showDatePicker, setShowDatePicker] = useState(false);
 
   const [showDriverModal, setShowDriverModal] = useState(false);
+  /** Session flag: intentional SET DRIVER open (survives clearing query params). Not persisted globally. */
+  const [openedFromSetDriverShortcut, setOpenedFromSetDriverShortcut] = useState(false);
   const [drivers, setDrivers] = useState<DriverRange[]>([]);
   const [saveDriverError, setSaveDriverError] = useState<string | null>(null);
   const [savingDrivers, setSavingDrivers] = useState(false);
@@ -48,24 +52,45 @@ export default function Auction() {
     }
   }, [workingDateISO]);
 
-  const fromSetDriverShortcut = editDrivers === "1";
+  // Only Dashboard (or Reports) SET DRIVER may auto-open Driver Day Setup.
+  // Normal Auction navigation must never open it — even if a stale editDrivers=1 remains.
+  const fromSetDriverShortcut = shouldAutoOpenDriverDaySetup(editDrivers, navSource);
+
+  const clearSetDriverParams = useCallback(() => {
+    if (!editDrivers && !navSource) return;
+    // Defer: deep-link mounts can run effects before Root Layout is ready for setParams.
+    const t = setTimeout(() => {
+      try {
+        router.setParams({ editDrivers: "", source: "" });
+      } catch {
+        // Gate already blocks auto-open without source=dashboard|reports.
+      }
+    }, 0);
+    return () => clearTimeout(t);
+  }, [editDrivers, navSource, router]);
 
   useFocusEffect(useCallback(() => {
     load();
-    // Allow Dashboard / Reports "SET DRIVER" shortcut to reopen Driver Day Setup
-    // on each visit without changing assignment logic.
+    // Re-arm only for a fresh intentional push (params still present on focus).
+    // Do not keep a global editDrivers flag across normal Auction visits.
     return () => {
       editDriversOpened.current = false;
     };
   }, [load]));
 
   useEffect(() => {
-    if (!fromSetDriverShortcut || editDriversOpened.current || !day) return;
+    // Stale / deep-link protection: editDrivers without intentional source never opens setup.
+    // Do not setParams on that path — clearing during cold mount can crash the navigator.
+    if (!fromSetDriverShortcut) return;
+    if (editDriversOpened.current || !day) return;
     editDriversOpened.current = true;
+    setOpenedFromSetDriverShortcut(true);
     setDrivers(day.drivers?.length ? [...day.drivers] : [{ range_from: 1, range_to: 100, name: "", place: "", bhada_per_bag: 0 }]);
     setSaveDriverError(null);
     setShowDriverModal(true);
-  }, [fromSetDriverShortcut, day]);
+    // Drop intentional params after open so tab switches / history cannot reopen setup.
+    return clearSetDriverParams();
+  }, [fromSetDriverShortcut, day, editDrivers, navSource, clearSetDriverParams]);
 
   const onApplyDate = (d: Date | null) => {
     setShowDatePicker(false);
@@ -77,17 +102,14 @@ export default function Auction() {
     load(`${yyyy}-${mm}-${dd}`);
   };
 
-  const openDriverModal = () => {
-    setDrivers(day?.drivers?.length ? [...day.drivers] : [{ range_from: 1, range_to: 100, name: "", place: "", bhada_per_bag: 0 }]);
-    setSaveDriverError(null);
-    setShowDriverModal(true);
-  };
-
   const closeDriverModal = (opts?: { returnHome?: boolean }) => {
+    const returnHome = opts?.returnHome || openedFromSetDriverShortcut;
     setShowDriverModal(false);
     setSaveDriverError(null);
+    setOpenedFromSetDriverShortcut(false);
+    clearSetDriverParams();
     // Dashboard → SET DRIVER → Setup → Back must return to Dashboard (not leave user stuck on Auction).
-    if (opts?.returnHome || fromSetDriverShortcut) {
+    if (returnHome) {
       editDriversOpened.current = false;
       router.replace("/(tabs)");
     }
@@ -117,7 +139,7 @@ export default function Auction() {
       const updated = await api.put<AuctionDay>(`/auction-days/${day.id}`, { date: day.date, drivers });
       setDay(updated);
       await load();
-      closeDriverModal({ returnHome: fromSetDriverShortcut });
+      closeDriverModal({ returnHome: openedFromSetDriverShortcut });
     } catch (e: any) {
       setSaveDriverError(apiErrorMessage(e, "Failed to save"));
     } finally { setSavingDrivers(false); }
@@ -166,10 +188,8 @@ export default function Auction() {
             <Ionicons name="calendar-outline" size={14} color={colors.onSurface} />
           </Pressable>
         </View>
-        <Pressable style={styles.headerBtn} onPress={openDriverModal} testID="edit-drivers">
-          <Ionicons name="car-outline" size={16} color={colors.onSurface} />
-          <Text style={styles.headerBtnText}>DRIVERS</Text>
-        </Pressable>
+        {/* SET DRIVER / Driver Day Setup: Dashboard only (editDrivers=1&source=dashboard).
+            Normal Auction never auto-opens setup. */}
       </View>
 
       {showDatePicker ? (
@@ -193,7 +213,9 @@ export default function Auction() {
       {stats.drivers === 0 ? (
         <View style={styles.warnBox}>
           <Ionicons name="warning-outline" size={16} color={colors.warning} />
-          <Text style={styles.warnText}>Set up drivers first (top-right) — driver + bhada auto-fills per lot.</Text>
+          <Text style={styles.warnText}>
+            Set up drivers from Dashboard → SET DRIVER — driver + bhada auto-fills per lot.
+          </Text>
         </View>
       ) : null}
 
@@ -274,7 +296,7 @@ export default function Auction() {
         }}
       />
 
-      {/* Driver Setup Modal — single source of truth for Dashboard SET DRIVER + Auction DRIVERS */}
+      {/* Driver Setup Modal — Dashboard SET DRIVER only (editDrivers=1&source=dashboard). */}
       <Modal visible={showDriverModal} transparent animationType="slide" onRequestClose={() => closeDriverModal()}>
         <View style={styles.modalRoot}>
           <Pressable style={styles.backdrop} onPress={() => closeDriverModal()} />
@@ -348,7 +370,7 @@ export default function Auction() {
               {saveDriverError ? <Text style={styles.err} testID="driver-save-error">{saveDriverError}</Text> : null}
               <View style={{ marginTop: spacing.md, gap: spacing.sm }}>
                 <Button label={savingDrivers ? "SAVING…" : "SAVE DRIVER SETUP"} onPress={saveDrivers} loading={savingDrivers} disabled={savingDrivers} testID="driver-save" />
-                {fromSetDriverShortcut ? (
+                {openedFromSetDriverShortcut ? (
                   <Button
                     label="BACK TO DASHBOARD"
                     variant="secondary"
@@ -385,11 +407,6 @@ const styles = StyleSheet.create({
   title: { fontSize: 22, fontWeight: "900", color: colors.onSurface, fontFamily: font.display, letterSpacing: -0.5 },
   subtitle: { fontSize: 12, color: colors.muted, fontFamily: font.mono, fontWeight: "700" },
   dateTap: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 2, alignSelf: "flex-start" },
-  headerBtn: {
-    flexDirection: "row", alignItems: "center", gap: 6,
-    borderWidth: 2, borderColor: colors.borderStrong, paddingHorizontal: 12, paddingVertical: 8,
-  },
-  headerBtnText: { color: colors.onSurface, fontFamily: font.display, fontWeight: "800", letterSpacing: 1, fontSize: 12 },
 
   statsRow: {
     flexDirection: "row", gap: spacing.sm,
