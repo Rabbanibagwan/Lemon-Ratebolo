@@ -58,8 +58,15 @@ export default function Auction() {
 
   const clearSetDriverParams = useCallback(() => {
     if (!editDrivers && !navSource) return;
-    // Empty strings drop the intentional flags from the tab route (undefined is unreliable in Expo Router).
-    router.setParams({ editDrivers: "", source: "" });
+    // Defer: deep-link mounts can run effects before Root Layout is ready for setParams.
+    const t = setTimeout(() => {
+      try {
+        router.setParams({ editDrivers: "", source: "" });
+      } catch {
+        // Gate already blocks auto-open without source=dashboard|reports.
+      }
+    }, 0);
+    return () => clearTimeout(t);
   }, [editDrivers, navSource, router]);
 
   useFocusEffect(useCallback(() => {
@@ -72,19 +79,17 @@ export default function Auction() {
   }, [load]));
 
   useEffect(() => {
-    // Stale / deep-link protection: editDrivers without an intentional source must not open setup.
-    if (!fromSetDriverShortcut) {
-      if (editDrivers || navSource) clearSetDriverParams();
-      return;
-    }
+    // Stale / deep-link protection: editDrivers without intentional source never opens setup.
+    // Do not setParams on that path — clearing during cold mount can crash the navigator.
+    if (!fromSetDriverShortcut) return;
     if (editDriversOpened.current || !day) return;
     editDriversOpened.current = true;
     setOpenedFromSetDriverShortcut(true);
     setDrivers(day.drivers?.length ? [...day.drivers] : [{ range_from: 1, range_to: 100, name: "", place: "", bhada_per_bag: 0 }]);
     setSaveDriverError(null);
     setShowDriverModal(true);
-    // Drop params immediately so tab switches / history cannot reopen setup.
-    clearSetDriverParams();
+    // Drop intentional params after open so tab switches / history cannot reopen setup.
+    return clearSetDriverParams();
   }, [fromSetDriverShortcut, day, editDrivers, navSource, clearSetDriverParams]);
 
   const onApplyDate = (d: Date | null) => {
