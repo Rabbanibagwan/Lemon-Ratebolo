@@ -673,7 +673,9 @@ export default function OcrPreview() {
         // Native KASV: don't yank offset when keyboard hides after PartyPicker closes.
         {...(Platform.OS !== "web"
           ? {
-              bottomOffset: 120,
+              // Keep focused farmer/vendor fields clear of the sticky SAVE footer + IME.
+              bottomOffset: 148,
+              extraKeyboardSpace: Platform.OS === "android" ? 28 : 12,
               disableScrollOnKeyboardHide: true,
               enabled: !pickerFor,
             }
