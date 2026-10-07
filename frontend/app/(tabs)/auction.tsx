@@ -14,11 +14,13 @@ import { Button, Empty, Input } from "@/src/components/ui";
 import { colors, font, money, spacing } from "@/src/theme";
 import { DatePickerModal } from "@/src/components/DatePickerModal";
 import { routeParam } from "@/src/utils/route-params";
+import { shouldAutoOpenDriverDaySetup } from "@/src/utils/set-driver-nav";
 
 export default function Auction() {
   const router = useRouter();
-  const routeParams = useLocalSearchParams<{ editDrivers?: string }>();
+  const routeParams = useLocalSearchParams<{ editDrivers?: string; source?: string }>();
   const editDrivers = routeParam(routeParams.editDrivers);
+  const navSource = routeParam(routeParams.source);
   const editDriversOpened = useRef(false);
   const { workingDate, workingDateISO, displayDate, isWorkingToday, setWorkingDate } = useWorkingDate();
 
@@ -29,6 +31,8 @@ export default function Auction() {
   const [showDatePicker, setShowDatePicker] = useState(false);
 
   const [showDriverModal, setShowDriverModal] = useState(false);
+  /** Session flag: intentional SET DRIVER open (survives clearing query params). Not persisted globally. */
+  const [openedFromSetDriverShortcut, setOpenedFromSetDriverShortcut] = useState(false);
   const [drivers, setDrivers] = useState<DriverRange[]>([]);
   const [saveDriverError, setSaveDriverError] = useState<string | null>(null);
   const [savingDrivers, setSavingDrivers] = useState(false);
@@ -48,24 +52,40 @@ export default function Auction() {
     }
   }, [workingDateISO]);
 
-  const fromSetDriverShortcut = editDrivers === "1";
+  // Only Dashboard (or Reports) SET DRIVER may auto-open Driver Day Setup.
+  // Normal Auction navigation must never open it — even if a stale editDrivers=1 remains.
+  const fromSetDriverShortcut = shouldAutoOpenDriverDaySetup(editDrivers, navSource);
+
+  const clearSetDriverParams = useCallback(() => {
+    if (!editDrivers && !navSource) return;
+    // Empty strings drop the intentional flags from the tab route (undefined is unreliable in Expo Router).
+    router.setParams({ editDrivers: "", source: "" });
+  }, [editDrivers, navSource, router]);
 
   useFocusEffect(useCallback(() => {
     load();
-    // Allow Dashboard / Reports "SET DRIVER" shortcut to reopen Driver Day Setup
-    // on each visit without changing assignment logic.
+    // Re-arm only for a fresh intentional push (params still present on focus).
+    // Do not keep a global editDrivers flag across normal Auction visits.
     return () => {
       editDriversOpened.current = false;
     };
   }, [load]));
 
   useEffect(() => {
-    if (!fromSetDriverShortcut || editDriversOpened.current || !day) return;
+    // Stale / deep-link protection: editDrivers without an intentional source must not open setup.
+    if (!fromSetDriverShortcut) {
+      if (editDrivers || navSource) clearSetDriverParams();
+      return;
+    }
+    if (editDriversOpened.current || !day) return;
     editDriversOpened.current = true;
+    setOpenedFromSetDriverShortcut(true);
     setDrivers(day.drivers?.length ? [...day.drivers] : [{ range_from: 1, range_to: 100, name: "", place: "", bhada_per_bag: 0 }]);
     setSaveDriverError(null);
     setShowDriverModal(true);
-  }, [fromSetDriverShortcut, day]);
+    // Drop params immediately so tab switches / history cannot reopen setup.
+    clearSetDriverParams();
+  }, [fromSetDriverShortcut, day, editDrivers, navSource, clearSetDriverParams]);
 
   const onApplyDate = (d: Date | null) => {
     setShowDatePicker(false);
@@ -78,10 +98,13 @@ export default function Auction() {
   };
 
   const closeDriverModal = (opts?: { returnHome?: boolean }) => {
+    const returnHome = opts?.returnHome || openedFromSetDriverShortcut;
     setShowDriverModal(false);
     setSaveDriverError(null);
+    setOpenedFromSetDriverShortcut(false);
+    clearSetDriverParams();
     // Dashboard → SET DRIVER → Setup → Back must return to Dashboard (not leave user stuck on Auction).
-    if (opts?.returnHome || fromSetDriverShortcut) {
+    if (returnHome) {
       editDriversOpened.current = false;
       router.replace("/(tabs)");
     }
@@ -111,7 +134,7 @@ export default function Auction() {
       const updated = await api.put<AuctionDay>(`/auction-days/${day.id}`, { date: day.date, drivers });
       setDay(updated);
       await load();
-      closeDriverModal({ returnHome: fromSetDriverShortcut });
+      closeDriverModal({ returnHome: openedFromSetDriverShortcut });
     } catch (e: any) {
       setSaveDriverError(apiErrorMessage(e, "Failed to save"));
     } finally { setSavingDrivers(false); }
@@ -160,8 +183,8 @@ export default function Auction() {
             <Ionicons name="calendar-outline" size={14} color={colors.onSurface} />
           </Pressable>
         </View>
-        {/* SET DRIVER / Driver Day Setup is opened from Dashboard only (quick-set-driver).
-            Keep modal + editDrivers=1 param handling so Dashboard shortcut still works. */}
+        {/* SET DRIVER / Driver Day Setup: Dashboard only (editDrivers=1&source=dashboard).
+            Normal Auction never auto-opens setup. */}
       </View>
 
       {showDatePicker ? (
@@ -268,7 +291,7 @@ export default function Auction() {
         }}
       />
 
-      {/* Driver Setup Modal — opened from Dashboard SET DRIVER (editDrivers=1). Not shown as an Auction header action. */}
+      {/* Driver Setup Modal — Dashboard SET DRIVER only (editDrivers=1&source=dashboard). */}
       <Modal visible={showDriverModal} transparent animationType="slide" onRequestClose={() => closeDriverModal()}>
         <View style={styles.modalRoot}>
           <Pressable style={styles.backdrop} onPress={() => closeDriverModal()} />
@@ -342,7 +365,7 @@ export default function Auction() {
               {saveDriverError ? <Text style={styles.err} testID="driver-save-error">{saveDriverError}</Text> : null}
               <View style={{ marginTop: spacing.md, gap: spacing.sm }}>
                 <Button label={savingDrivers ? "SAVING…" : "SAVE DRIVER SETUP"} onPress={saveDrivers} loading={savingDrivers} disabled={savingDrivers} testID="driver-save" />
-                {fromSetDriverShortcut ? (
+                {openedFromSetDriverShortcut ? (
                   <Button
                     label="BACK TO DASHBOARD"
                     variant="secondary"

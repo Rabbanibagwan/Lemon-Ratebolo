@@ -162,7 +162,12 @@ export default function Home() {
         <Text style={[styles.sectionLabel, { marginTop: spacing.xl }]}>Driver</Text>
         <Pressable
           style={({ pressed }) => [styles.setDriverBtn, pressed && { opacity: 0.9 }]}
-          onPress={() => router.push({ pathname: "/(tabs)/auction", params: { editDrivers: "1" } })}
+          onPress={() =>
+            router.push({
+              pathname: "/(tabs)/auction",
+              params: { editDrivers: "1", source: "dashboard" },
+            })
+          }
           testID="quick-set-driver"
         >
           <Ionicons name="car-outline" size={22} color={colors.onBrandPrimary} />
