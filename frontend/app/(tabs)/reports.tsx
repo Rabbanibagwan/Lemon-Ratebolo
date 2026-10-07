@@ -30,6 +30,8 @@ import {
   receiverDisplay,
   shareXlsx,
   thermalPrintDriverReport,
+  thermalPrintDriverDetailsReport,
+  thermalPrintVendorDetailsReport,
   shareDriverThermalReport,
   vendorReportAoa,
   vendorTotals,
@@ -38,6 +40,7 @@ import { buildAuditLogPdfBytes, buildFarmerDetailsPdfBytes, buildVendorDetailsPd
 import { api, AuctionDay, Patti, PattiAuditLogEntry, Settings, ShopProfile, VendorBill } from "@/src/api";
 import { useAuth } from "@/src/context/AuthContext";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
+import { canUserExportReport } from "@/src/utils/patti-print";
 import { Empty, Input } from "@/src/components/ui";
 import { colors, font, money, spacing } from "@/src/theme";
 
@@ -230,6 +233,38 @@ export default function Reports() {
     });
   };
 
+  /** Reports → Driver Details list — Bluetooth ESC/POS summary (owner + staff). */
+  const printDriverDetailsThermal = () => {
+    if (!canUserExportReport(session, "driver")) return;
+    void runExport(async () => {
+      const freshSettings = await api.get<Settings>("/settings").catch(() => settings);
+      if (freshSettings) setSettings(freshSettings);
+      await thermalPrintDriverDetailsReport(
+        drivers,
+        workingDateISO,
+        merchant,
+        freshSettings || settings,
+      );
+      notify("Printed", "Driver Details sent to the connected thermal printer.");
+    });
+  };
+
+  /** Reports → Vendor Details — Bluetooth ESC/POS (owner + staff). No PDF/system dialog. */
+  const printVendorDetailsThermal = () => {
+    if (!canUserExportReport(session, "vendor")) return;
+    void runExport(async () => {
+      const freshSettings = await api.get<Settings>("/settings").catch(() => settings);
+      if (freshSettings) setSettings(freshSettings);
+      await thermalPrintVendorDetailsReport(
+        bills || [],
+        workingDateISO,
+        merchant,
+        freshSettings || settings,
+      );
+      notify("Printed", "Vendor Details sent to the connected thermal printer.");
+    });
+  };
+
   const runDetailExport = (kind: ExportKind, action: ExportAction, format: ExportFormat) => {
     if (!isOwner) return;
     setFormatPicker(null);
@@ -278,8 +313,13 @@ export default function Reports() {
     });
   };
 
-  // Merchant only: Print / Save (PDF·Excel) / Share. Staff may view + search only.
-  const showActions =
+  // Thermal PRINT: owner + staff (Driver list / Vendor Details).
+  const showDriverThermalPrint =
+    canUserExportReport(session, "driver") && mode === "driver" && !driverDetail;
+  const showVendorThermalPrint =
+    canUserExportReport(session, "vendor") && mode === "vendor" && !selectedDriver;
+  // SAVE / SHARE unchanged: merchant only (PDF·Excel / driver detail share).
+  const showSaveShare =
     !!isOwner &&
     ((mode === "farmer" && !selectedDriver) ||
       (mode === "vendor" && !selectedDriver) ||
@@ -320,42 +360,72 @@ export default function Reports() {
               <Text style={styles.actionBtnText}>DRIVERS</Text>
             </Pressable>
           ) : null}
-          {showActions ? (
+          {showDriverThermalPrint || showVendorThermalPrint || showSaveShare ? (
           <View style={styles.headerActions}>
-            <Pressable
-              style={styles.actionBtn}
-              disabled={exporting}
-              onPress={() => {
-                if (mode === "driver" && driverDetail) exportDriver(driverDetail, "print");
-                else if (mode === "farmer") setFormatPicker({ kind: "farmer", action: "save" });
-                else if (mode === "vendor") setFormatPicker({ kind: "vendor", action: "save" });
-                else if (mode === "audit") setFormatPicker({ kind: "audit", action: "save" });
-              }}
-              testID="reports-save"
-            >
-              <Ionicons
-                name={mode === "driver" ? "print-outline" : "download-outline"}
-                size={14}
-                color={colors.onSurfaceInverse}
-              />
-              <Text style={styles.actionBtnText}>
-                {exporting ? "…" : mode === "driver" ? "PRINT" : "SAVE"}
-              </Text>
-            </Pressable>
-            <Pressable
-              style={styles.actionBtn}
-              disabled={exporting}
-              onPress={() => {
-                if (mode === "driver" && driverDetail) exportDriver(driverDetail, "share");
-                else if (mode === "farmer") setFormatPicker({ kind: "farmer", action: "share" });
-                else if (mode === "vendor") setFormatPicker({ kind: "vendor", action: "share" });
-                else if (mode === "audit") setFormatPicker({ kind: "audit", action: "share" });
-              }}
-              testID="reports-share"
-            >
-              <Ionicons name="share-outline" size={14} color={colors.onSurfaceInverse} />
-              <Text style={styles.actionBtnText}>{exporting ? "…" : "SHARE"}</Text>
-            </Pressable>
+            {showDriverThermalPrint ? (
+              <Pressable
+                style={styles.actionBtn}
+                disabled={exporting}
+                onPress={printDriverDetailsThermal}
+                testID="reports-driver-thermal-print"
+              >
+                <Ionicons name="print-outline" size={14} color={colors.onSurfaceInverse} />
+                <Text style={styles.actionBtnText}>{exporting ? "…" : "PRINT"}</Text>
+              </Pressable>
+            ) : null}
+            {showVendorThermalPrint ? (
+              <Pressable
+                style={styles.actionBtn}
+                disabled={exporting}
+                onPress={printVendorDetailsThermal}
+                testID="reports-vendor-thermal-print"
+              >
+                <Ionicons name="print-outline" size={14} color={colors.onSurfaceInverse} />
+                <Text style={styles.actionBtnText}>{exporting ? "…" : "PRINT"}</Text>
+              </Pressable>
+            ) : null}
+            {showSaveShare && mode === "driver" && driverDetail ? (
+              <Pressable
+                style={styles.actionBtn}
+                disabled={exporting}
+                onPress={() => exportDriver(driverDetail, "print")}
+                testID="reports-driver-detail-print"
+              >
+                <Ionicons name="print-outline" size={14} color={colors.onSurfaceInverse} />
+                <Text style={styles.actionBtnText}>{exporting ? "…" : "PRINT"}</Text>
+              </Pressable>
+            ) : null}
+            {showSaveShare && mode !== "driver" ? (
+              <Pressable
+                style={styles.actionBtn}
+                disabled={exporting}
+                onPress={() => {
+                  if (mode === "farmer") setFormatPicker({ kind: "farmer", action: "save" });
+                  else if (mode === "vendor") setFormatPicker({ kind: "vendor", action: "save" });
+                  else if (mode === "audit") setFormatPicker({ kind: "audit", action: "save" });
+                }}
+                testID="reports-save"
+              >
+                <Ionicons name="download-outline" size={14} color={colors.onSurfaceInverse} />
+                <Text style={styles.actionBtnText}>{exporting ? "…" : "SAVE"}</Text>
+              </Pressable>
+            ) : null}
+            {showSaveShare ? (
+              <Pressable
+                style={styles.actionBtn}
+                disabled={exporting}
+                onPress={() => {
+                  if (mode === "driver" && driverDetail) exportDriver(driverDetail, "share");
+                  else if (mode === "farmer") setFormatPicker({ kind: "farmer", action: "share" });
+                  else if (mode === "vendor") setFormatPicker({ kind: "vendor", action: "share" });
+                  else if (mode === "audit") setFormatPicker({ kind: "audit", action: "share" });
+                }}
+                testID="reports-share"
+              >
+                <Ionicons name="share-outline" size={14} color={colors.onSurfaceInverse} />
+                <Text style={styles.actionBtnText}>{exporting ? "…" : "SHARE"}</Text>
+              </Pressable>
+            ) : null}
           </View>
         ) : null}
       </View>

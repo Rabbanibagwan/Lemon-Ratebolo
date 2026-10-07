@@ -27,7 +27,10 @@ export async function printThermalDocument(opts: {
   const mm = clampPaperMm(opts.paperMm);
 
   if (opts.requireBluetooth) {
-    if (prefs.connectionType !== "BLUETOOTH" || !prefs.printerId) {
+    if (prefs.connectionType !== "BLUETOOTH") {
+      throw new Error("Select Bluetooth in Settings → Printer.");
+    }
+    if (!prefs.printerId) {
       throw new Error("Select a Bluetooth printer in Settings → Printer.");
     }
     if (!bluetoothHardwareAvailable()) {
