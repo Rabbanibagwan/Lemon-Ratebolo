@@ -1,91 +1,67 @@
 # Lemon Mandi — Release Checklist
 
-**Authoritative branch:** `cursor/permanent-feature-recovery-80c6` (until merged to `main`)  
-**After merge:** `main` becomes authoritative; tag each release with the verified SHA.
+**Authoritative branch (pre-merge):** `cursor/permanent-feature-recovery-80c6`  
+**After merge:** `main` becomes authoritative; always record the release SHA.
 
 A clean Git tree alone does **not** prove features are present.  
 A successful EAS build alone does **not** prove features work.
 
+## Single release command (required)
+
+```bash
+cd frontend
+npm run verify:release
+```
+
+This runs all automated verifies and **fails the release** if any critical check fails.  
+Physical Bluetooth printer checks are labeled **PHYSICAL TEST REQUIRED** (not false PASS).
+
+CI: `.github/workflows/lemon-mandi-verify.yml` runs the same gate on PRs touching `frontend/` / docs (no secrets).
+
 ## Before every preview / APK / iOS build
 
 - [ ] On authoritative branch (`git branch --show-current`)
-- [ ] Record exact SHA: `git rev-parse HEAD`
-- [ ] Working tree clean **or** intentional uncommitted deps documented: `git status --porcelain`
-- [ ] No unexpected RateCAD / Construction / unrelated diffs: `git diff --stat`
-- [ ] Feature inventory reviewed: `docs/FEATURE_INVENTORY.md` (no open REGRESSED/MISSING for release scope)
-- [ ] Run verify scripts (from `frontend/`):
-
-```bash
-npx --yes tsx scripts/verify-reports-thermal-print.ts
-npx --yes tsx scripts/verify-ocr-farmer-name-snapshot.ts
-npx --yes tsx scripts/verify-physical-keyboard.ts
-npx --yes tsx scripts/verify-vendor-purchase-chart.ts
-npx --yes tsx scripts/verify-chart-vendor-print.ts
-npx --yes tsx scripts/verify-vendor-bill-no-bags.ts
-node scripts/verify-set-driver-nav.js
-```
-
-- [ ] Local Android JS export (when shipping APK): `npx expo export --platform android`
-- [ ] Required deps present (`pako` declared) if using png-mono / QR raster
-- [ ] Stop if SHA, inventory, or verifies disagree
+- [ ] Record full SHA: `git rev-parse HEAD`
+- [ ] Working tree documented: `git status --porcelain`
+- [ ] No RateCAD / Construction / unrelated diffs
+- [ ] `docs/FEATURE_INVENTORY.md` reviewed (no open MISSING/REGRESSED for release scope)
+- [ ] `npm run verify:release` **PASS**
+- [ ] Print branch + SHA in the preview/build log
+- [ ] Stop if SHA, inventory, or gate disagree
 
 ## During build
 
-- [ ] Use existing EAS profiles only (`preview` APK / `production` as configured)
+- [ ] Use existing EAS profiles only
+- [ ] Build from the **committed** SHA that passed the gate (no “mystery” uncommitted app changes)
 - [ ] Do not force-push
-- [ ] Do not cherry-pick random commits into the release commit
-- [ ] Do not start production build until verifies pass
+- [ ] Do not randomly cherry-pick into the release tip
 
 ## After build
 
-- [ ] Record actual commit SHA EAS reports (`gitCommitHash`)
-- [ ] Record app version + build number / versionCode
-- [ ] Record EAS build ID + URL
-- [ ] Record verify results (pass/fail counts)
-- [ ] Confirm EAS status is **FINISHED** before calling the build successful
-- [ ] Update `docs/FEATURE_INVENTORY.md` if behavior findings change
-- [ ] Do **not** submit to App Store / TestFlight unless explicitly approved
+- [ ] Fill `docs/BUILD_PROVENANCE.md` tables (branch, SHA, version, EAS ID/URL, gate result)
+- [ ] Confirm EAS status is **FINISHED**
+- [ ] Confirm EAS `gitCommitHash` matches the intended SHA (or document intentional variance)
+- [ ] Physical printer: mark PHYSICAL TEST REQUIRED until device-tested
+- [ ] Do not App Store / TestFlight submit unless explicitly approved
 
-## Preview provenance
+## Critical features that must stay green in the gate
 
-| Field | Value |
-|---|---|
-| Branch | |
-| Commit SHA | |
-| Started at | |
-| Preview URL | |
-| Notes | |
+- Individual Driver thermal PRINT (`requireBluetooth`, no system dialog)
+- Driver list + Vendor Details thermal PRINT
+- Farmer Patti / Vendor Bill ESC/POS widths 58/80/100
+- Vendor Chart thermal PRINT
+- Merchant UPI + uploaded QR
+- OCR farmer-name snapshot
+- SET DRIVER source gate
+- Physical keyboard helpers
+- PartyPicker keyboard sizing
+- pako declared
 
-## Android APK provenance
+## Preview start snippet
 
-| Field | Value |
-|---|---|
-| Branch | |
-| Commit SHA | |
-| EAS build ID | |
-| EAS URL | |
-| APK URL | |
-| Version / versionCode | |
-| Verify scripts | |
-
-## iOS IPA provenance
-
-| Field | Value |
-|---|---|
-| Branch | |
-| Commit SHA | |
-| EAS build ID | |
-| EAS URL | |
-| IPA URL | |
-| Bundle ID | |
-| Version / build | |
-| Apple team linked | YES/NO |
-| Verify scripts | |
-
-## Integration rules
-
-1. Feature branches must be reviewed and verified before they are part of a release.  
-2. Prefer merge/cherry-pick of the **best verified** implementation; never overwrite newer fixes with obsolete code.  
-3. One Bluetooth thermal pipeline — do not add a second printer stack.  
-4. Thermal Print actions must use `requireBluetooth: true` (no system dialog fallback).  
-5. Share/Save/PDF paths may still use expo-print / file share.  
+```bash
+echo "PREVIEW_BRANCH=$(git branch --show-current)"
+echo "PREVIEW_SHA=$(git rev-parse HEAD)"
+cd frontend && npm run verify:release
+# then start Expo / tunnel only if gate passed
+```

@@ -1,16 +1,30 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
-  FlatList, Modal,
-  Pressable, StyleSheet, Text, TextInput, View,
+  FlatList, Modal, Platform,
+  Pressable, StyleSheet, Text, TextInput, useWindowDimensions, View,
   type NativeSyntheticEvent,
   type TextInputKeyPressEventData,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useKeyboardState } from "react-native-keyboard-controller";
 
 import { api, Farmer, Vendor } from "@/src/api";
 import { KeyboardFormAvoid } from "@/src/components/KeyboardForm";
 import { Button, Empty, Input } from "@/src/components/ui";
 import { colors, font, spacing } from "@/src/theme";
+import {
+  createEnterGate,
+  isArrowDownKey,
+  isArrowLeftKey,
+  isArrowRightKey,
+  isArrowUpKey,
+  isEnterKey,
+  isEscapeKey,
+} from "@/src/utils/physical-keyboard";
+import {
+  partyPickerSearchListMaxHeight,
+  partyPickerSearchSheetMaxHeight,
+} from "@/src/utils/party-picker-keyboard";
 
 export type PartyKind = "farmer" | "vendor";
 export type PartyItem = Farmer | Vendor;
@@ -96,6 +110,23 @@ export function PartyPicker({
   const addLabel = isFarmer ? "+ ADD NEW FARMER" : "+ ADD NEW VENDOR";
   const searchPlaceholder = isFarmer ? "Search Farmer…" : "Search Vendor…";
 
+  const { height: windowHeight } = useWindowDimensions();
+  const keyboardHeight = useKeyboardState((s) => (s.isVisible ? s.height : 0));
+  // Cap sheet + list to the space above the IME so suggestions never sit behind it.
+  const searchSheetMaxHeight = useMemo(
+    () => partyPickerSearchSheetMaxHeight(windowHeight, keyboardHeight, Platform.OS),
+    [windowHeight, keyboardHeight],
+  );
+  const searchListMaxHeight = useMemo(
+    () => partyPickerSearchListMaxHeight(
+      windowHeight,
+      keyboardHeight,
+      searchSheetMaxHeight,
+      Platform.OS,
+    ),
+    [windowHeight, keyboardHeight, searchSheetMaxHeight],
+  );
+
   const [query, setQuery] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState("");
@@ -115,12 +146,13 @@ export function PartyPicker({
   const villageRef = useRef<TextInput>(null);
   const createKeyRef = useRef<TextInput>(null);
   const createActionRef = useRef<"save" | "cancel">("save");
-  const suppressCreateEnterUntilRef = useRef(0);
+  const searchEnterGate = useRef(createEnterGate()).current;
+  const createEnterGateRef = useRef(createEnterGate()).current;
   const nameFocusPendingRef = useRef(false);
   const searchFocusPendingRef = useRef(false);
   createActionRef.current = createAction;
 
-  const shouldIgnoreCreateEnter = () => Date.now() < suppressCreateEnterUntilRef.current;
+  const shouldIgnoreCreateEnter = () => createEnterGateRef.shouldIgnore();
 
   useEffect(() => {
     if (!visible) return;
@@ -170,8 +202,10 @@ export function PartyPicker({
 
   type CreateField = "name" | "details" | "phone" | "village";
 
+  // Enter chain: farmer Name → Phone → Save (village optional via touch/Tab).
+  // Vendor: Name → Details → Phone → Save.
   const createFieldOrder = useMemo((): CreateField[] => {
-    if (isFarmer) return ["name", "phone", "village"];
+    if (isFarmer) return ["name", "phone"];
     return ["name", "details", "phone"];
   }, [isFarmer]);
 
@@ -194,6 +228,7 @@ export function PartyPicker({
 
   const submitCreateField = (field: CreateField) => {
     if (shouldIgnoreCreateEnter()) return;
+    if (!createEnterGateRef.claim()) return;
     advanceCreateField(field);
   };
 
@@ -216,7 +251,8 @@ export function PartyPicker({
   };
 
   const activateCreateActions = (action: "save" | "cancel" = "save") => {
-    suppressCreateEnterUntilRef.current = 0;
+    // Same Enter that advanced here must not also trigger Save.
+    createEnterGateRef.suppressFor(280);
     setCreateAction(action);
     setCreateActionsActive(true);
     nameRef.current?.blur();
@@ -250,20 +286,30 @@ export function PartyPicker({
 
   const handleCreateFormKeyPress = (e: NativeSyntheticEvent<TextInputKeyPressEventData>) => {
     const key = e.nativeEvent.key;
-    if (key === "Escape") {
+    if (isEscapeKey(key)) {
       closeCreate();
       return;
     }
     if (!createActionsActive) return;
-    if (key === "ArrowLeft") setCreateAction("save");
-    else if (key === "ArrowRight") setCreateAction("cancel");
-    else if (key === "Enter") runCreateAction(createActionRef.current);
+    if (isArrowLeftKey(key)) setCreateAction("save");
+    else if (isArrowRightKey(key)) setCreateAction("cancel");
+    else if (isEnterKey(key)) {
+      if (!createEnterGateRef.claim()) return;
+      runCreateAction(createActionRef.current);
+    }
   };
 
-  const handleCreateFieldKeyPress = (_field: CreateField) => (
+  const handleCreateFieldKeyPress = (field: CreateField) => (
     e: NativeSyntheticEvent<TextInputKeyPressEventData>,
   ) => {
-    if (e.nativeEvent.key === "Escape") closeCreate();
+    const key = e.nativeEvent.key;
+    if (isEscapeKey(key)) {
+      closeCreate();
+      return;
+    }
+    if (isEnterKey(key)) {
+      submitCreateField(field);
+    }
   };
 
   const handleCreateFieldFocus = () => {
@@ -284,7 +330,9 @@ export function PartyPicker({
 
   const openCreate = () => {
     searchRef.current?.blur();
-    suppressCreateEnterUntilRef.current = Date.now() + 650;
+    // Prevent the same Enter that opened create from advancing Name → next field.
+    createEnterGateRef.suppressFor(500);
+    searchEnterGate.suppressFor(500);
     nameFocusPendingRef.current = true;
     setCreateAction("save");
     setCreateActionsActive(false);
@@ -305,20 +353,29 @@ export function PartyPicker({
     onSelect(filtered[idx]);
   };
 
+  const confirmSearchSelection = () => {
+    if (!searchEnterGate.claim()) return;
+    if (filtered.length === 0 && query.trim()) {
+      createEnterGateRef.suppressFor(500);
+      nameFocusPendingRef.current = true;
+    }
+    confirmHighlighted();
+  };
+
   const handleSearchKeyPress = (e: NativeSyntheticEvent<TextInputKeyPressEventData>) => {
     const key = e.nativeEvent.key;
-    if (key === "ArrowDown") {
+    if (isEscapeKey(key)) {
+      onClose();
+      return;
+    }
+    if (isArrowDownKey(key)) {
       if (!filtered.length) return;
       setHighlightIndex((i) => Math.min(i + 1, filtered.length - 1));
-    } else if (key === "ArrowUp") {
+    } else if (isArrowUpKey(key)) {
       if (!filtered.length) return;
       setHighlightIndex((i) => Math.max(i - 1, 0));
-    } else if (key === "Enter") {
-      if (filtered.length === 0 && query.trim()) {
-        suppressCreateEnterUntilRef.current = Date.now() + 650;
-        nameFocusPendingRef.current = true;
-      }
-      confirmHighlighted();
+    } else if (isEnterKey(key)) {
+      confirmSearchSelection();
     }
   };
 
@@ -389,10 +446,12 @@ export function PartyPicker({
         onRequestClose={onClose}
         onShow={handleSearchModalShown}
       >
-        {/* Lift LINK FARMER/VENDOR sheet above the IME so search + suggestions stay visible. */}
         <KeyboardFormAvoid style={styles.modalRoot} behavior="padding">
           <Pressable style={styles.backdrop} onPress={onClose} />
-          <View style={styles.sheet} testID={isFarmer ? "farmer-link-sheet" : "vendor-link-sheet"}>
+          <View
+            style={[styles.sheet, { maxHeight: searchSheetMaxHeight }]}
+            testID={isFarmer ? "farmer-picker-sheet" : "vendor-picker-sheet"}
+          >
             <View style={styles.header}>
               <Text style={styles.title}>{title}</Text>
               <Pressable onPress={onClose} hitSlop={12} testID="party-picker-close">
@@ -422,13 +481,7 @@ export function PartyPicker({
                 returnKeyType="search"
                 blurOnSubmit={false}
                 onLayout={handleSearchLayout}
-                onSubmitEditing={() => {
-                  if (filtered.length === 0 && query.trim()) {
-                    suppressCreateEnterUntilRef.current = Date.now() + 650;
-                    nameFocusPendingRef.current = true;
-                  }
-                  confirmHighlighted();
-                }}
+                onSubmitEditing={confirmSearchSelection}
                 onKeyPress={handleSearchKeyPress}
                 testID={isFarmer ? "farmer-search" : "vendor-search"}
               />
@@ -440,9 +493,8 @@ export function PartyPicker({
               keyExtractor={(x) => x.id}
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode="none"
-              // Shrink with the avoided sheet so suggestions stay above the keyboard (not under it).
-              style={styles.suggestList}
-              contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.xl, gap: spacing.sm }}
+              style={{ maxHeight: searchListMaxHeight, flexGrow: 0 }}
+              contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.md, gap: spacing.sm }}
               onScrollToIndexFailed={() => {
                 /* ignore — list may still be measuring */
               }}
@@ -536,7 +588,7 @@ export function PartyPicker({
               keyboardType="phone-pad"
               testID={isFarmer ? "new-farmer-phone" : "new-vendor-phone"}
               inputRef={phoneRef}
-              returnKeyType="next"
+              returnKeyType={isFarmer ? "done" : "next"}
               blurOnSubmit={false}
               onFocus={handleCreateFieldFocus}
               onSubmitEditing={() => submitCreateField("phone")}
@@ -639,14 +691,7 @@ const styles = StyleSheet.create({
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.45)" },
   sheet: {
     backgroundColor: colors.surface, borderTopWidth: 2, borderColor: colors.borderStrong,
-    paddingBottom: spacing.md, maxHeight: "82%",
-    // Keep header + search pinned; FlatList below absorbs keyboard height loss.
-    flexShrink: 1,
-  },
-  suggestList: {
-    flexGrow: 0,
-    flexShrink: 1,
-    maxHeight: 360,
+    paddingBottom: spacing.md, flexShrink: 1,
   },
   createCard: {
     backgroundColor: colors.surface, borderTopWidth: 2, borderColor: colors.borderStrong,

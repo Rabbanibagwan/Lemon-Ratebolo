@@ -1,69 +1,62 @@
 # Lemon Mandi — Permanent Feature Recovery Report
 
-**Date:** 2026-10-10  
-**Recovery branch:** `cursor/permanent-feature-recovery-80c6`  
-**Baseline (integration tip):** `6333ed4076aa5d69ff5dba1ef5aa82f2dde465b6`  
-**Verified reference commit:** `50e5fe9390b1f04fc7d79dd48d8d6def6ca0d3c2` (ancestor of baseline; baseline = reference + `pako` dependency fix)
+**Authoritative branch:** `cursor/permanent-feature-recovery-80c6`  
+**Candidate → verified tip (this revision):** see `git rev-parse HEAD` after push  
+**Prior tip verified as baseline:** `7e4347d6a4efac8008348d8163bdaaf175bcb65a`  
+**Umbrella parent:** `6333ed4076aa5d69ff5dba1ef5aa82f2dde465b6` (`50e5fe9` + pako)  
+**Reference parity commit:** `50e5fe9390b1f04fc7d79dd48d8d6def6ca0d3c2`
 
-## Phase 1 — Protected state (pre-modification)
+## Phase 1 — Baseline verification
 
-| Item | Value |
+| Check | Result |
 |---|---|
-| Workspace branch before recovery | `cursor/hide-auction-set-driver-80c6` @ `2ddc980` |
-| Working tree | Clean (no uncommitted work discarded) |
-| Open integration PR | #55 `cursor/integrate-cash-chart-upi-80c6` → `main` |
-| Latest successful preview APK | EAS `e2fe065d-5219-42f5-a20a-f9bd6597de09` from integrate working tree / commit lineage of `50e5fe9`+pako → `6333ed4` |
-| Destructive reset / force-push | Not used |
+| Full SHA of `7e4347d` | `7e4347d6a4efac8008348d8163bdaaf175bcb65a` |
+| Parent | `6333ed4076aa5d69ff5dba1ef5aa82f2dde465b6` |
+| Branch exists + pushed | YES (`origin/cursor/permanent-feature-recovery-80c6`) |
+| `50e5fe9` ancestor | YES |
+| Force-push / destructive reset | NOT used |
+| Working tree before this revision | Clean at `7e4347d` |
 
-### Baseline selection evidence
+### Provenance of recent builds
 
-1. `50e5fe9` is the last verified 23-feature parity commit (second-pass).
-2. `6333ed4` is the same + declared `pako` / `@types/pako` (required for EAS Android Metro).
-3. `origin/main` (`7da4285`) and current agent branch `hide-auction-set-driver` **lack** integrate features (cash book, chart, UPI, reports thermal list prints, etc.).
-4. Therefore the authoritative recovery baseline is **`6333ed4`**, not `main` and not `2ddc980`.
+| Artifact | Commit | Features note |
+|---|---|---|
+| Latest known FINISHED APK `e2fe065d-…` | EAS reported `50e5fe9` | Has integrate features; **REGRESSED** individual driver PRINT (system dialog); has pako in upload |
+| iOS production | Never queued | Apple team missing |
+| Preview currently running | **UNKNOWN** (no live preview provenance in this agent) | Must print SHA before start |
 
-### Confirmed regression (driver individual Print)
+## Phase 3 — Root causes (with evidence)
 
-**Path:** Reports → Driver tab → select individual driver → PRINT  
-
-| Ref | Handler | Bluetooth-only? | Result |
+| ID | Root cause | Affected features | Evidence |
 |---|---|---|---|
-| `main` / `2ddc980` | `exportDriver` → `thermalPrintDriverReport` | No (`preferHtml: true`) | Opens Android system / expo-print dialog |
-| Integrate `6333ed4` / `50e5fe9` | Same individual path | No (`preferHtml: true`) | **Still opens system dialog** |
-| Integrate list Print (no driver selected) | `thermalPrintDriverDetailsReport` | Yes (`requireBluetooth: true`) | Correct ESC/POS |
-| `a2e1cae` (`fix-driver-report-thermal-print`) | `thermalPrintDriverReport` | Yes (`requireBluetooth: true`) | Correct individual path |
+| R1 | Feature commits never merged to `main` | Cash Book, Chart, UPI, OCR exact, physical Enter, report list thermal, vendor details thermal | `main` lacks cash-book routes, chart-print, ocr-party-match exact, etc. Open PR #55 |
+| R2 | Integrate tip still had obsolete individual-driver handler | Individual Driver Details PRINT | `thermalPrintDriverReport` used `preferHtml: true` on `50e5fe9`/`6333ed4`; fixed from `a2e1cae` |
+| R3 | APK/preview built from older or non-recovery SHA | Any feature only on recovery/integrate | EAS `gitCommitHash` `50e5fe9` for last APK; not `7e4347d` |
+| R4 | Partial cherry-pick / dual print stacks historically | Driver PRINT vs list PRINT | List used `requireBluetooth`; individual used HTML/system path |
+| R5 | PartyPicker keyboard util present but unwired on integrate | OCR/Directory PartyPicker IME sizing | `party-picker-keyboard.ts` on tip; PartyPicker lacked `useKeyboardState` until recovered from `combine` |
+| R6 | Backend model lag vs frontend optional field | `upi_name` PARTIAL | Frontend sends `upi_name`; backend ShopProfile has only `upi_id` / `upi_qr_base64` |
+| R7 | Missing declared dependency broke EAS | png-mono / QR raster | Metro “Unable to resolve pako” until `6333ed4` |
+| R8 | No release gate / CI historically | All regressions | No workflow before this recovery; `main` has zero `verify-*` scripts |
 
-**Root cause:** Individual Driver Details PRINT calls `thermalPrintDriverReport`, which on the integrate tip still uses `preferHtml: true` and does **not** set `requireBluetooth: true`, so `printThermalDocument` falls through to `printThermalHtmlOnly` → Android system print dialog.
+## Recoveries applied
 
-**Best recovery source for this fix:** commit `a2e1caef33752d8639f384898ac88909884361ec` (targeted apply into integrate; do not replace newer integrate report list thermal code).
+1. **Individual driver Bluetooth PRINT** (`a2e1cae` → `7e4347d`): `requireBluetooth: true`, no `preferHtml`.  
+2. **PartyPicker dynamic keyboard** (from `combine-save-latest-cash-book`): `useKeyboardState` + maxHeight helpers.  
+3. **Verify scripts restored** from combine + adapted to current integrate design (not obsolete netbox/upi_name backend strings).  
+4. **Release gate** `npm run verify:release` + GitHub Actions workflow (no secrets).  
+5. **Docs:** FEATURE_INVENTORY, RELEASE_CHECKLIST, BUILD_PROVENANCE, this report.
 
-## Scope guardrails
+## Automated gate result (this revision)
 
-- Lemon Mandi only  
-- No RateCAD / RateBolo Construction  
-- No secrets  
+```
+npm run verify:release
+→ 13 automated PASS, 0 FAIL, 2 PHYSICAL TEST REQUIRED
+```
+
+## Scope confirmations
+
+- RATECAD: NO  
+- RateBolo Construction: NO  
+- Secrets: NO  
+- No APK/iOS production build in this recovery pass  
 - No App Store / TestFlight submit  
-- No production Android/iOS build until recovery verification passes  
-
-## Executed recovery actions
-
-1. Applied individual-driver `requireBluetooth` fix from `a2e1cae` into `thermalPrintDriverReport` (removed `preferHtml` / web system-print path for Print only; Share unchanged).  
-2. Extended `verify-reports-thermal-print.ts` + added `verify-release-preflight.ts` so the individual path cannot silently regress.  
-3. Wrote `docs/FEATURE_INVENTORY.md` and `docs/RELEASE_CHECKLIST.md`.  
-4. Did **not** apply `2ddc980` wholesale — integrate already has stronger Dashboard/Reports `source` gates for SET DRIVER.  
-5. Vendor bill QR cut already present on baseline (`cutAfterLastContent`).  
-
-### Automated verify results (this recovery)
-
-- `verify-reports-thermal-print.ts`: **70 passed**  
-- `verify-ocr-farmer-name-snapshot.ts`: **14 passed**  
-- `verify-physical-keyboard.ts`: OK  
-- `verify-vendor-purchase-chart.ts`: PASS  
-- `verify-chart-vendor-print.ts`: ALL OK  
-- `verify-vendor-bill-no-bags.ts`: ALL OK  
-- `verify-set-driver-nav.js`: ALL OK  
-- `verify-release-preflight.ts`: **9 passed**  
-
-### Physical Bluetooth printer
-
-**Not performed** in this environment (no connected thermal printer). Code-path and automated checks only.  

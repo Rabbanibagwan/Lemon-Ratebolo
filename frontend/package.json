@@ -10,6 +10,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
+    "verify:release": "bash scripts/verify-release-gate.sh",
     "build:android:apk": "eas build --platform android --profile preview"
   },
   "dependencies": {

@@ -50,8 +50,22 @@ check("pako declared dependency", typeof pkg.dependencies?.pako === "string");
 
 const inventory = readFileSync(join(root, "docs/FEATURE_INVENTORY.md"), "utf8");
 const checklist = readFileSync(join(root, "docs/RELEASE_CHECKLIST.md"), "utf8");
-check("FEATURE_INVENTORY present", inventory.includes("Individual driver thermal PRINT"));
-check("RELEASE_CHECKLIST present", checklist.includes("Before every preview"));
+const provenance = readFileSync(join(root, "docs/BUILD_PROVENANCE.md"), "utf8");
+const recovery = readFileSync(join(root, "docs/RECOVERY_REPORT.md"), "utf8");
+const pkgScripts = JSON.parse(readFileSync(join(__dirname, "../package.json"), "utf8")).scripts || {};
+check("FEATURE_INVENTORY present", inventory.includes("Individual Driver Details PRINT") || inventory.includes("individual driver"));
+check("RELEASE_CHECKLIST present", checklist.includes("verify:release") || checklist.includes("Before every preview"));
+check("BUILD_PROVENANCE present", provenance.includes("gitCommitHash") || provenance.includes("Full commit SHA"));
+check("RECOVERY_REPORT present", recovery.includes("Root cause") || recovery.includes("root cause"));
+check("npm verify:release script", typeof pkgScripts["verify:release"] === "string");
+check(
+  "release gate script present",
+  require("fs").existsSync(join(__dirname, "verify-release-gate.sh")),
+);
+check(
+  "CI workflow present",
+  require("fs").existsSync(join(root, ".github/workflows/lemon-mandi-verify.yml")),
+);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log(`PROVENANCE_SHA=${sha}`);
