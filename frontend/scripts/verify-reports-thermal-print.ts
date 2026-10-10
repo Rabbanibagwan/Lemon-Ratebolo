@@ -196,5 +196,40 @@ const exportTs = readFileSync(join(__dirname, "../src/utils/reports-export.ts"),
 check("driver print requireBluetooth", /thermalPrintDriverDetailsReport[\s\S]*?requireBluetooth:\s*true/.test(exportTs));
 check("vendor print requireBluetooth", /thermalPrintVendorDetailsReport[\s\S]*?requireBluetooth:\s*true/.test(exportTs));
 
+// Individual Driver Details PRINT (Reports → Driver → select driver → PRINT)
+const individualFn = exportTs.match(
+  /export async function thermalPrintDriverReport\([\s\S]*?\n\}/,
+);
+check("individual driver thermalPrintDriverReport exists", !!individualFn);
+if (individualFn) {
+  const body = individualFn[0];
+  check("individual driver requireBluetooth true", /requireBluetooth:\s*true/.test(body));
+  check(
+    "individual driver no preferHtml (blocks system dialog)",
+    !/preferHtml:\s*true/.test(body),
+  );
+  check(
+    "individual driver no Print.printAsync in thermal path",
+    !/Print\.printAsync/.test(body),
+  );
+  check(
+    "individual driver uses printThermalDocument",
+    /printThermalDocument\(/.test(body),
+  );
+}
+check(
+  "individual driver PRINT wired via exportDriver",
+  reportsTsx.includes("thermalPrintDriverReport") &&
+    reportsTsx.includes('testID="reports-driver-detail-print"'),
+);
+check(
+  "individual driver PRINT success message is thermal (not system preview)",
+  reportsTsx.includes("Driver report sent to the connected thermal printer."),
+);
+check(
+  "individual driver PRINT not system-preview message",
+  !reportsTsx.includes("Driver report preview is open — use Print from that window."),
+);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

@@ -549,30 +549,16 @@ export async function thermalPrintDriverReport(
   settings?: Settings | null,
   drivers?: DriverRangeRef[],
 ): Promise<void> {
-  // CRITICAL (web): open the preview window synchronously during the button click
-  // before any await — otherwise browsers block / null the popup.
-  const preview =
-    Platform.OS === "web" ? openThermalPreviewWindow(`Driver ${d.driver_name || "report"}`) : null;
-
+  // Individual Driver Details PRINT must use the connected Bluetooth thermal printer
+  // (ESC/POS), same connection path as Farmer Patti — never the OS/system print dialog.
+  // Recovered from a2e1cae (fix-driver-report-thermal-print); Share/PDF path unchanged.
   const mm = await resolvePrintPaperMm(settings?.thermal_paper_width_mm);
   const html = renderDriverThermalHtml(d, dateISO, shopName, mm, drivers);
-
-  if (Platform.OS === "web") {
-    if (preview && !preview.closed) {
-      await fillThermalPreviewAndPrint(preview, html, mm);
-      return;
-    }
-    // Popup blocked (Cursor/embedded browser, strict blockers): visible in-page preview.
-    showInPageThermalPreview(html, `Driver ${d.driver_name || "report"} — Print`);
-    return;
-  }
-
-  // Native: always print the compact Roman HTML table (same as Share / Preview).
   await printThermalDocument({
     html,
     escposBase64: encodeDriverReportEscPos(d, dateISO, shopName, mm, drivers),
     paperMm: mm,
-    preferHtml: true,
+    requireBluetooth: true,
   });
 }
 

@@ -2,7 +2,7 @@
  * Reports Driver/Vendor Details — Bluetooth thermal ESC/POS encoders.
  * Kept free of react-native / api imports so Node verify scripts can run offline.
  */
-import { EscPosBuilder, rupees } from "@/src/utils/escpos";
+import { EscPosBuilder, rupees } from "./escpos";
 
 /** Minimal driver row for the summary print (Driver Name | From | To | Bags | Bhada). */
 export type DriverDetailsPrintRow = {
