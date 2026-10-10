@@ -10,6 +10,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
+    "verify:release": "bash scripts/verify-release-gate.sh",
     "build:android:apk": "eas build --platform android --profile preview"
   },
   "dependencies": {
@@ -43,6 +44,7 @@
     "expo-system-ui": "6.0.9",
     "expo-web-browser": "15.0.11",
     "jspdf": "2.5.2",
+    "pako": "2.1.0",
     "qrcode": "1.5.4",
     "react": "19.1.0",
     "react-dom": "19.1.0",
@@ -61,6 +63,7 @@
     "xlsx": "0.18.5"
   },
   "devDependencies": {
+    "@types/pako": "2.0.3",
     "@types/qrcode": "1.5.6",
     "@types/react": "19.1.10",
     "babel-preset-expo": "54.0.12",

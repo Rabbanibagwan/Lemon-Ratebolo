@@ -15,6 +15,7 @@ import { colors, font, money, spacing } from "@/src/theme";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
 import { DatePickerModal } from "@/src/components/DatePickerModal";
 import { formatDisplayDate, parseISODate, toISODate } from "@/src/utils/date";
+import { createEnterGate, handleEnterAdvance } from "@/src/utils/physical-keyboard";
 
 type LineDraft = {
   key: string;
@@ -51,6 +52,7 @@ export default function NewVendorBill() {
 
   const bagsRefs = useRef<Record<string, TextInput | null>>({});
   const rateRefs = useRef<Record<string, TextInput | null>>({});
+  const lineEnterGate = useRef(createEnterGate()).current;
 
   useEffect(() => {
     (async () => {
@@ -311,7 +313,8 @@ export default function NewVendorBill() {
                     keyboardType="number-pad"
                     inputRef={(r) => { bagsRefs.current[l.key] = r; }}
                     returnKeyType="next"
-                    onSubmitEditing={() => rateRefs.current[l.key]?.focus()}
+                    blurOnSubmit={false}
+                    {...handleEnterAdvance(lineEnterGate, () => rateRefs.current[l.key]?.focus())}
                     testID={`bill-bags-${idx}`}
                   />
                 </View>
@@ -323,7 +326,11 @@ export default function NewVendorBill() {
                     keyboardType="decimal-pad"
                     inputRef={(r) => { rateRefs.current[l.key] = r; }}
                     returnKeyType="done"
-                    onSubmitEditing={() => { /* no auto-add; user must tap ADD LINE */ }}
+                    blurOnSubmit
+                    {...handleEnterAdvance(lineEnterGate, () => {
+                      /* no auto-add; user must tap ADD LINE */
+                      rateRefs.current[l.key]?.blur();
+                    })}
                     testID={`bill-rate-${idx}`}
                   />
                 </View>
@@ -362,8 +369,8 @@ export default function NewVendorBill() {
           <View style={styles.divider} />
 
           <Text style={styles.section}>Totals</Text>
-          <SummaryRow label="Bags" value={String(totals.bags)} />
-          <SummaryRow label={`Goods (×${totals.factorN} + ₹${totals.marginN}/bag)`} value={money(totals.goods)} />
+          <SummaryRow label="No. Bags" value={String(totals.bags)} />
+          <SummaryRow label="Lemon" value={money(totals.goods)} />
           <SummaryRow label={`Commission (${totals.bags} × ₹${totals.commN})`} value={money(totals.commTotal)} />
           <SummaryRow label="Hamali" value={money(totals.hamaliN)} />
           {totals.cessN > 0 ? <SummaryRow label="Cess / Other" value={money(totals.cessN)} /> : null}
