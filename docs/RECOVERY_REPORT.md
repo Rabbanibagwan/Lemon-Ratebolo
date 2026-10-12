@@ -59,4 +59,19 @@ npm run verify:release
 - RateBolo Construction: NO  
 - Secrets: NO  
 - No APK/iOS production build in this recovery pass  
-- No App Store / TestFlight submit  
+- No App Store / TestFlight submit
+
+
+## OCR vendor exact-match integration (2026-10-12)
+
+| Item | Value |
+|---|---|
+| Source PR | #57 `cursor/fix-ocr-vendor-exact-match-80c6` |
+| Fix commit | `be5d4213d533fb7e0d96126f9e25300fe4eaed5c` |
+| Merged into | `cursor/permanent-feature-recovery-80c6` |
+| Merge commit | (see git tip after push) |
+| BB ≠ JBB auto-link | PASS (verify-ocr-farmer-name-snapshot) |
+| AAM ≠ AAMG farmer | PASS (same suite) |
+| `fuzzyMatchVendorId` on tip | Removed from OCR path |
+| Release gate | 13 PASS / 0 FAIL / 2 PHYSICAL TEST REQUIRED |
+| APK | Not built (build pause) |
