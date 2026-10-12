@@ -13,15 +13,15 @@ Do not mark PASS only because a button exists — verify the call path.
 
 | Metric | Count |
 |---|---|
-| Total features audited | **36** |
-| Already correctly integrated on recovery tip (code PATH PASS) | **33** |
-| Recovered from Git this session (beyond prior 7e4347d tip) | **1** (PartyPicker dynamic keyboard from `combine`) |
-| Newly fixed earlier on tip (individual driver BT) | **1** (counted in the 33) |
+| Total features audited | **37** (includes OCR vendor exact-match row 3b) |
+| Already correctly integrated on recovery tip (code PATH PASS) | **34** |
+| Newly fixed (OCR vendor exact-only; remove fuzzy auto-link) | **1** |
 | Still MISSING | **0** |
-| PARTIAL | **1** (backend optional `upi_name` not on ShopProfile model; frontend still sends/falls back) |
-| UNVERIFIED (needs human/device) | **2** labeled below as visual or end-to-end Drive; plus all thermal **PHYSICAL TEST REQUIRED** |
+| PARTIAL | **1** (backend optional `upi_name` not on ShopProfile model) |
+| UNVERIFIED (needs human/device) | **2** (login visual; Drive backup E2E) + thermal **PHYSICAL TEST REQUIRED** |
 
-Automated gate: `npm run verify:release` → **13/13 automated PASS**, **2 PHYSICAL TEST REQUIRED**.
+Automated gate: `npm run verify:release` → **13/13 automated PASS**, **2 PHYSICAL TEST REQUIRED**.  
+OCR party verify: **27 PASS** (farmer AAM≠AAMG + vendor BB≠JBB).
 
 ---
 
@@ -31,7 +31,8 @@ Automated gate: `npm run verify:release` → **13/13 automated PASS**, **2 PHYSI
 |---|---|---|---|---|---|---|---|---|---|---|
 | 1 | Action Diary / Auction | Day lots, drivers, bhada | main + set-driver | Yes | Yes | UNKNOWN unless SHA matches | UNKNOWN/older | set-driver-nav | PASS | **PASS** |
 | 2 | OCR extraction + review | Capture → review → save | OCR PRs / main | Yes | Yes | UNKNOWN | UNKNOWN | manual | — | **PASS** |
-| 3 | OCR farmer-name snapshot | AAM ≠ AAMG exact | #50 / integrate | Yes | Yes | Missing on main | Present if from integrate | verify-ocr-farmer-name-snapshot | 14 PASS | **PASS** |
+| 3 | OCR farmer-name snapshot | AAM ≠ AAMG exact | #50 / integrate | Yes | Yes | Missing on main | Present if from integrate | verify-ocr-farmer-name-snapshot | included in 27 PASS | **PASS** |
+| 3b | OCR vendor-name exact match | BB ≠ JBB; exact only | fix-ocr-vendor-exact-match | Yes | Yes | Prior APK fuzzy | Prior APK fuzzy (BB→JBB) | verify-ocr-farmer-name-snapshot | 27 PASS | **PASS** |
 | 4 | Farmer Patti create/edit | Manual + OCR | main | Yes | Yes | — | — | print-document | PASS | **PASS** |
 | 5 | Manual Entry | Add lot / bills | main | Yes | Yes | — | — | physical-keyboard | PASS | **PASS** |
 | 6 | Farmer/Vendor People | Directory | main | Yes | Yes | — | — | PartyPicker verifies | PASS | **PASS** |

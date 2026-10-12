@@ -1,6 +1,7 @@
 /**
- * Regression: OCR farmer name must not be silently replaced by a longer
- * Farmer master via fuzzy/prefix matching (AAM → AAMG).
+ * Regression: OCR farmer/vendor names must not be silently replaced by a
+ * longer/partial master via fuzzy/prefix matching
+ * (AAM → AAMG, BB → JBB).
  *
  * Print path assertion: stored patti.farmer_name is what ESC/POS encodes
  * (source + local EscPosBuilder FARMER line); no Farmer-master re-query.
@@ -12,8 +13,8 @@ import path from "path";
 
 import {
   exactMatchPartyId,
-  fuzzyMatchVendorId,
   resolveOcrFarmerId,
+  resolveOcrVendorId,
 } from "../src/utils/ocr-party-match";
 
 function assert(cond: unknown, msg: string) {
@@ -32,10 +33,18 @@ function check(name: string, fn: () => void) {
   }
 }
 
-const masters = [
+const farmerMasters = [
   { id: "f-aamg", name: "AAMG" },
   { id: "f-rahul", name: "RAHUL" },
   { id: "f-aam", name: "AAM" },
+];
+
+const vendorMasters = [
+  { id: "v-jbb", name: "JBB" },
+  { id: "v-jbb-traders", name: "JBB Traders" },
+  { id: "v-abc", name: "ABC" },
+  { id: "v-bb", name: "BB" },
+  { id: "v-mkb-lemon", name: "MKB LEMON" },
 ];
 
 check("exactMatch: AAM does not bind AAMG", () => {
@@ -47,7 +56,7 @@ check("exactMatch: RAHU does not bind RAHUL", () => {
 });
 
 check("exactMatch: AAM binds AAM", () => {
-  assert(exactMatchPartyId("AAM", masters) === "f-aam", "exact id");
+  assert(exactMatchPartyId("AAM", farmerMasters) === "f-aam", "exact id");
 });
 
 check("resolveOcrFarmerId: OCR AAM + master AAMG → no auto id", () => {
@@ -70,20 +79,95 @@ check("resolveOcrFarmerId: OCR RAHU does not auto-select RAHUL", () => {
   assert(id === null, `got ${id}`);
 });
 
-check("vendor fuzzy still allows prefix (unchanged vendor UX)", () => {
-  const id = fuzzyMatchVendorId("MM", [{ id: "v1", name: "MMC" }]);
-  assert(id === "v1", `vendor fuzzy got ${id}`);
+check("vendor exact: Existing JBB + OCR BB → no automatic match", () => {
+  // Only JBB in master — BB must not prefix/substring-link to JBB.
+  assert(
+    resolveOcrVendorId("BB", null, [{ id: "v-jbb", name: "JBB" }]) === null,
+    "BB must not link JBB",
+  );
+  assert(exactMatchPartyId("BB", [{ id: "v-jbb", name: "JBB" }]) === null, "exact null");
+});
+
+check("vendor exact: Existing JBB + OCR JBB → exact match", () => {
+  assert(resolveOcrVendorId("JBB", null, vendorMasters) === "v-jbb", "exact JBB");
+});
+
+check("vendor exact: Existing jbb + OCR JBB → case-insensitive exact", () => {
+  assert(resolveOcrVendorId("JBB", null, [{ id: "v1", name: "jbb" }]) === "v1", "case fold");
+});
+
+check("vendor exact: Existing JBB Traders + OCR JBB → no automatic match", () => {
+  assert(
+    resolveOcrVendorId("JBB", null, [{ id: "v-jbb-traders", name: "JBB Traders" }]) === null,
+    "partial name must not match",
+  );
+});
+
+check("vendor exact: Existing ABC + OCR ABCD → no automatic match", () => {
+  assert(resolveOcrVendorId("ABCD", null, [{ id: "v-abc", name: "ABC" }]) === null, "ABCD≠ABC");
+});
+
+check("vendor exact: Existing BB + OCR B → no automatic match", () => {
+  assert(resolveOcrVendorId("B", null, [{ id: "v-bb", name: "BB" }]) === null, "B≠BB");
+});
+
+check("vendor exact: Existing MKB LEMON + OCR MKB → no automatic match", () => {
+  assert(
+    resolveOcrVendorId("MKB", null, [{ id: "v-mkb", name: "MKB LEMON" }]) === null,
+    "MKB≠MKB LEMON",
+  );
+});
+
+check("vendor: no exact match → extracted vendor remains unlinked", () => {
+  assert(resolveOcrVendorId("BB", null, [{ id: "v-jbb", name: "JBB" }]) === null, "unlinked");
+});
+
+check("vendor: drops stale fuzzy link BB→JBB", () => {
+  const id = resolveOcrVendorId("BB", "v-jbb", [{ id: "v-jbb", name: "JBB" }]);
+  assert(id === null, `stale BB→JBB must clear, got ${id}`);
+});
+
+check("vendor: user explicit select JBB is preserved", () => {
+  const id = resolveOcrVendorId("JBB", "v-jbb", [{ id: "v-jbb", name: "JBB" }]);
+  assert(id === "v-jbb", `manual exact keep, got ${id}`);
+});
+
+check("vendor: creating BB does not rename JBB (masters isolated)", () => {
+  const jbb = { id: "v-jbb", name: "JBB" };
+  const after = resolveOcrVendorId("BB", null, [jbb]);
+  assert(after === null, "no auto id");
+  assert(jbb.name === "JBB", "JBB master name unchanged");
+});
+
+check("whitespace-normalized exact still matches", () => {
+  assert(resolveOcrVendorId("  JBB  ", null, [{ id: "v1", name: "JBB" }]) === "v1", "trim");
+  assert(resolveOcrFarmerId("  AAM  ", null, [{ id: "f1", name: "AAM" }]) === "f1", "farmer trim");
 });
 
 const root = path.join(__dirname, "..");
 
-check("ocr/preview uses resolveOcrFarmerId (no farmer fuzzyMatchId)", () => {
+check("ocr/preview uses exact farmer+vendor resolvers (no fuzzy auto-link)", () => {
   const src = fs.readFileSync(path.join(root, "app/ocr/preview.tsx"), "utf8");
   assert(src.includes("resolveOcrFarmerId"), "missing resolveOcrFarmerId");
+  assert(src.includes("resolveOcrVendorId"), "missing resolveOcrVendorId");
   assert(!src.includes("fuzzyMatchId("), "legacy fuzzyMatchId still referenced");
-  assert(src.includes("fuzzyMatchVendorId"), "vendor fuzzy must remain");
-  // Farmer save path must not call fuzzy vendor helper for farmers
+  assert(!src.includes("fuzzyMatchVendorId"), "vendor fuzzy must NOT auto-link in OCR");
   assert(/resolveOcrFarmerId\(lot\.farmer_name/.test(src), "save/load must resolve OCR farmer exactly");
+  assert(/resolveOcrVendorId\(/.test(src), "save/load must resolve OCR vendor exactly");
+});
+
+check("ocr-party-match has no fuzzy vendor helper", () => {
+  const src = fs.readFileSync(path.join(root, "src/utils/ocr-party-match.ts"), "utf8");
+  assert(!src.includes("fuzzyMatchVendorId"), "fuzzyMatchVendorId must be removed");
+  assert(!src.includes("startsWith"), "no startsWith auto-link");
+  assert(!/\.includes\(/.test(src), "no includes auto-link");
+  assert(src.includes("resolveOcrVendorId"), "resolveOcrVendorId present");
+  assert(src.includes("resolveOcrFarmerId"), "resolveOcrFarmerId present");
+});
+
+check("findOrCreateVendor uses exact PartyPicker helper", () => {
+  const src = fs.readFileSync(path.join(root, "app/ocr/preview.tsx"), "utf8");
+  assert(/findOrCreateVendor[\s\S]*?findExactParty\(vendors/.test(src), "create path exact-first");
 });
 
 check("ESC/POS + preview print stored farmer_name snapshot", () => {

@@ -30,8 +30,9 @@ console.log(`dirty=${porcelain.trim() ? "yes" : "no"}`);
 
 check("git SHA readable", /^[0-9a-f]{40}$/.test(sha));
 check(
-  "on recovery or integrate branch (or main after merge)",
-  /permanent-feature-recovery|integrate-cash-chart-upi|^main$/.test(branch) || branch === "HEAD",
+  "on recovery, integrate, OCR-fix, or main branch",
+  /permanent-feature-recovery|integrate-cash-chart-upi|fix-ocr|^main$/.test(branch) ||
+    branch === "HEAD",
 );
 
 const exportTs = readFileSync(join(__dirname, "../src/utils/reports-export.ts"), "utf8");
