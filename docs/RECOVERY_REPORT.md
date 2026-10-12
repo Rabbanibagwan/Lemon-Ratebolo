@@ -69,8 +69,8 @@ npm run verify:release
 | Source PR | #57 `cursor/fix-ocr-vendor-exact-match-80c6` |
 | Fix commit | `be5d4213d533fb7e0d96126f9e25300fe4eaed5c` |
 | Merged into | `cursor/permanent-feature-recovery-80c6` |
-| Merge commit |  |
-| Recovery tip after docs |  |
+| Merge commit | `0278b00fc1c51777039178c0f04e97d7d2b812e3` |
+| Docs tip (pre-final) | `781d969aa514451a44b9c89c950dfefa3b8e6838` |
 | BB ≠ JBB auto-link | PASS (verify-ocr-farmer-name-snapshot) |
 | AAM ≠ AAMG farmer | PASS (same suite) |
 | `fuzzyMatchVendorId` on tip | Removed from OCR path |

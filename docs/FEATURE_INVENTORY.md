@@ -1,9 +1,9 @@
 # Lemon Mandi — Feature Inventory & Regression Checklist
 
 **Authoritative branch:** `cursor/permanent-feature-recovery-80c6`  
-**Inventory revision commit:** (updated with this file’s commit)  
+**Inventory revision:** tip after OCR vendor exact-match merge (#57 / `be5d421`)  
 **Baseline umbrella:** `6333ed4` (`50e5fe9` + pako)  
-**Recovery tip:** includes individual-driver Bluetooth PRINT + PartyPicker keyboard wiring + release gate  
+**Recovery tip includes:** individual-driver Bluetooth PRINT + PartyPicker keyboard + release gate/CI + OCR vendor exact-only (BB≠JBB)  
 
 Status: **PASS** | **MISSING** | **REGRESSED** | **PARTIAL** | **UNVERIFIED** | **PHYSICAL TEST REQUIRED**
 
