@@ -58,13 +58,17 @@ npm run verify:release
 | Item | Value |
 |---|---|
 | Source PR | #58 `cursor/capacity-ocr-cashbook-audit-80c6` |
-| Review | Diff vs recovery tip clean (+2 then follow-up observability commits); no intervening recovery commits lost |
+| Review tip | `e68ac16096ba83abfbcda76efbb965851bc51642` |
+| Merge commit | `613681e160df840298294d42c596cd6dbf86635c` |
+| Recovery tip (docs) | `64fe3a8d475b5794a975212193a8ee358d9d2972` |
+| Review | Diff vs recovery tip clean; no intervening recovery commits lost |
 | Cash Book ↔ OCR incident causality | **UNKNOWN** (no historical logs); Cash Book has **no** backend API |
 | OCR semaphore scope | **Process-local** (`OCR_MAX_CONCURRENT`, default 2) — not fleet-wide |
 | Fix | Provider slot released during retry backoff; queue wait timeout; structured metrics |
 | Fallback chain | `gemini-2.5-flash` → `gemini-2.5-flash-lite` → `gemini-3.5-flash-lite` preserved |
 | OCR vendor exact / AAM≠AAMG | Preserved (27 PASS) |
 | Backend mocked OCR tests | 38 PASS |
+| Release gate on recovery tip | **15 PASS / 0 FAIL / 2 PHYSICAL** |
 | Production load test | **NOT RUN** |
 | APK | Not built (build pause) |
 
