@@ -155,7 +155,12 @@ Merchant isolation: OCR jobs filtered by `job.shop_id`; Mongo indexes include `s
 
 ## J. Branch / commit / push
 
-See git commit on `cursor/capacity-ocr-cashbook-audit-80c6` after push (SHA filled in PR).
+| Item | Value |
+| --- | --- |
+| Branch | `cursor/capacity-ocr-cashbook-audit-80c6` |
+| Commit | `f104f9014b8f19ed07497255093a55cac93ecb34` |
+| Push | `origin/cursor/capacity-ocr-cashbook-audit-80c6` |
+| PR | https://github.com/Rabbanibagwan/Lemon-Ratebolo/pull/58 (draft; base `cursor/permanent-feature-recovery-80c6`) |
 
 ---
 
