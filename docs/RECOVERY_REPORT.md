@@ -50,8 +50,23 @@
 
 ```
 npm run verify:release
-→ 13 automated PASS, 0 FAIL, 2 PHYSICAL TEST REQUIRED
+→ 15 automated PASS, 0 FAIL, 2 PHYSICAL TEST REQUIRED
 ```
+
+## Capacity / OCR concurrency integration (2026-10-12)
+
+| Item | Value |
+|---|---|
+| Source PR | #58 `cursor/capacity-ocr-cashbook-audit-80c6` |
+| Review | Diff vs recovery tip clean (+2 then follow-up observability commits); no intervening recovery commits lost |
+| Cash Book ↔ OCR incident causality | **UNKNOWN** (no historical logs); Cash Book has **no** backend API |
+| OCR semaphore scope | **Process-local** (`OCR_MAX_CONCURRENT`, default 2) — not fleet-wide |
+| Fix | Provider slot released during retry backoff; queue wait timeout; structured metrics |
+| Fallback chain | `gemini-2.5-flash` → `gemini-2.5-flash-lite` → `gemini-3.5-flash-lite` preserved |
+| OCR vendor exact / AAM≠AAMG | Preserved (27 PASS) |
+| Backend mocked OCR tests | 38 PASS |
+| Production load test | **NOT RUN** |
+| APK | Not built (build pause) |
 
 ## Scope confirmations
 
