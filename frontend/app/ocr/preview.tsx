@@ -15,7 +15,7 @@ import { PartyPicker, findExactParty } from "@/src/components/PartyPicker";
 import { colors, font, spacing } from "@/src/theme";
 import { thermalPrintAndMark, canUserPrintPatti } from "@/src/utils/patti-print";
 import { clampPaperMm } from "@/src/utils/thermal-print";
-import { fuzzyMatchVendorId, resolveOcrFarmerId } from "@/src/utils/ocr-party-match";
+import { resolveOcrFarmerId, resolveOcrVendorId } from "@/src/utils/ocr-party-match";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
 import { useAuth } from "@/src/context/AuthContext";
 import { handleBagBillingError, isInsufficientBagBalance } from "@/src/utils/bag-billing";
@@ -182,11 +182,11 @@ export default function OcrPreview() {
         const vendorList = v.map((x) => ({ id: x.id, name: x.name }));
         setLots((xs) => xs.map((lot) => ({
           ...lot,
-          // Exact match only — never auto-upgrade OCR "AAM" to master "AAMG".
+          // Exact match only — never auto-upgrade OCR "AAM"→"AAMG" or "BB"→"JBB".
           farmer_id: resolveOcrFarmerId(lot.farmer_name, lot.farmer_id, farmerList),
           vendors: lot.vendors.map((vd) => ({
             ...vd,
-            vendor_id: vd.vendor_id || fuzzyMatchVendorId(vd.vendor_name, vendorList),
+            vendor_id: resolveOcrVendorId(vd.vendor_name, vd.vendor_id, vendorList),
           })),
         })));
       } catch { /* silent */ }
@@ -449,7 +449,8 @@ export default function OcrPreview() {
         const vendorList = vendors.map((x) => ({ id: x.id, name: x.name }));
         for (const v of lot.vendors) {
           if (!v.vendor_name.trim() || !(Number(v.bags) > 0)) continue;
-          let vid = v.vendor_id || fuzzyMatchVendorId(v.vendor_name, vendorList);
+          // Exact OCR name only — never fuzzy-link BB → JBB.
+          let vid = resolveOcrVendorId(v.vendor_name, v.vendor_id, vendorList);
           if (!vid) vid = await findOrCreateVendor(v.vendor_name);
           if (!vid) throw new Error("Failed to find/create vendor");
           sales.push({ vendor_id: vid, bags: Number(v.bags), rate_per_bag: Number(v.rate_per_bag) });

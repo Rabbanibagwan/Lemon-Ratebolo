@@ -1,11 +1,10 @@
 /**
  * OCR party linking helpers.
  *
- * Farmer auto-link must be EXACT only. Silent fuzzy/prefix matching
- * (e.g. OCR "AAM" → master "AAMG") replaces the OCR snapshot and
- * must not happen. Explicit PartyPicker selection remains allowed.
- *
- * Vendor fuzzy matching is retained separately for existing vendor UX.
+ * Automatic OCR farmer AND vendor linking must be EXACT only.
+ * Silent fuzzy/prefix matching (e.g. OCR "AAM" → master "AAMG",
+ * OCR "BB" → master "JBB") replaces the OCR snapshot and must not happen.
+ * Explicit PartyPicker selection remains allowed.
  */
 
 export function normPartyKey(s: string): string {
@@ -23,46 +22,6 @@ export function exactMatchPartyId(
     if (normPartyKey(item.name) === q) return item.id;
   }
   return null;
-}
-
-function lev(a: string, b: string): number {
-  if (a === b) return 0;
-  if (!a.length) return b.length;
-  if (!b.length) return a.length;
-  const dp = new Array(b.length + 1).fill(0).map((_, i) => i);
-  for (let i = 1; i <= a.length; i++) {
-    let prev = dp[0];
-    dp[0] = i;
-    for (let j = 1; j <= b.length; j++) {
-      const tmp = dp[j];
-      dp[j] = a[i - 1] === b[j - 1] ? prev : Math.min(prev, dp[j - 1], dp[j]) + 1;
-      prev = tmp;
-    }
-  }
-  return dp[b.length];
-}
-
-/**
- * Fuzzy match for vendors only (legacy OCR vendor UX).
- * Do NOT use for OCR farmer auto-link.
- */
-export function fuzzyMatchVendorId(
-  input: string,
-  list: { id: string; name: string }[],
-): string | null {
-  const q = normPartyKey(input);
-  if (!q || q.length < 2 || !list.length) return null;
-  let best: { id: string; score: number } | null = null;
-  for (const item of list) {
-    const t = normPartyKey(item.name);
-    if (!t) continue;
-    if (t === q) return item.id;
-    if (t.startsWith(q) || q.startsWith(t) || t.includes(q) || q.includes(t)) return item.id;
-    const d = lev(q, t);
-    const rel = 1 - d / Math.max(q.length, t.length);
-    if (rel >= 0.72 && (!best || rel > best.score)) best = { id: item.id, score: rel };
-  }
-  return best ? best.id : null;
 }
 
 /**
@@ -88,4 +47,27 @@ export function resolveOcrFarmerId(
     return existingFarmerId;
   }
   return exactMatchPartyId(ocrFarmerName, farmers);
+}
+
+/**
+ * Resolve vendor_id for OCR save/load.
+ * Exact match only — never auto-link OCR "BB" to master "JBB".
+ */
+export function resolveOcrVendorId(
+  ocrVendorName: string,
+  existingVendorId: string | null | undefined,
+  vendors: { id: string; name: string }[],
+): string | null {
+  if (existingVendorId) {
+    const linked = vendors.find((v) => v.id === existingVendorId);
+    if (linked && normPartyKey(linked.name) === normPartyKey(ocrVendorName)) {
+      return existingVendorId;
+    }
+    // Stale fuzzy/prefix link (e.g. BB linked to JBB): drop it.
+    if (linked && normPartyKey(linked.name) !== normPartyKey(ocrVendorName)) {
+      return exactMatchPartyId(ocrVendorName, vendors);
+    }
+    return existingVendorId;
+  }
+  return exactMatchPartyId(ocrVendorName, vendors);
 }

@@ -51,7 +51,8 @@ CI: `.github/workflows/lemon-mandi-verify.yml` runs the same gate on PRs touchin
 - Farmer Patti / Vendor Bill ESC/POS widths 58/80/100
 - Vendor Chart thermal PRINT
 - Merchant UPI + uploaded QR
-- OCR farmer-name snapshot
+- OCR farmer-name snapshot (AAM ≠ AAMG)
+- OCR vendor-name exact match (BB ≠ JBB; no fuzzy auto-link)
 - SET DRIVER source gate
 - Physical keyboard helpers
 - PartyPicker keyboard sizing
