@@ -1,9 +1,9 @@
 # Lemon Mandi — Feature Inventory & Regression Checklist
 
 **Authoritative branch:** `cursor/permanent-feature-recovery-80c6`  
-**Inventory revision:** tip after OCR vendor exact-match merge (#57 / `be5d421`)  
+**Inventory revision:** tip after capacity OCR/Cash Book audit merge (#58)  
 **Baseline umbrella:** `6333ed4` (`50e5fe9` + pako)  
-**Recovery tip includes:** individual-driver Bluetooth PRINT + PartyPicker keyboard + release gate/CI + OCR vendor exact-only (BB≠JBB)  
+**Recovery tip includes:** individual-driver Bluetooth PRINT + PartyPicker keyboard + release gate/CI + OCR vendor exact-only (BB≠JBB) + OCR concurrency/observability + Cash Book local double-save guards  
 
 Status: **PASS** | **MISSING** | **REGRESSED** | **PARTIAL** | **UNVERIFIED** | **PHYSICAL TEST REQUIRED**
 
@@ -13,15 +13,16 @@ Do not mark PASS only because a button exists — verify the call path.
 
 | Metric | Count |
 |---|---|
-| Total features audited | **37** (includes OCR vendor exact-match row 3b) |
-| Already correctly integrated on recovery tip (code PATH PASS) | **34** |
-| Newly fixed (OCR vendor exact-only; remove fuzzy auto-link) | **1** |
+| Total features audited | **39** (adds OCR concurrency reliability + Cash Book local integrity) |
+| Already correctly integrated on recovery tip (code PATH PASS) | **36** |
+| Newly fixed this revision (OCR semaphore-during-backoff + observability; Cash Book locks) | **2** |
 | Still MISSING | **0** |
 | PARTIAL | **1** (backend optional `upi_name` not on ShopProfile model) |
 | UNVERIFIED (needs human/device) | **2** (login visual; Drive backup E2E) + thermal **PHYSICAL TEST REQUIRED** |
 
-Automated gate: `npm run verify:release` → **13/13 automated PASS**, **2 PHYSICAL TEST REQUIRED**.  
-OCR party verify: **27 PASS** (farmer AAM≠AAMG + vendor BB≠JBB).
+Automated gate: `npm run verify:release` → **15/15 automated PASS**, **2 PHYSICAL TEST REQUIRED**.  
+OCR party verify: **27 PASS** (farmer AAM≠AAMG + vendor BB≠JBB).  
+OCR backend resilience/concurrency (mocked): **38 PASS**.
 
 ---
 
@@ -31,6 +32,7 @@ OCR party verify: **27 PASS** (farmer AAM≠AAMG + vendor BB≠JBB).
 |---|---|---|---|---|---|---|---|---|---|---|
 | 1 | Action Diary / Auction | Day lots, drivers, bhada | main + set-driver | Yes | Yes | UNKNOWN unless SHA matches | UNKNOWN/older | set-driver-nav | PASS | **PASS** |
 | 2 | OCR extraction + review | Capture → review → save | OCR PRs / main | Yes | Yes | UNKNOWN | UNKNOWN | manual | — | **PASS** |
+| 2b | OCR concurrency reliability | Sem only on provider call; backoff releases slot; queue wait timeout; process-scoped metrics | #58 capacity audit | Yes | Yes | N/A | N/A | test_ocr_resilience + concurrency edges + verify-ocr-client-retries | 38 backend + gate | **PASS** (mocked; not prod capacity) |
 | 3 | OCR farmer-name snapshot | AAM ≠ AAMG exact | #50 / integrate | Yes | Yes | Missing on main | Present if from integrate | verify-ocr-farmer-name-snapshot | included in 27 PASS | **PASS** |
 | 3b | OCR vendor-name exact match | BB ≠ JBB; exact only | fix-ocr-vendor-exact-match | Yes | Yes | Prior APK fuzzy | Prior APK fuzzy (BB→JBB) | verify-ocr-farmer-name-snapshot | 27 PASS | **PASS** |
 | 4 | Farmer Patti create/edit | Manual + OCR | main | Yes | Yes | — | — | print-document | PASS | **PASS** |
@@ -52,7 +54,7 @@ OCR party verify: **27 PASS** (farmer AAM≠AAMG + vendor BB≠JBB).
 | 20 | Merchant UPI QR upload + print | Shop upload + bill QR | integrate / combine | Yes | Yes | Missing on main | Present integrate | verify-merchant-upi + qr-upload | PASS | **PASS** |
 | 21 | 58/80/100 paper widths | Settings + encoders | thermal width PRs | Yes | Yes | — | — | multiple verifies | PASS | **PASS** |
 | 22 | Feed/cut + print buffer | Cut after content | integrate cutAfterLastContent | Yes | Yes | — | — | escpos cut checks | PASS | **PASS** |
-| 23 | Cash Book | Nav + CREDIT/DEBIT | integrate / #36 | Yes | Yes | Missing on main | Present integrate | nav presence | — | **PASS** |
+| 23 | Cash Book | Nav + CREDIT/DEBIT; local-only store; double-save + write lock | integrate / #36 + #58 | Yes | Yes | Missing on main | Present integrate | verify-cash-book-local | PASS | **PASS** |
 | 24 | Bag Balance | Balance UI | #19 lineage | Yes | Yes | — | — | — | — | **PASS** |
 | 25 | Bag Balance invoices | PDF/print invoice | #19/#23 | Yes | Yes | — | — | — | — | **PASS** |
 | 26 | GST / invoice details | GST split on invoice | #23 | Yes | Yes | — | — | — | — | **PASS** |

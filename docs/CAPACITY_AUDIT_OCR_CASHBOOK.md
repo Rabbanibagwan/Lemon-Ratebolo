@@ -158,9 +158,21 @@ Merchant isolation: OCR jobs filtered by `job.shop_id`; Mongo indexes include `s
 | Item | Value |
 | --- | --- |
 | Branch | `cursor/capacity-ocr-cashbook-audit-80c6` |
-| Commit | `f104f9014b8f19ed07497255093a55cac93ecb34` |
+| Initial audit commit | `f104f9014b8f19ed07497255093a55cac93ecb34` |
+| Review follow-up | Observability (`_ProviderSlot`, queue wait timeout, gauges), concurrency edge tests, gate scripts; tip SHA after push |
 | Push | `origin/cursor/capacity-ocr-cashbook-audit-80c6` |
-| PR | https://github.com/Rabbanibagwan/Lemon-Ratebolo/pull/58 (draft; base `cursor/permanent-feature-recovery-80c6`) |
+| PR | https://github.com/Rabbanibagwan/Lemon-Ratebolo/pull/58 (base `cursor/permanent-feature-recovery-80c6`) |
+| Production capacity claim | **NONE** — harness uses mocked provider latency |
+
+### Concurrency scope (verified in review)
+
+| Question | Answer |
+| --- | --- |
+| `OCR_MAX_CONCURRENT` applies to | **One OS process** (one uvicorn worker). Separate workers/instances each have their own limit. |
+| Semaphore covers | **Provider calls only** (Gemini/Vision), not image optimize or backoff sleep |
+| Exceptions / cancel | `_ProviderSlot` releases in `__aexit__`; gauges decrement |
+| Indefinite wait | Prevented by `OCR_QUEUE_WAIT_TIMEOUT_SEC` (default 120s) → retryable 503 |
+| Client retry multiplication | Bounded: network-only, max 1, skipped when server returned `attempts` |
 
 ---
 

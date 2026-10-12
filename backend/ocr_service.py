@@ -350,6 +350,8 @@ class OcrServiceError(RuntimeError):
 
 
 class OcrMetrics:
+    """In-process OCR aggregates. Never stores images, keys, or PII."""
+
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self.requests = 0
@@ -357,21 +359,69 @@ class OcrMetrics:
         self.failure = 0
         self.retries = 0
         self.fallback_used = 0
+        self.queue_timeouts = 0
         self.by_class: Dict[str, int] = {}
         self.by_provider: Dict[str, int] = {}
+        self.by_http_status: Dict[str, int] = {}
+        self.provider_latency_by_model_ms: Dict[str, List[float]] = {}
+        self.queue_wait_ms: List[float] = []
+        self.request_duration_ms: List[float] = []
         self.latencies_ms: List[float] = []
+        # Live gauges (process-local; separate from historical counters).
+        self.active_provider_calls = 0
+        self.queued_waiting = 0
 
     def record_request(self) -> None:
         with self._lock:
             self.requests += 1
+
+    def begin_queue_wait(self) -> None:
+        with self._lock:
+            self.queued_waiting += 1
+
+    def end_queue_wait(self, wait_ms: float, *, timed_out: bool = False) -> None:
+        with self._lock:
+            self.queued_waiting = max(0, self.queued_waiting - 1)
+            if timed_out:
+                self.queue_timeouts += 1
+            else:
+                self.queue_wait_ms.append(wait_ms)
+                if len(self.queue_wait_ms) > 200:
+                    self.queue_wait_ms = self.queue_wait_ms[-200:]
+
+    def begin_provider_call(self) -> None:
+        with self._lock:
+            self.active_provider_calls += 1
+
+    def end_provider_call(self) -> None:
+        with self._lock:
+            self.active_provider_calls = max(0, self.active_provider_calls - 1)
+
+    def record_provider_latency(self, model: Optional[str], latency_ms: float) -> None:
+        key = (model or "unknown").strip() or "unknown"
+        with self._lock:
+            bucket = self.provider_latency_by_model_ms.setdefault(key, [])
+            bucket.append(latency_ms)
+            if len(bucket) > 100:
+                self.provider_latency_by_model_ms[key] = bucket[-100:]
+
+    def record_http_status(self, status: Optional[int]) -> None:
+        if status is None:
+            return
+        with self._lock:
+            k = str(int(status))
+            self.by_http_status[k] = self.by_http_status.get(k, 0) + 1
 
     def record_success(self, provider: str, latency_ms: float) -> None:
         with self._lock:
             self.success += 1
             self.by_provider[provider] = self.by_provider.get(provider, 0) + 1
             self.latencies_ms.append(latency_ms)
+            self.request_duration_ms.append(latency_ms)
             if len(self.latencies_ms) > 200:
                 self.latencies_ms = self.latencies_ms[-200:]
+            if len(self.request_duration_ms) > 200:
+                self.request_duration_ms = self.request_duration_ms[-200:]
 
     def record_failure(self, error_class: str) -> None:
         with self._lock:
@@ -386,19 +436,51 @@ class OcrMetrics:
         with self._lock:
             self.fallback_used += 1
 
+    @staticmethod
+    def _avg(vals: List[float]) -> float:
+        return sum(vals) / len(vals) if vals else 0.0
+
+    @staticmethod
+    def _p95(vals: List[float]) -> float:
+        if not vals:
+            return 0.0
+        s = sorted(vals)
+        if len(s) == 1:
+            return s[0]
+        k = (len(s) - 1) * 0.95
+        f = int(k)
+        c = min(f + 1, len(s) - 1)
+        return s[f] if f == c else s[f] + (s[c] - s[f]) * (k - f)
+
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
             lats = list(self.latencies_ms)
-            avg = sum(lats) / len(lats) if lats else 0.0
+            waits = list(self.queue_wait_ms)
+            durations = list(self.request_duration_ms)
+            by_model_avg = {
+                m: round(self._avg(list(vs)), 1) for m, vs in self.provider_latency_by_model_ms.items()
+            }
             return {
                 "requests": self.requests,
                 "success": self.success,
                 "failure": self.failure,
                 "retries": self.retries,
                 "fallback_used": self.fallback_used,
+                "queue_timeouts": self.queue_timeouts,
                 "by_class": dict(self.by_class),
                 "by_provider": dict(self.by_provider),
-                "avg_latency_ms": round(avg, 1),
+                "by_http_status": dict(self.by_http_status),
+                "avg_latency_ms": round(self._avg(lats), 1),
+                "p95_request_duration_ms": round(self._p95(durations), 1),
+                "avg_queue_wait_ms": round(self._avg(waits), 1),
+                "p95_queue_wait_ms": round(self._p95(waits), 1),
+                "avg_provider_latency_by_model_ms": by_model_avg,
+                "active_provider_calls": self.active_provider_calls,
+                "queued_waiting": self.queued_waiting,
+                "max_concurrent": _MAX_CONCURRENT,
+                "queue_wait_timeout_sec": _QUEUE_WAIT_TIMEOUT_SEC,
+                # Scope note for operators: gauges are per OS process, not fleet-wide.
+                "concurrency_scope": "process",
             }
 
 
@@ -409,7 +491,10 @@ METRICS = OcrMetrics()
 # Concurrency gate
 # ---------------------------------------------------------------------------
 
+# Process-local only. Each uvicorn worker / Render instance has its own semaphore.
 _MAX_CONCURRENT = max(1, int(os.environ.get("OCR_MAX_CONCURRENT", "2")))
+# Cap how long a request may wait for a provider slot before failing retryably.
+_QUEUE_WAIT_TIMEOUT_SEC = max(1.0, float(os.environ.get("OCR_QUEUE_WAIT_TIMEOUT_SEC", "120")))
 _gemini_sem: Optional[asyncio.Semaphore] = None
 _sem_lock = asyncio.Lock()
 
@@ -420,6 +505,63 @@ async def _get_sem() -> asyncio.Semaphore:
         if _gemini_sem is None:
             _gemini_sem = asyncio.Semaphore(_MAX_CONCURRENT)
         return _gemini_sem
+
+
+class _ProviderSlot:
+    """Acquire the OCR provider semaphore with queue-wait metrics and a hard wait timeout.
+
+    Always releases on exit (success, exception, or cancellation). Does not cover backoff sleep.
+    """
+
+    def __init__(self, sem: asyncio.Semaphore, *, req_id: str, shop_id: str) -> None:
+        self._sem = sem
+        self._req_id = req_id
+        self._shop_id = shop_id
+        self.queue_wait_ms = 0.0
+        self._acquired = False
+
+    async def __aenter__(self) -> "_ProviderSlot":
+        METRICS.begin_queue_wait()
+        t0 = time.time()
+        try:
+            await asyncio.wait_for(self._sem.acquire(), timeout=_QUEUE_WAIT_TIMEOUT_SEC)
+        except asyncio.TimeoutError as e:
+            wait_ms = (time.time() - t0) * 1000
+            METRICS.end_queue_wait(wait_ms, timed_out=True)
+            logger.warning(
+                "OCR_QUEUE_TIMEOUT req=%s shop=%s wait_ms=%.0f timeout_sec=%s",
+                self._req_id,
+                self._shop_id,
+                wait_ms,
+                _QUEUE_WAIT_TIMEOUT_SEC,
+            )
+            raise OcrServiceError(
+                ClassifiedOcrError(
+                    OcrErrorClass.TEMP_UNAVAILABLE,
+                    503,
+                    True,
+                    2.0,
+                    "gemini",
+                    None,
+                    USER_MESSAGES[OcrErrorClass.TEMP_UNAVAILABLE],
+                    f"queue_wait_timeout wait_ms={wait_ms:.0f}",
+                )
+            ) from e
+        except BaseException:
+            METRICS.end_queue_wait((time.time() - t0) * 1000, timed_out=False)
+            raise
+        self._acquired = True
+        self.queue_wait_ms = (time.time() - t0) * 1000
+        METRICS.end_queue_wait(self.queue_wait_ms, timed_out=False)
+        METRICS.begin_provider_call()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        if self._acquired:
+            METRICS.end_provider_call()
+            self._sem.release()
+            self._acquired = False
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -754,10 +896,14 @@ def call_gemini_vision(
     try:
         resp = _requests.post(url, json=payload, headers=headers, timeout=req_timeout)
     except Exception as e:
+        latency_ms = (time.time() - t0) * 1000
+        METRICS.record_provider_latency(model, latency_ms)
         classified = classify_provider_error(status_code=None, body="", exc=e, provider="gemini", model=model)
         raise OcrServiceError(classified) from e
 
     latency_ms = (time.time() - t0) * 1000
+    METRICS.record_provider_latency(model, latency_ms)
+    METRICS.record_http_status(resp.status_code)
     if resp.status_code >= 400:
         raw_body = resp.text or ""
         if resp.status_code == 429:
@@ -766,6 +912,13 @@ def call_gemini_vision(
                 model,
                 latency_ms,
                 _safe_snippet(raw_body, 800),
+            )
+        elif resp.status_code == 503:
+            logger.warning(
+                "OCR_PROVIDER_503 provider=gemini model=%s latency_ms=%.0f body=%s",
+                model,
+                latency_ms,
+                _safe_snippet(raw_body, 400),
             )
         classified = classify_provider_error(
             status_code=resp.status_code,
@@ -975,116 +1128,134 @@ async def extract_with_resilience(
 
             # Hold the concurrency slot only while calling the provider — never during backoff sleep.
             # Holding the slot during retries previously serialized unrelated OCR jobs for tens of seconds.
-            t_queue = time.time()
-            async with sem:
-                queue_wait_ms = (time.time() - t_queue) * 1000
-                if job:
-                    job.state = OcrJobState.PROCESSING if attempt == 0 else OcrJobState.RETRYING
-                    _set_job(job)
-                try:
-                    logger.info(
-                        "OCR_ATTEMPT req=%s shop=%s provider=gemini model=%s attempt=%s/%s "
-                        "queue_wait_ms=%.0f",
-                        req_id,
-                        shop_id,
-                        model,
-                        attempt + 1,
-                        model_attempts,
-                        queue_wait_ms,
-                    )
-                    text, used_model = await asyncio.to_thread(
-                        call_gemini_vision,
-                        img_b64,
-                        mime,
-                        hint,
-                        api_key,
-                        system_prompt,
-                        model,
-                    )
-                    latency = (time.time() - t_start) * 1000
-                    METRICS.record_success("gemini", latency)
-                    _record_attempt(
-                        model=used_model or model,
-                        http_status=200,
-                        error_class=None,
-                        success=True,
-                        attempt_n=attempt + 1,
-                    )
-                    logger.info(
-                        "OCR_SUCCESS req=%s shop=%s provider=gemini model=%s latency_ms=%.0f "
-                        "queue_wait_ms=%.0f",
-                        req_id,
-                        shop_id,
-                        used_model,
-                        latency,
-                        queue_wait_ms,
-                    )
-                    return OcrExtractResult(
-                        rows_raw_text=text,
-                        model=used_model,
-                        provider="gemini",
-                        attempts=list(attempt_trail),
-                    )
-                except OcrServiceError as e:
+            # Scope: process-local semaphore (not fleet-wide across Render instances/workers).
+            try:
+                async with _ProviderSlot(sem, req_id=req_id, shop_id=shop_id) as slot:
+                    queue_wait_ms = slot.queue_wait_ms
+                    if job:
+                        job.state = OcrJobState.PROCESSING if attempt == 0 else OcrJobState.RETRYING
+                        _set_job(job)
+                    try:
+                        logger.info(
+                            "OCR_ATTEMPT req=%s shop=%s provider=gemini model=%s attempt=%s/%s "
+                            "queue_wait_ms=%.0f active=%s queued=%s",
+                            req_id,
+                            shop_id,
+                            model,
+                            attempt + 1,
+                            model_attempts,
+                            queue_wait_ms,
+                            METRICS.active_provider_calls,
+                            METRICS.queued_waiting,
+                        )
+                        text, used_model = await asyncio.to_thread(
+                            call_gemini_vision,
+                            img_b64,
+                            mime,
+                            hint,
+                            api_key,
+                            system_prompt,
+                            model,
+                        )
+                        latency = (time.time() - t_start) * 1000
+                        METRICS.record_success("gemini", latency)
+                        _record_attempt(
+                            model=used_model or model,
+                            http_status=200,
+                            error_class=None,
+                            success=True,
+                            attempt_n=attempt + 1,
+                        )
+                        logger.info(
+                            "OCR_SUCCESS req=%s shop=%s provider=gemini model=%s latency_ms=%.0f "
+                            "queue_wait_ms=%.0f",
+                            req_id,
+                            shop_id,
+                            used_model,
+                            latency,
+                            queue_wait_ms,
+                        )
+                        return OcrExtractResult(
+                            rows_raw_text=text,
+                            model=used_model,
+                            provider="gemini",
+                            attempts=list(attempt_trail),
+                        )
+                    except OcrServiceError as e:
+                        last_err = e
+                        METRICS.record_failure(e.classified.error_class.value)
+                        _record_attempt(
+                            model=e.classified.model or model,
+                            http_status=e.classified.http_status,
+                            error_class=e.classified.error_class.value,
+                            success=False,
+                            attempt_n=attempt + 1,
+                        )
+                        logger.warning(
+                            "OCR_ATTEMPT_FAIL req=%s shop=%s provider=%s model=%s class=%s status=%s "
+                            "retryable=%s attempt=%s queue_wait_ms=%.0f provider_msg=%s",
+                            req_id,
+                            shop_id,
+                            e.classified.provider,
+                            e.classified.model,
+                            e.classified.error_class.value,
+                            e.classified.http_status,
+                            e.classified.retryable,
+                            attempt + 1,
+                            queue_wait_ms,
+                            (e.classified.upstream_snippet or "")[:240],
+                        )
+                        if e.classified.error_class in (
+                            OcrErrorClass.AUTH,
+                            OcrErrorClass.MALFORMED,
+                            OcrErrorClass.BILLING,
+                        ):
+                            raise
+                        # 404 model-not-found is permanent for this model — never retry it.
+                        if e.classified.error_class == OcrErrorClass.MODEL_UNAVAILABLE:
+                            mark_model_unavailable(e.classified.model or model)
+                            logger.warning(
+                                "OCR_MODEL_UNAVAILABLE_SKIP req=%s shop=%s model=%s — rotating to next candidate",
+                                req_id,
+                                shop_id,
+                                model,
+                            )
+                            rotate_model = True
+                        elif e.classified.error_class == OcrErrorClass.DAILY_QUOTA:
+                            # Project-level quota: stop burning remaining Gemini models; try Vision fallback.
+                            stop_all_models = True
+                        elif is_high_demand_503(e.classified):
+                            # High-demand 503: one short retry on same model, then rotate.
+                            if attempt == 0 and model_attempts > 1:
+                                METRICS.record_retry()
+                                do_backoff = True
+                                backoff_attempt = 0
+                                backoff_retry_after = e.classified.retry_after_seconds or 1.5
+                            else:
+                                rotate_model = True
+                        elif e.classified.retryable and attempt < model_attempts - 1:
+                            METRICS.record_retry()
+                            do_backoff = True
+                            backoff_attempt = attempt
+                            backoff_retry_after = e.classified.retry_after_seconds
+                        else:
+                            # Non-retryable or retries exhausted for this model → try next model
+                            rotate_model = True
+            except OcrServiceError as e:
+                # Queue-wait timeout (or other slot acquisition failure) — do not retry forever.
+                if "queue_wait_timeout" in (e.classified.upstream_snippet or ""):
                     last_err = e
                     METRICS.record_failure(e.classified.error_class.value)
                     _record_attempt(
-                        model=e.classified.model or model,
+                        model=model,
                         http_status=e.classified.http_status,
                         error_class=e.classified.error_class.value,
                         success=False,
                         attempt_n=attempt + 1,
                     )
-                    logger.warning(
-                        "OCR_ATTEMPT_FAIL req=%s shop=%s provider=%s model=%s class=%s status=%s "
-                        "retryable=%s attempt=%s queue_wait_ms=%.0f provider_msg=%s",
-                        req_id,
-                        shop_id,
-                        e.classified.provider,
-                        e.classified.model,
-                        e.classified.error_class.value,
-                        e.classified.http_status,
-                        e.classified.retryable,
-                        attempt + 1,
-                        queue_wait_ms,
-                        (e.classified.upstream_snippet or "")[:240],
-                    )
-                    if e.classified.error_class in (
-                        OcrErrorClass.AUTH,
-                        OcrErrorClass.MALFORMED,
-                        OcrErrorClass.BILLING,
-                    ):
-                        raise
-                    # 404 model-not-found is permanent for this model — never retry it.
-                    if e.classified.error_class == OcrErrorClass.MODEL_UNAVAILABLE:
-                        mark_model_unavailable(e.classified.model or model)
-                        logger.warning(
-                            "OCR_MODEL_UNAVAILABLE_SKIP req=%s shop=%s model=%s — rotating to next candidate",
-                            req_id,
-                            shop_id,
-                            model,
-                        )
-                        rotate_model = True
-                    elif e.classified.error_class == OcrErrorClass.DAILY_QUOTA:
-                        # Project-level quota: stop burning remaining Gemini models; try Vision fallback.
-                        stop_all_models = True
-                    elif is_high_demand_503(e.classified):
-                        # High-demand 503: one short retry on same model, then rotate.
-                        if attempt == 0 and model_attempts > 1:
-                            METRICS.record_retry()
-                            do_backoff = True
-                            backoff_attempt = 0
-                            backoff_retry_after = e.classified.retry_after_seconds or 1.5
-                        else:
-                            rotate_model = True
-                    elif e.classified.retryable and attempt < model_attempts - 1:
-                        METRICS.record_retry()
-                        do_backoff = True
-                        backoff_attempt = attempt
-                        backoff_retry_after = e.classified.retry_after_seconds
-                    else:
-                        # Non-retryable or retries exhausted for this model → try next model
-                        rotate_model = True
+                    stop_all_models = True
+                else:
+                    raise
 
             # Semaphore released — backoff/sleep never holds a concurrency slot.
             if stop_all_models:
@@ -1118,9 +1289,8 @@ async def extract_with_resilience(
                     shop_id,
                     last_err.classified.error_class.value,
                 )
-                t_queue = time.time()
-                async with sem:
-                    queue_wait_ms = (time.time() - t_queue) * 1000
+                async with _ProviderSlot(sem, req_id=req_id, shop_id=shop_id) as slot:
+                    queue_wait_ms = slot.queue_wait_ms
                     if job:
                         job.state = OcrJobState.PROCESSING
                         _set_job(job)

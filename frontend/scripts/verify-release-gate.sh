@@ -39,6 +39,8 @@ run "vendor-bill-no-bags" npx --yes tsx scripts/verify-vendor-bill-no-bags.ts
 run "merchant-upi" npx --yes tsx scripts/verify-merchant-upi.ts
 run "merchant-qr-upload" npx --yes tsx scripts/verify-merchant-qr-upload.ts
 run "ocr-farmer-name-snapshot" npx --yes tsx scripts/verify-ocr-farmer-name-snapshot.ts
+run "ocr-client-retries" npx --yes tsx scripts/verify-ocr-client-retries.ts
+run "cash-book-local" npx --yes tsx scripts/verify-cash-book-local.ts
 run "physical-keyboard" npx --yes tsx scripts/verify-physical-keyboard.ts
 run "party-picker-keyboard" npx --yes tsx scripts/verify-party-picker-keyboard.ts
 run "set-driver-nav" node scripts/verify-set-driver-nav.js
