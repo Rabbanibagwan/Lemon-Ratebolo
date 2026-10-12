@@ -27,6 +27,18 @@ export type CashBookDay = {
 
 const STORAGE_KEY = "cash_book_entries_v2";
 
+/** Serialize local read-modify-write so rapid saves cannot drop or duplicate via races. */
+let writeChain: Promise<unknown> = Promise.resolve();
+
+function withCashBookLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = writeChain.then(fn, fn);
+  writeChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
 /** Seed samples so design review has day-wise data on first open. */
 const SEED: CashBookEntry[] = [
   { id: "seed-c1", date: "2026-09-17", side: "CREDIT", amount: 5000, description: "Cash Sale" },
@@ -112,17 +124,19 @@ export async function addCashBookEntry(input: {
   if (!(amount > 0)) throw new Error("Amount is required");
   if (!description) throw new Error("Description is required");
 
-  const entry: CashBookEntry = {
-    id: `cb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    date,
-    side: input.side,
-    amount,
-    description,
-  };
-  const all = await loadCashBookEntries();
-  const next = [...all, entry];
-  await persistEntries(next);
-  return entry;
+  return withCashBookLock(async () => {
+    const entry: CashBookEntry = {
+      id: `cb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      date,
+      side: input.side,
+      amount,
+      description,
+    };
+    const all = await loadCashBookEntries();
+    const next = [...all, entry];
+    await persistEntries(next);
+    return entry;
+  });
 }
 
 export async function getCashBookEntryById(id: string): Promise<CashBookEntry | null> {
@@ -143,20 +157,22 @@ export async function updateCashBookEntry(
   if (!(amount > 0)) throw new Error("Amount is required");
   if (!description) throw new Error("Description is required");
 
-  const all = await loadCashBookEntries();
-  const idx = all.findIndex((r) => r.id === id);
-  if (idx < 0) throw new Error("Entry not found");
+  return withCashBookLock(async () => {
+    const all = await loadCashBookEntries();
+    const idx = all.findIndex((r) => r.id === id);
+    if (idx < 0) throw new Error("Entry not found");
 
-  const prev = all[idx];
-  const updated: CashBookEntry = {
-    ...prev,
-    amount,
-    description,
-  };
-  const next = all.slice();
-  next[idx] = updated;
-  await persistEntries(next);
-  return updated;
+    const prev = all[idx];
+    const updated: CashBookEntry = {
+      ...prev,
+      amount,
+      description,
+    };
+    const next = all.slice();
+    next[idx] = updated;
+    await persistEntries(next);
+    return updated;
+  });
 }
 
 /** Remove one entry by id. Optionally pass the current in-memory list to avoid a stale reload race. */
@@ -164,11 +180,13 @@ export async function deleteCashBookEntry(
   id: string,
   current?: CashBookEntry[],
 ): Promise<CashBookEntry[]> {
-  const all = current ? current.slice() : await loadCashBookEntries();
-  const next = all.filter((r) => r.id !== id);
-  if (next.length === all.length) throw new Error("Entry not found");
-  await persistEntries(next);
-  return next;
+  return withCashBookLock(async () => {
+    const all = current ? current.slice() : await loadCashBookEntries();
+    const next = all.filter((r) => r.id !== id);
+    if (next.length === all.length) throw new Error("Entry not found");
+    await persistEntries(next);
+    return next;
+  });
 }
 
 /**

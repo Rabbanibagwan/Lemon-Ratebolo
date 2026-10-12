@@ -915,6 +915,7 @@ async def extract_with_resilience(
     img_b64, mime = await asyncio.to_thread(optimize_ocr_image_b64, image_b64, mime_type or "image/jpeg")
     sem = await _get_sem()
     models_to_try = model_candidates(api_key=api_key)
+    req_id = (job.id if job else None) or str(uuid.uuid4())[:8]
 
     last_err: Optional[OcrServiceError] = None
     # Per-model attempts: fewer for high-demand 503 so we rotate models faster.
@@ -942,34 +943,54 @@ async def extract_with_resilience(
             job.attempts = list(attempt_trail)
             _set_job(job)
 
-    async with sem:
-        if job:
-            job.state = OcrJobState.PROCESSING
-            _set_job(job)
+    if job:
+        job.state = OcrJobState.QUEUED
+        _set_job(job)
 
-        logger.info(
-            "OCR_START shop=%s models=%s max_attempts_per_model=%s",
-            shop_id,
-            ",".join(models_to_try),
-            max_attempts,
-        )
+    logger.info(
+        "OCR_START req=%s shop=%s models=%s max_attempts_per_model=%s max_concurrent=%s",
+        req_id,
+        shop_id,
+        ",".join(models_to_try),
+        max_attempts,
+        _MAX_CONCURRENT,
+    )
 
-        for model in models_to_try:
-            model_attempts = max_attempts
-            for attempt in range(model_attempts):
+    for model in models_to_try:
+        model_attempts = max_attempts
+        for attempt in range(model_attempts):
+            if job:
+                job.attempt = attempt + 1
+                job.state = OcrJobState.QUEUED
+                job.provider = "gemini"
+                job.model = model
+                _set_job(job)
+
+            # Decision after provider call (executed only after semaphore is released).
+            rotate_model = False
+            stop_all_models = False
+            do_backoff = False
+            backoff_attempt = attempt
+            backoff_retry_after: Optional[float] = None
+
+            # Hold the concurrency slot only while calling the provider — never during backoff sleep.
+            # Holding the slot during retries previously serialized unrelated OCR jobs for tens of seconds.
+            t_queue = time.time()
+            async with sem:
+                queue_wait_ms = (time.time() - t_queue) * 1000
                 if job:
-                    job.attempt = attempt + 1
                     job.state = OcrJobState.PROCESSING if attempt == 0 else OcrJobState.RETRYING
-                    job.provider = "gemini"
-                    job.model = model
                     _set_job(job)
                 try:
                     logger.info(
-                        "OCR_ATTEMPT shop=%s provider=gemini model=%s attempt=%s/%s",
+                        "OCR_ATTEMPT req=%s shop=%s provider=gemini model=%s attempt=%s/%s "
+                        "queue_wait_ms=%.0f",
+                        req_id,
                         shop_id,
                         model,
                         attempt + 1,
                         model_attempts,
+                        queue_wait_ms,
                     )
                     text, used_model = await asyncio.to_thread(
                         call_gemini_vision,
@@ -990,10 +1011,13 @@ async def extract_with_resilience(
                         attempt_n=attempt + 1,
                     )
                     logger.info(
-                        "OCR_SUCCESS shop=%s provider=gemini model=%s latency_ms=%.0f",
+                        "OCR_SUCCESS req=%s shop=%s provider=gemini model=%s latency_ms=%.0f "
+                        "queue_wait_ms=%.0f",
+                        req_id,
                         shop_id,
                         used_model,
                         latency,
+                        queue_wait_ms,
                     )
                     return OcrExtractResult(
                         rows_raw_text=text,
@@ -1012,8 +1036,9 @@ async def extract_with_resilience(
                         attempt_n=attempt + 1,
                     )
                     logger.warning(
-                        "OCR_ATTEMPT_FAIL shop=%s provider=%s model=%s class=%s status=%s "
-                        "retryable=%s attempt=%s provider_msg=%s",
+                        "OCR_ATTEMPT_FAIL req=%s shop=%s provider=%s model=%s class=%s status=%s "
+                        "retryable=%s attempt=%s queue_wait_ms=%.0f provider_msg=%s",
+                        req_id,
                         shop_id,
                         e.classified.provider,
                         e.classified.model,
@@ -1021,59 +1046,85 @@ async def extract_with_resilience(
                         e.classified.http_status,
                         e.classified.retryable,
                         attempt + 1,
+                        queue_wait_ms,
                         (e.classified.upstream_snippet or "")[:240],
                     )
-                    if e.classified.error_class in (OcrErrorClass.AUTH, OcrErrorClass.MALFORMED, OcrErrorClass.BILLING):
+                    if e.classified.error_class in (
+                        OcrErrorClass.AUTH,
+                        OcrErrorClass.MALFORMED,
+                        OcrErrorClass.BILLING,
+                    ):
                         raise
                     # 404 model-not-found is permanent for this model — never retry it.
                     if e.classified.error_class == OcrErrorClass.MODEL_UNAVAILABLE:
                         mark_model_unavailable(e.classified.model or model)
                         logger.warning(
-                            "OCR_MODEL_UNAVAILABLE_SKIP shop=%s model=%s — rotating to next candidate",
+                            "OCR_MODEL_UNAVAILABLE_SKIP req=%s shop=%s model=%s — rotating to next candidate",
+                            req_id,
                             shop_id,
                             model,
                         )
-                        break
-                    # Project-level quota: stop burning remaining Gemini models; try Vision fallback.
-                    if e.classified.error_class == OcrErrorClass.DAILY_QUOTA:
-                        last_err = e
-                        break
-                    # High-demand 503: one short retry on same model, then rotate.
-                    if is_high_demand_503(e.classified):
+                        rotate_model = True
+                    elif e.classified.error_class == OcrErrorClass.DAILY_QUOTA:
+                        # Project-level quota: stop burning remaining Gemini models; try Vision fallback.
+                        stop_all_models = True
+                    elif is_high_demand_503(e.classified):
+                        # High-demand 503: one short retry on same model, then rotate.
                         if attempt == 0 and model_attempts > 1:
                             METRICS.record_retry()
-                            if job:
-                                job.state = OcrJobState.RETRYING
-                                _set_job(job)
-                            await _sleep_backoff(0, e.classified.retry_after_seconds or 1.5)
-                            continue
-                        break
-                    if e.classified.retryable and attempt < model_attempts - 1:
+                            do_backoff = True
+                            backoff_attempt = 0
+                            backoff_retry_after = e.classified.retry_after_seconds or 1.5
+                        else:
+                            rotate_model = True
+                    elif e.classified.retryable and attempt < model_attempts - 1:
                         METRICS.record_retry()
-                        if job:
-                            job.state = OcrJobState.RETRYING
-                            _set_job(job)
-                        await _sleep_backoff(attempt, e.classified.retry_after_seconds)
-                        continue
-                    # Non-retryable or retries exhausted for this model → try next model
-                    break
-            else:
-                continue
-            # break from inner due to DAILY_QUOTA → exit model loop
-            if last_err and last_err.classified.error_class == OcrErrorClass.DAILY_QUOTA:
-                break
+                        do_backoff = True
+                        backoff_attempt = attempt
+                        backoff_retry_after = e.classified.retry_after_seconds
+                    else:
+                        # Non-retryable or retries exhausted for this model → try next model
+                        rotate_model = True
 
-    # Fallback to Vision when appropriate
+            # Semaphore released — backoff/sleep never holds a concurrency slot.
+            if stop_all_models:
+                break
+            if do_backoff:
+                if job:
+                    job.state = OcrJobState.RETRYING
+                    _set_job(job)
+                await _sleep_backoff(backoff_attempt, backoff_retry_after)
+                continue
+            if rotate_model:
+                break
+        else:
+            continue
+        # break from inner due to DAILY_QUOTA → exit model loop
+        if last_err and last_err.classified.error_class == OcrErrorClass.DAILY_QUOTA:
+            break
+
+    # Fallback to Vision when appropriate (concurrency slot only around the provider call).
     if last_err and _should_use_fallback(last_err.classified):
         vkey = vision_api_key()
         if vkey:
             try:
                 if job:
-                    job.state = OcrJobState.PROCESSING
+                    job.state = OcrJobState.QUEUED
                     job.provider = "vision"
                     _set_job(job)
-                logger.info("OCR_FALLBACK_START shop=%s from_class=%s", shop_id, last_err.classified.error_class.value)
-                vision_text = await asyncio.to_thread(call_google_vision_text, img_b64, vkey)
+                logger.info(
+                    "OCR_FALLBACK_START req=%s shop=%s from_class=%s",
+                    req_id,
+                    shop_id,
+                    last_err.classified.error_class.value,
+                )
+                t_queue = time.time()
+                async with sem:
+                    queue_wait_ms = (time.time() - t_queue) * 1000
+                    if job:
+                        job.state = OcrJobState.PROCESSING
+                        _set_job(job)
+                    vision_text = await asyncio.to_thread(call_google_vision_text, img_b64, vkey)
                 METRICS.record_fallback()
                 if vision_text.strip():
                     # Prefer structured Gemini text-only if still possible; else local diary parse.
@@ -1096,6 +1147,13 @@ async def extract_with_resilience(
                                 for r in rows
                             ]
                         }
+                        logger.info(
+                            "OCR_FALLBACK_OK req=%s shop=%s latency_ms=%.0f queue_wait_ms=%.0f",
+                            req_id,
+                            shop_id,
+                            latency,
+                            queue_wait_ms,
+                        )
                         return OcrExtractResult(
                             rows_raw_text=json.dumps(payload),
                             model="vision+parser",
@@ -1113,7 +1171,8 @@ async def extract_with_resilience(
                     )
             except OcrServiceError as ve:
                 logger.warning(
-                    "OCR_FALLBACK_FAIL shop=%s class=%s status=%s",
+                    "OCR_FALLBACK_FAIL req=%s shop=%s class=%s status=%s",
+                    req_id,
                     shop_id,
                     ve.classified.error_class.value,
                     ve.classified.http_status,

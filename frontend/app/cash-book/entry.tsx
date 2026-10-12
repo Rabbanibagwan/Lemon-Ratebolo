@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -37,6 +37,8 @@ export default function CashBookEntryScreen() {
   const [showPicker, setShowPicker] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  /** Sync guard: React state alone cannot block rapid double-taps before re-render. */
+  const savingRef = useRef(false);
   const [loadingEdit, setLoadingEdit] = useState(isEdit);
 
   useEffect(() => {
@@ -72,6 +74,7 @@ export default function CashBookEntryScreen() {
 
   const save = async () => {
     if (!isOwner) return;
+    if (savingRef.current) return;
     setError(null);
     const n = Number(amount);
     if (!(n > 0)) {
@@ -86,6 +89,7 @@ export default function CashBookEntryScreen() {
       setError("Select date");
       return;
     }
+    savingRef.current = true;
     try {
       setSaving(true);
       if (isEdit) {
@@ -108,6 +112,7 @@ export default function CashBookEntryScreen() {
       setError(msg);
       Alert.alert("Cash Book", msg);
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   };

@@ -373,7 +373,10 @@ export default function OcrCapture() {
       hint: hint.trim() || "1/5 ABDG (50) then MM 02 1000. Bhada in () is LOT TOTAL.",
     };
 
-    const maxClientRetries = 2;
+    // Server already retries models with backoff. Client may retry once only for
+    // transport failures (no structured OCR payload) — never re-fire after server
+    // exhausted provider attempts (avoids multiplying Gemini load under contention).
+    const maxClientRetries = 1;
     let lastError: unknown = null;
 
     try {
@@ -411,14 +414,20 @@ export default function OcrCapture() {
             const detail = e?.detail;
             console.warn("[ocr] attempt failed", { attempt: attempt + 1, code: e?.code, status: e?.status, detail, classified });
           }
-          if (!classified.retryable || attempt >= maxClientRetries) {
+          const detailObj = e?.detail && typeof e.detail === "object" ? (e.detail as Record<string, unknown>) : null;
+          const serverAlreadyRetried = Array.isArray(detailObj?.attempts) && (detailObj!.attempts as unknown[]).length > 0;
+          // Network drop only — never auto-retry TIMEOUT (server may still be extracting).
+          const transportOnly =
+            (e as ApiError)?.code === "NETWORK" ||
+            (!detailObj && (e?.status == null || e?.status === 0) && (e as ApiError)?.code !== "TIMEOUT");
+          // Do not client-retry when the server already walked the model/fallback chain.
+          if (!classified.retryable || attempt >= maxClientRetries || serverAlreadyRetried || !transportOnly) {
             if (isGenuineOcrConfigError(e)) setKeyConfigured(false);
             setJobState(classified.uiState);
             setError(classified.message);
             return;
           }
           // Respect server retry_after when present
-          const detailObj = e?.detail && typeof e.detail === "object" ? e.detail as Record<string, unknown> : null;
           const ra = typeof detailObj?.retry_after_seconds === "number" ? detailObj.retry_after_seconds : null;
           const delayMs = Math.min(45_000, Math.max(1500, (ra != null ? ra * 1000 : 2000 * (attempt + 1))));
           setJobState("RETRYING");

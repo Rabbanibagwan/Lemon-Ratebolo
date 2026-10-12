@@ -387,6 +387,94 @@ def test_concurrency_queue_serializes():
     assert in_flight["max"] == 1
 
 
+def test_backoff_releases_concurrency_slot():
+    """While job A sleeps on retry backoff, job B must be able to acquire the OCR slot.
+
+    Regression: previously `async with sem` wrapped backoff sleeps, so a single
+    failing OCR held OCR_MAX_CONCURRENT for the entire retry delay and stalled peers.
+    """
+    events: list[str] = []
+    gemini_calls = {"n": 0}
+
+    def flaky_then_ok(*args, **kwargs):
+        gemini_calls["n"] += 1
+        n = gemini_calls["n"]
+        # First call (job A attempt 1) fails retryable; later calls succeed.
+        if n == 1:
+            raise OcrServiceError(
+                ClassifiedOcrError(
+                    OcrErrorClass.RATE_LIMIT,
+                    429,
+                    True,
+                    0.2,
+                    "gemini",
+                    DEFAULT_PRIMARY_MODEL,
+                    "busy",
+                    "rpm",
+                )
+            )
+        return json.dumps({"rows": []}), DEFAULT_PRIMARY_MODEL
+
+    async def fake_sleep(attempt: int, retry_after):
+        events.append("backoff_start")
+        # Peer must complete while we are in backoff (semaphore released).
+        await asyncio.sleep(0.15)
+        events.append("backoff_end")
+
+    async def _run():
+        ocr_mod._gemini_sem = asyncio.Semaphore(1)
+        with patch.dict(
+            "os.environ",
+            {
+                "GEMINI_API_KEY": "k",
+                "OCR_MAX_CONCURRENT": "1",
+                "OCR_MAX_RETRIES": "3",
+                "GEMINI_OCR_MODEL": DEFAULT_PRIMARY_MODEL,
+                "GEMINI_OCR_FALLBACK_MODEL": DEFAULT_FALLBACK_MODEL,
+                "GEMINI_OCR_FALLBACK_MODEL_2": DEFAULT_FALLBACK_MODEL_2,
+            },
+        ):
+            with _patch_list_models(None):
+                with patch("ocr_service.call_gemini_vision", side_effect=flaky_then_ok):
+                    with patch("ocr_service._sleep_backoff", new=fake_sleep):
+
+                        async def job_a():
+                            events.append("a_start")
+                            await extract_with_resilience(
+                                image_b64="a" * 200,
+                                mime_type="image/jpeg",
+                                hint=None,
+                                system_prompt="sys",
+                                parse_diary_text=lambda t: [],
+                                shop_id="shop-a",
+                            )
+                            events.append("a_done")
+
+                        async def job_b():
+                            # Start slightly after A so A holds the first attempt.
+                            await asyncio.sleep(0.02)
+                            events.append("b_start")
+                            await extract_with_resilience(
+                                image_b64="b" * 200,
+                                mime_type="image/jpeg",
+                                hint=None,
+                                system_prompt="sys",
+                                parse_diary_text=lambda t: [],
+                                shop_id="shop-b",
+                            )
+                            events.append("b_done")
+
+                        await asyncio.gather(job_a(), job_b())
+
+    asyncio.run(_run())
+    # B must finish during A's backoff window (before backoff_end), proving the slot was free.
+    assert "backoff_start" in events and "backoff_end" in events
+    assert "b_done" in events
+    assert events.index("b_done") < events.index("backoff_end")
+    assert events.index("b_done") > events.index("backoff_start")
+    assert gemini_calls["n"] >= 3  # A fail + B ok + A retry ok
+
+
 def test_call_gemini_vision_classifies_503(monkeypatch):
     class FakeResp:
         status_code = 503
