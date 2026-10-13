@@ -12,6 +12,7 @@ import { api, Farmer, Vendor } from "@/src/api";
 import { KeyboardFormAvoid } from "@/src/components/KeyboardForm";
 import { Button, Empty, Input } from "@/src/components/ui";
 import { colors, font, spacing } from "@/src/theme";
+import { normPartyKey } from "@/src/utils/ocr-party-match";
 import {
   createEnterGate,
   isArrowDownKey,
@@ -29,16 +30,26 @@ import {
 export type PartyKind = "farmer" | "vendor";
 export type PartyItem = Farmer | Vendor;
 
+/** Display/search normalize (trim + case). Exact auto-link uses normPartyKey. */
 function normName(s: string): string {
-  return (s || "").trim().toLowerCase();
+  return (s || "").trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+/**
+ * Exact party match for OCR findOrCreate + PartyPicker create.
+ * Uses the same normalized key as OCR auto-link (case/whitespace/punct fold).
+ * Never prefix/substring/fuzzy — "BB" will not match "JBB".
+ */
 export function findExactParty<T extends { name: string }>(list: T[], name: string): T | undefined {
-  const n = normName(name);
+  const n = normPartyKey(name);
   if (!n) return undefined;
-  return list.find((x) => normName(x.name) === n);
+  return list.find((x) => normPartyKey(x.name) === n);
 }
 
+/**
+ * UI-only suggestions when creating a party (requires explicit tap).
+ * Never used for silent OCR auto-assign.
+ */
 export function findSimilarParties<T extends { name: string }>(list: T[], name: string): T[] {
   const n = normName(name);
   if (n.length < 2) return [];

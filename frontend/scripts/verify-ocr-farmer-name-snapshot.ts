@@ -59,6 +59,33 @@ check("exactMatch: AAM binds AAM", () => {
   assert(exactMatchPartyId("AAM", farmerMasters) === "f-aam", "exact id");
 });
 
+check("exactMatch: Existing AAMG + OCR AAM → no automatic match", () => {
+  assert(exactMatchPartyId("AAM", [{ id: "f-aamg", name: "AAMG" }]) === null, "AAM≠AAMG");
+  assert(
+    resolveOcrFarmerId("AAM", null, [{ id: "f-aamg", name: "AAMG" }]) === null,
+    "resolve no auto",
+  );
+});
+
+check("exactMatch: Existing AAM + OCR AAM → exact match", () => {
+  assert(resolveOcrFarmerId("AAM", null, farmerMasters) === "f-aam", "exact AAM");
+});
+
+check("farmer: no exact match → extracted name remains unlinked", () => {
+  assert(resolveOcrFarmerId("AAM", null, [{ id: "f-aamg", name: "AAMG" }]) === null, "unlinked");
+});
+
+check("farmer: user explicit select AAMG is preserved", () => {
+  const id = resolveOcrFarmerId("AAMG", "f-aamg", [{ id: "f-aamg", name: "AAMG" }]);
+  assert(id === "f-aamg", `manual exact keep, got ${id}`);
+});
+
+check("farmer: creating AAM does not rename AAMG", () => {
+  const aamg = { id: "f-aamg", name: "AAMG" };
+  assert(resolveOcrFarmerId("AAM", null, [aamg]) === null, "no auto id");
+  assert(aamg.name === "AAMG", "AAMG master unchanged");
+});
+
 check("resolveOcrFarmerId: OCR AAM + master AAMG → no auto id", () => {
   const id = resolveOcrFarmerId("AAM", null, [{ id: "f-aamg", name: "AAMG" }]);
   assert(id === null, `got ${id}`);
@@ -168,6 +195,17 @@ check("ocr-party-match has no fuzzy vendor helper", () => {
 check("findOrCreateVendor uses exact PartyPicker helper", () => {
   const src = fs.readFileSync(path.join(root, "app/ocr/preview.tsx"), "utf8");
   assert(/findOrCreateVendor[\s\S]*?findExactParty\(vendors/.test(src), "create path exact-first");
+  assert(/findOrCreateFarmer[\s\S]*?findExactParty\(farmers/.test(src), "farmer create exact-first");
+});
+
+check("PartyPicker findExactParty uses OCR normPartyKey (BB≠JBB)", () => {
+  const src = fs.readFileSync(path.join(root, "src/components/PartyPicker.tsx"), "utf8");
+  assert(src.includes('from "@/src/utils/ocr-party-match"'), "imports normPartyKey");
+  const exactFn =
+    src.match(/export function findExactParty[\s\S]*?\n\}/)?.[0] || "";
+  assert(exactFn.includes("normPartyKey"), "findExactParty uses normPartyKey");
+  assert(!/\.includes\(/.test(exactFn), "findExactParty must not use includes");
+  assert(!/startsWith/.test(exactFn), "findExactParty must not use startsWith");
 });
 
 check("ESC/POS + preview print stored farmer_name snapshot", () => {
