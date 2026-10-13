@@ -126,11 +126,13 @@ export function renderCashBookPdfHtml(
     ${sideTableHtml("DEBIT", day.debits)}
   </div>
   <div class="totals">
+    <div class="trow"><span class="label">Opening Balance</span><span class="val">${escHtml(fmtMoney(day.openingBalance ?? 0))}</span></div>
     <div class="trow"><span class="label">Total Credit</span><span class="val">${escHtml(fmtMoney(day.totalCredit))}</span></div>
     <div class="trow"><span class="label">Total Debit</span><span class="val">${escHtml(fmtMoney(day.totalDebit))}</span></div>
+    <div class="trow"><span class="label">Day Net</span><span class="val">${escHtml(fmtMoney(day.net))}</span></div>
     <div class="net">
-      <span class="label">Net / Closing Balance</span>
-      <span class="val">${escHtml(fmtMoney(day.net))}</span>
+      <span class="label">Closing Balance</span>
+      <span class="val">${escHtml(fmtMoney(day.closingBalance ?? day.net))}</span>
     </div>
   </div>
   <div class="foot">Cash Book · ${escHtml(displayDate)} · amounts in Indian Rupees (₹)</div>
@@ -259,10 +261,17 @@ export function buildCashBookPdfBytes(
   y += 4;
   doc.setDrawColor(0, 0, 0);
   doc.setLineWidth(0.6);
-  doc.rect(marginX, y, usable, 28);
+  doc.rect(marginX, y, usable, 42);
   y += 7;
   doc.setFont("helvetica", "bold");
   doc.setFontSize(9);
+  doc.setTextColor(90, 90, 90);
+  doc.text("OPENING BALANCE", marginX + 3, y);
+  doc.setTextColor(0, 0, 0);
+  doc.setFont("courier", "bold");
+  doc.text(pdfSafeText(fmtMoneyPdf(day.openingBalance ?? 0)), pageW - marginX - 3, y, { align: "right" });
+  y += 7;
+  doc.setFont("helvetica", "bold");
   doc.setTextColor(90, 90, 90);
   doc.text("TOTAL CREDIT", marginX + 3, y);
   doc.setTextColor(0, 0, 0);
@@ -275,15 +284,22 @@ export function buildCashBookPdfBytes(
   doc.setTextColor(0, 0, 0);
   doc.setFont("courier", "bold");
   doc.text(pdfSafeText(fmtMoneyPdf(day.totalDebit)), pageW - marginX - 3, y, { align: "right" });
+  y += 7;
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(90, 90, 90);
+  doc.text("DAY NET", marginX + 3, y);
+  doc.setTextColor(0, 0, 0);
+  doc.setFont("courier", "bold");
+  doc.text(pdfSafeText(fmtMoneyPdf(day.net)), pageW - marginX - 3, y, { align: "right" });
   y += 4;
   doc.setFillColor(20, 20, 20);
   doc.rect(marginX, y, usable, 10, "F");
   doc.setTextColor(255, 255, 255);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(10);
-  doc.text("NET / CLOSING BALANCE", marginX + 3, y + 6.5);
+  doc.text("CLOSING BALANCE", marginX + 3, y + 6.5);
   doc.setFont("courier", "bold");
-  doc.text(pdfSafeText(fmtMoneyPdf(day.net)), pageW - marginX - 3, y + 6.5, { align: "right" });
+  doc.text(pdfSafeText(fmtMoneyPdf(day.closingBalance ?? day.net)), pageW - marginX - 3, y + 6.5, { align: "right" });
   doc.setTextColor(0, 0, 0);
 
   const pageCount = doc.getNumberOfPages();
