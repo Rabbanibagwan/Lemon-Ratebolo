@@ -30,8 +30,8 @@ console.log(`dirty=${porcelain.trim() ? "yes" : "no"}`);
 
 check("git SHA readable", /^[0-9a-f]{40}$/.test(sha));
 check(
-  "on recovery, integrate, OCR-fix, capacity-audit, or main branch",
-  /permanent-feature-recovery|integrate-cash-chart-upi|fix-ocr|capacity-ocr-cashbook-audit|^main$/.test(
+  "on recovery, integrate, OCR-fix, capacity-audit, preview, or main branch",
+  /permanent-feature-recovery|integrate-cash-chart-upi|fix-ocr|capacity-ocr-cashbook-audit|entry-book-receiver-preview|^main$/.test(
     branch,
   ) || branch === "HEAD",
 );
