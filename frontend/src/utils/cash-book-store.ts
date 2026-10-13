@@ -1,9 +1,10 @@
 /**
- * Local Cash Book store for UI preview.
- * No backend Cash Book API exists yet — entries persist in device storage only.
- * Replace with GET/POST /cash-book when the backend is ready.
+ * Cash Book store — live API persistence via Lemon Mandi backend.
+ * Local AsyncStorage is only used for optional one-time migration of prior
+ * device-only draft rows (never treated as the live source of truth).
  */
 
+import { api, apiErrorMessage, type ApiError } from "@/src/api";
 import { storage } from "@/src/utils/storage";
 
 export type CashBookSide = "CREDIT" | "DEBIT";
@@ -14,6 +15,8 @@ export type CashBookEntry = {
   side: CashBookSide;
   amount: number;
   description: string;
+  created_at?: string;
+  updated_at?: string;
 };
 
 export type CashBookDay = {
@@ -23,92 +26,89 @@ export type CashBookDay = {
   totalCredit: number;
   totalDebit: number;
   net: number;
+  openingBalance: number;
+  closingBalance: number;
 };
 
-const STORAGE_KEY = "cash_book_entries_v2";
+const LOCAL_LEGACY_KEY = "cash_book_entries_v2";
+const LOCAL_MIGRATED_FLAG = "cash_book_local_migrated_v1";
 
-/** Serialize local read-modify-write so rapid saves cannot drop or duplicate via races. */
-let writeChain: Promise<unknown> = Promise.resolve();
+type ApiEntry = {
+  id: string;
+  shop_id?: string;
+  side: string;
+  amount: number;
+  description: string;
+  date: string;
+  created_at?: string;
+  updated_at?: string;
+};
 
-function withCashBookLock<T>(fn: () => Promise<T>): Promise<T> {
-  const run = writeChain.then(fn, fn);
-  writeChain = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  return run;
+type ApiDay = {
+  date: string;
+  credits: ApiEntry[];
+  debits: ApiEntry[];
+  total_credit: number;
+  total_debit: number;
+  net: number;
+  opening_balance: number;
+  closing_balance: number;
+};
+
+function mapEntry(r: ApiEntry): CashBookEntry {
+  return {
+    id: String(r.id),
+    date: String(r.date || "").trim(),
+    side: r.side === "DEBIT" ? "DEBIT" : "CREDIT",
+    amount: Number(r.amount) || 0,
+    description: String(r.description || "").trim(),
+    created_at: r.created_at,
+    updated_at: r.updated_at,
+  };
 }
 
-/** Seed samples so design review has day-wise data on first open. */
-const SEED: CashBookEntry[] = [
-  { id: "seed-c1", date: "2026-09-17", side: "CREDIT", amount: 5000, description: "Cash Sale" },
-  { id: "seed-c2", date: "2026-09-17", side: "CREDIT", amount: 2000, description: "Other Income" },
-  { id: "seed-d1", date: "2026-09-17", side: "DEBIT", amount: 1000, description: "Hamali" },
-  { id: "seed-d2", date: "2026-09-17", side: "DEBIT", amount: 500, description: "Transport" },
-  { id: "seed-c3", date: "2026-09-18", side: "CREDIT", amount: 8500, description: "Vendor cash receipt" },
-  { id: "seed-c4", date: "2026-09-18", side: "CREDIT", amount: 1200, description: "Cash Sale" },
-  { id: "seed-d3", date: "2026-09-18", side: "DEBIT", amount: 3200, description: "Farmer payout" },
-  { id: "seed-d4", date: "2026-09-18", side: "DEBIT", amount: 400, description: "Stationery" },
-  { id: "seed-c5", date: "2026-09-19", side: "CREDIT", amount: 3100, description: "Cash Sale" },
-  { id: "seed-d5", date: "2026-09-19", side: "DEBIT", amount: 900, description: "Hamali" },
-  { id: "seed-d6", date: "2026-09-19", side: "DEBIT", amount: 150, description: "Tea / Misc" },
-];
-
-function sum(rows: CashBookEntry[]): number {
-  return rows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+function mapDay(d: ApiDay): CashBookDay {
+  return {
+    date: d.date,
+    credits: (d.credits || []).map(mapEntry),
+    debits: (d.debits || []).map(mapEntry),
+    totalCredit: Number(d.total_credit) || 0,
+    totalDebit: Number(d.total_debit) || 0,
+    net: Number(d.net) || 0,
+    openingBalance: Number(d.opening_balance) || 0,
+    closingBalance: Number(d.closing_balance) || 0,
+  };
 }
 
-function normalize(rows: unknown): CashBookEntry[] {
-  if (!Array.isArray(rows)) return [];
-  return rows
-    .map((r: any) => ({
-      id: String(r?.id || ""),
-      date: String(r?.date || "").trim(),
-      side: r?.side === "DEBIT" ? ("DEBIT" as const) : ("CREDIT" as const),
-      amount: Number(r?.amount) || 0,
-      description: String(r?.description || "").trim(),
-    }))
-    .filter((r) => r.id && r.date && r.amount > 0 && r.description);
+function throwApi(e: unknown, fallback: string): never {
+  const msg = apiErrorMessage(e, fallback);
+  const err = new Error(msg) as Error & { status?: number; cause?: unknown };
+  err.status = (e as ApiError)?.status;
+  err.cause = e;
+  throw err;
 }
 
-function parseStored(saved: unknown): CashBookEntry[] {
-  if (saved == null || saved === "") return [];
-  let value: unknown = saved;
-  // storage.setItem JSON-stringifies values; we also stringify the array once.
-  if (typeof value === "string") {
-    try {
-      value = JSON.parse(value);
-    } catch {
-      return [];
-    }
+/** Load one calendar day's Cash Book from the live backend. */
+export async function fetchCashBookDay(isoDate: string): Promise<CashBookDay> {
+  const date = (isoDate || "").trim();
+  if (!date) throw new Error("Date is required");
+  try {
+    const day = await api.get<ApiDay>(`/cash-book/day?date=${encodeURIComponent(date)}`);
+    return mapDay(day);
+  } catch (e) {
+    throwApi(e, "Could not load Cash Book from server");
   }
-  if (typeof value === "string") {
-    try {
-      value = JSON.parse(value);
-    } catch {
-      return [];
-    }
-  }
-  return normalize(value);
 }
 
-async function persistEntries(entries: CashBookEntry[]): Promise<void> {
-  const ok = await storage.setItem(STORAGE_KEY, JSON.stringify(entries));
-  if (!ok) throw new Error("Could not save cash book entries");
-}
-
-export async function loadCashBookEntries(): Promise<CashBookEntry[]> {
-  const saved = await storage.getItem<string>(STORAGE_KEY, "");
-  if (!saved) {
-    await persistEntries(SEED);
-    return SEED.map((r) => ({ ...r }));
+export async function getCashBookEntryById(id: string): Promise<CashBookEntry | null> {
+  try {
+    const row = await api.get<ApiEntry>(`/cash-book/entries/${encodeURIComponent(id)}`);
+    return mapEntry(row);
+  } catch (e) {
+    const status = (e as ApiError)?.status;
+    if (status === 404) return null;
+    throwApi(e, "Could not load Cash Book entry");
   }
-  const rows = parseStored(saved);
-  if (!rows.length) {
-    await persistEntries(SEED);
-    return SEED.map((r) => ({ ...r }));
-  }
-  return rows;
 }
 
 export async function addCashBookEntry(input: {
@@ -116,6 +116,7 @@ export async function addCashBookEntry(input: {
   amount: number;
   description: string;
   date: string;
+  clientRequestId?: string;
 }): Promise<CashBookEntry> {
   const date = (input.date || "").trim();
   const description = (input.description || "").trim();
@@ -124,24 +125,22 @@ export async function addCashBookEntry(input: {
   if (!(amount > 0)) throw new Error("Amount is required");
   if (!description) throw new Error("Description is required");
 
-  return withCashBookLock(async () => {
-    const entry: CashBookEntry = {
-      id: `cb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      date,
+  const client_request_id =
+    (input.clientRequestId || "").trim() ||
+    `cb-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+  try {
+    const row = await api.post<ApiEntry>("/cash-book/entries", {
       side: input.side,
       amount,
       description,
-    };
-    const all = await loadCashBookEntries();
-    const next = [...all, entry];
-    await persistEntries(next);
-    return entry;
-  });
-}
-
-export async function getCashBookEntryById(id: string): Promise<CashBookEntry | null> {
-  const all = await loadCashBookEntries();
-  return all.find((r) => r.id === id) || null;
+      date,
+      client_request_id,
+    });
+    return mapEntry(row);
+  } catch (e) {
+    throwApi(e, "Could not save Cash Book entry");
+  }
 }
 
 /**
@@ -157,54 +156,98 @@ export async function updateCashBookEntry(
   if (!(amount > 0)) throw new Error("Amount is required");
   if (!description) throw new Error("Description is required");
 
-  return withCashBookLock(async () => {
-    const all = await loadCashBookEntries();
-    const idx = all.findIndex((r) => r.id === id);
-    if (idx < 0) throw new Error("Entry not found");
-
-    const prev = all[idx];
-    const updated: CashBookEntry = {
-      ...prev,
+  try {
+    const row = await api.put<ApiEntry>(`/cash-book/entries/${encodeURIComponent(id)}`, {
       amount,
       description,
-    };
-    const next = all.slice();
-    next[idx] = updated;
-    await persistEntries(next);
-    return updated;
-  });
+    });
+    return mapEntry(row);
+  } catch (e) {
+    throwApi(e, "Could not update Cash Book entry");
+  }
 }
 
-/** Remove one entry by id. Optionally pass the current in-memory list to avoid a stale reload race. */
-export async function deleteCashBookEntry(
-  id: string,
-  current?: CashBookEntry[],
-): Promise<CashBookEntry[]> {
-  return withCashBookLock(async () => {
-    const all = current ? current.slice() : await loadCashBookEntries();
-    const next = all.filter((r) => r.id !== id);
-    if (next.length === all.length) throw new Error("Entry not found");
-    await persistEntries(next);
-    return next;
-  });
+export async function deleteCashBookEntry(id: string): Promise<void> {
+  try {
+    await api.del(`/cash-book/entries/${encodeURIComponent(id)}`);
+  } catch (e) {
+    throwApi(e, "Could not delete Cash Book entry");
+  }
+}
+
+// ---------- Optional one-time local → server migration ----------
+
+type LegacyLocal = {
+  id: string;
+  date: string;
+  side: CashBookSide;
+  amount: number;
+  description: string;
+};
+
+function parseLegacyLocal(saved: unknown): LegacyLocal[] {
+  if (saved == null || saved === "") return [];
+  let value: unknown = saved;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return [];
+    }
+  }
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((r: any) => ({
+      id: String(r?.id || ""),
+      date: String(r?.date || "").trim(),
+      side: (r?.side === "DEBIT" ? "DEBIT" : "CREDIT") as CashBookSide,
+      amount: Number(r?.amount) || 0,
+      description: String(r?.description || "").trim(),
+    }))
+    .filter((r) => r.id && !r.id.startsWith("seed-") && r.date && r.amount > 0 && r.description);
+}
+
+/** Peek at legacy local rows that are candidates for server import (never seed samples). */
+export async function peekLegacyLocalCashBookEntries(): Promise<LegacyLocal[]> {
+  const saved = await storage.getItem<string>(LOCAL_LEGACY_KEY, "");
+  return parseLegacyLocal(saved);
+}
+
+export async function wasLocalCashBookMigrated(): Promise<boolean> {
+  const flag = await storage.getItem<string>(LOCAL_MIGRATED_FLAG, "");
+  return flag === "1";
 }
 
 /**
- * Day-wise Cash Book: only rows whose `date` equals `isoDate`.
- * Other calendar days are never mixed in.
+ * Import non-seed local rows into the live backend (idempotent by local_id).
+ * Leaves the original AsyncStorage payload intact until the caller confirms.
  */
-export function getCashBookForDate(all: CashBookEntry[], isoDate: string): CashBookDay {
-  const day = (isoDate || "").trim();
-  const credits = all.filter((r) => r.date === day && r.side === "CREDIT");
-  const debits = all.filter((r) => r.date === day && r.side === "DEBIT");
-  const totalCredit = sum(credits);
-  const totalDebit = sum(debits);
-  return {
-    date: day,
-    credits,
-    debits,
-    totalCredit,
-    totalDebit,
-    net: totalCredit - totalDebit,
-  };
+export async function migrateLegacyLocalCashBook(): Promise<{ imported: number; skipped: number }> {
+  const rows = await peekLegacyLocalCashBookEntries();
+  if (!rows.length) {
+    await storage.setItem(LOCAL_MIGRATED_FLAG, "1");
+    return { imported: 0, skipped: 0 };
+  }
+  try {
+    const res = await api.post<{ imported: number; skipped: number }>("/cash-book/import-local", {
+      entries: rows.map((r) => ({
+        local_id: r.id,
+        side: r.side,
+        amount: r.amount,
+        description: r.description,
+        date: r.date,
+      })),
+    });
+    await storage.setItem(LOCAL_MIGRATED_FLAG, "1");
+    return { imported: Number(res.imported) || 0, skipped: Number(res.skipped) || 0 };
+  } catch (e) {
+    throwApi(e, "Could not migrate local Cash Book entries");
+  }
 }

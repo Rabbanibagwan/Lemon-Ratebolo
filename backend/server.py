@@ -150,6 +150,12 @@ async def lifespan(app: FastAPI):
             await _billing.ensure_indexes()
     except Exception as _e:  # noqa: BLE001
         logger.warning("Startup: billing indexes skipped: %s", _e)
+    try:
+        from cash_book import ensure_cash_book_indexes
+
+        await ensure_cash_book_indexes(db)
+    except Exception as _e:  # noqa: BLE001
+        logger.warning("Startup: cash_book indexes skipped: %s", _e)
     logger.info("Startup: indexes ensured.")
     yield
     # Shutdown
@@ -590,6 +596,10 @@ async def owner_only(user=Depends(current_user)) -> dict:
 # Merchant prepaid bag billing (Admin-controlled pricing; owner-only consumption).
 import billing as billing_mod
 billing_mod.attach_billing(api, db=db, current_user=current_user, owner_only=owner_only)
+
+# Shop Cash Book (owner-only credit/debit day book) — same MongoDB as other modules.
+import cash_book as cash_book_mod
+cash_book_mod.attach_cash_book(api, db=db, current_user=current_user, owner_only=owner_only)
 
 
 # ---------- Auth routes ----------

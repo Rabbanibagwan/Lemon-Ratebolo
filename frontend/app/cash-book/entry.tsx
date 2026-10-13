@@ -12,6 +12,7 @@ import { useWorkingDate } from "@/src/context/WorkingDateContext";
 import { colors, font, spacing } from "@/src/theme";
 import { formatDisplayDate, parseISODate, toISODate } from "@/src/utils/date";
 import { routeParam } from "@/src/utils/route-params";
+import { apiErrorMessage } from "@/src/api";
 import {
   addCashBookEntry,
   getCashBookEntryById,
@@ -104,11 +105,12 @@ export default function CashBookEntryScreen() {
           amount: n,
           description: description.trim(),
           date: entryDateISO,
+          clientRequestId: `ui-${side}-${entryDateISO}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         });
       }
       router.back();
     } catch (e: any) {
-      const msg = e?.message || "Could not save entry";
+      const msg = apiErrorMessage(e, e?.message || "Could not save entry");
       setError(msg);
       Alert.alert("Cash Book", msg);
     } finally {
