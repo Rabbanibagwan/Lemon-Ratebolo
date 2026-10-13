@@ -33,8 +33,8 @@ OCR backend resilience/concurrency (mocked): **38 PASS**.
 | 1 | Action Diary / Auction | Day lots, drivers, bhada | main + set-driver | Yes | Yes | UNKNOWN unless SHA matches | UNKNOWN/older | set-driver-nav | PASS | **PASS** |
 | 2 | OCR extraction + review | Capture → review → save | OCR PRs / main | Yes | Yes | UNKNOWN | UNKNOWN | manual | — | **PASS** |
 | 2b | OCR concurrency reliability | Sem only on provider call; backoff releases slot; queue wait timeout; process-scoped metrics | #58 capacity audit | Yes | Yes | N/A | N/A | test_ocr_resilience + concurrency edges + verify-ocr-client-retries | 38 backend + gate | **PASS** (mocked; not prod capacity) |
-| 3 | OCR farmer-name snapshot | AAM ≠ AAMG exact | #50 / integrate | Yes | Yes | Missing on main | Present if from integrate | verify-ocr-farmer-name-snapshot | included in 27 PASS | **PASS** |
-| 3b | OCR vendor-name exact match | BB ≠ JBB; exact only | fix-ocr-vendor-exact-match | Yes | Yes | Prior APK fuzzy | Prior APK fuzzy (BB→JBB) | verify-ocr-farmer-name-snapshot | 27 PASS | **PASS** |
+| 3 | OCR farmer-name snapshot | AAM ≠ AAMG exact | #50 / ocr-exact-match-apk | Yes | Yes | Missing on main | Present recovery | verify-ocr-farmer-name-snapshot | 33 PASS | **PASS** |
+| 3b | OCR vendor-name exact match | BB ≠ JBB; findExactParty=normPartyKey | ocr-exact-match-apk | Yes | Yes | Prior APK fuzzy | Fixed recovery | verify-ocr-farmer-name-snapshot | 33 PASS | **PASS** |
 | 4 | Farmer Patti create/edit | Manual + OCR | main | Yes | Yes | — | — | print-document | PASS | **PASS** |
 | 5 | Manual Entry | Add lot / bills | main | Yes | Yes | — | — | physical-keyboard | PASS | **PASS** |
 | 6 | Farmer/Vendor People | Directory | main | Yes | Yes | — | — | PartyPicker verifies | PASS | **PASS** |
