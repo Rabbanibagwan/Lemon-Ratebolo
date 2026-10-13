@@ -217,8 +217,9 @@ export default function Reports() {
     }
   };
 
+  /** Individual driver PRINT/SHARE — owner + authorized staff (counter). */
   const exportDriver = (d: DriverSummary, action: "print" | "share") => {
-    if (!isOwner) return;
+    if (!canUserExportReport(session, "driver")) return;
     void runExport(async () => {
       if (action === "print") {
         await thermalPrintDriverReport(d, workingDateISO, merchant, settings, auctionDrivers);
@@ -318,13 +319,15 @@ export default function Reports() {
     canUserExportReport(session, "driver") && mode === "driver" && !driverDetail;
   const showVendorThermalPrint =
     canUserExportReport(session, "vendor") && mode === "vendor" && !selectedDriver;
-  // SAVE / SHARE unchanged: merchant only (PDF·Excel / driver detail share).
+  // Individual driver PRINT/SHARE: owner + staff (same canUserExportReport gate).
+  const showDriverDetailActions =
+    canUserExportReport(session, "driver") && mode === "driver" && !!driverDetail;
+  // Farmer / Vendor / Audit SAVE·SHARE: merchant (owner) only — not staff admin.
   const showSaveShare =
     !!isOwner &&
     ((mode === "farmer" && !selectedDriver) ||
       (mode === "vendor" && !selectedDriver) ||
-      (mode === "audit" && !selectedDriver) ||
-      (mode === "driver" && !!driverDetail));
+      (mode === "audit" && !selectedDriver));
 
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
@@ -360,7 +363,7 @@ export default function Reports() {
               <Text style={styles.actionBtnText}>DRIVERS</Text>
             </Pressable>
           ) : null}
-          {showDriverThermalPrint || showVendorThermalPrint || showSaveShare ? (
+          {showDriverThermalPrint || showVendorThermalPrint || showDriverDetailActions || showSaveShare ? (
           <View style={styles.headerActions}>
             {showDriverThermalPrint ? (
               <Pressable
@@ -384,7 +387,7 @@ export default function Reports() {
                 <Text style={styles.actionBtnText}>{exporting ? "…" : "PRINT"}</Text>
               </Pressable>
             ) : null}
-            {showSaveShare && mode === "driver" && driverDetail ? (
+            {showDriverDetailActions && driverDetail ? (
               <Pressable
                 style={styles.actionBtn}
                 disabled={exporting}
@@ -395,7 +398,7 @@ export default function Reports() {
                 <Text style={styles.actionBtnText}>{exporting ? "…" : "PRINT"}</Text>
               </Pressable>
             ) : null}
-            {showSaveShare && mode !== "driver" ? (
+            {showSaveShare ? (
               <Pressable
                 style={styles.actionBtn}
                 disabled={exporting}
@@ -410,13 +413,23 @@ export default function Reports() {
                 <Text style={styles.actionBtnText}>{exporting ? "…" : "SAVE"}</Text>
               </Pressable>
             ) : null}
+            {showDriverDetailActions && driverDetail ? (
+              <Pressable
+                style={styles.actionBtn}
+                disabled={exporting}
+                onPress={() => exportDriver(driverDetail, "share")}
+                testID="reports-share"
+              >
+                <Ionicons name="share-outline" size={14} color={colors.onSurfaceInverse} />
+                <Text style={styles.actionBtnText}>{exporting ? "…" : "SHARE"}</Text>
+              </Pressable>
+            ) : null}
             {showSaveShare ? (
               <Pressable
                 style={styles.actionBtn}
                 disabled={exporting}
                 onPress={() => {
-                  if (mode === "driver" && driverDetail) exportDriver(driverDetail, "share");
-                  else if (mode === "farmer") setFormatPicker({ kind: "farmer", action: "share" });
+                  if (mode === "farmer") setFormatPicker({ kind: "farmer", action: "share" });
                   else if (mode === "vendor") setFormatPicker({ kind: "vendor", action: "share" });
                   else if (mode === "audit") setFormatPicker({ kind: "audit", action: "share" });
                 }}

@@ -47,8 +47,10 @@ CI: `.github/workflows/lemon-mandi-verify.yml` runs the same gate on PRs touchin
 ## Critical features that must stay green in the gate
 
 - Individual Driver thermal PRINT (`requireBluetooth`, no system dialog)
+- Staff (counter) individual driver PRINT/SHARE (`canUserExportReport`)
 - Driver list + Vendor Details thermal PRINT
 - Farmer Patti / Vendor Bill ESC/POS widths 58/80/100
+- Vendor Bill No. of Bags (line bag sum) + cut after merchant QR
 - Vendor Chart thermal PRINT
 - Merchant UPI + uploaded QR
 - OCR farmer-name snapshot (AAM ≠ AAMG)

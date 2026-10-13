@@ -273,7 +273,7 @@ export default function VendorBillDetail() {
             </View>
           ))}
           <View style={styles.divider} />
-          <Row label="No. Bags" value={String(vendorBillNoBags(b))} testID="bill-no-bags" />
+          <Row label="No. of Bags" value={String(vendorBillNoBags(b))} testID="bill-no-bags" />
           <Row label="Lemon" value={money(b.goods_total)} testID="bill-lemon" />
           <Row label="Commission" value={money(b.commission_total)} />
           <Row label="Hamali" value={money(b.hamali)} />
@@ -319,7 +319,14 @@ export default function VendorBillDetail() {
                 {upiIdShown ? <Text style={styles.upiId}>Merchant UPI: {upiIdShown}</Text> : null}
               </View>
             </>
-          ) : null}
+          ) : (
+            <>
+              <View style={styles.divider} />
+              <Text style={styles.subInfo} testID="bill-upi-qr-missing">
+                No merchant UPI QR configured. Add it in Shop Profile to print on Vendor Bills.
+              </Text>
+            </>
+          )}
         </View>
       </ScrollView>
 

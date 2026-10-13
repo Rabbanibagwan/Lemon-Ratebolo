@@ -50,20 +50,36 @@ async function main() {
     b.kv("Paid", rupees(0));
     b.bold(true).kv("Balance Due", rupees(23360)).bold(false);
     b.bankDetailsSection(["A/c Name: Test Mandi", "A/c No: 1234567895"]);
-    b.merchantUploadedQrSection(b64, mm);
-    b.normalState();
-    b.feed(b.contentClearanceFeed());
-    b.cut();
+    const ok = b.merchantUploadedQrSection(b64, mm);
+    assert(ok === true, `${mm} uploaded QR section emitted`);
+    // Production path: clearance + GS V 0 after last QR content (not mid-image).
+    b.cutAfterLastContent();
     const out = b.toBase64();
-    const text = Buffer.from(out, "base64").toString("latin1");
+    const bin = Buffer.from(out, "base64");
+    const text = bin.toString("latin1");
     assert(text.includes("BANK DETAILS"), `${mm} bank before QR`);
     assert(text.includes("MERCHANT QR CODE"), `${mm} MERCHANT QR CODE`);
     assert(text.includes("SCAN TO PAY"), `${mm} SCAN TO PAY`);
     assert(hasRaster(out), `${mm} GS v 0 raster present`);
     const bankIdx = text.indexOf("BANK DETAILS");
     const qrIdx = text.indexOf("MERCHANT QR CODE");
+    const scanIdx = text.indexOf("SCAN TO PAY");
     assert(bankIdx >= 0 && qrIdx > bankIdx, `${mm} uploaded QR after bank`);
-    console.log(`${mm}mm: PASS raster w=${bmp!.width} h=${bmp!.height} contentDots=${cfg.contentDots}`);
+    assert(scanIdx > qrIdx, `${mm} SCAN after MERCHANT QR label`);
+    // Cut (GS V 0) must appear after SCAN TO PAY in the byte stream.
+    let cutAt = -1;
+    for (let i = 0; i < bin.length - 2; i++) {
+      if (bin[i] === 0x1d && bin[i + 1] === 0x56 && bin[i + 2] === 0x00) {
+        cutAt = i;
+        break;
+      }
+    }
+    assert(cutAt > scanIdx, `${mm} GS V 0 cut after SCAN/QR content`);
+    // Head→cutter clearance: at least qrClearanceFeed LFs before cut.
+    const beforeCut = bin.subarray(Math.max(0, cutAt - 16), cutAt);
+    const lfCount = [...beforeCut].filter((x) => x === 0x0a).length;
+    assert(lfCount >= 3, `${mm} clearance feed before cut (got ${lfCount})`);
+    console.log(`${mm}mm: PASS raster w=${bmp!.width} h=${bmp!.height} contentDots=${cfg.contentDots} cut@${cutAt}`);
   }
 
   const shop = readFileSync(join(__dirname, "../app/shop-profile.tsx"), "utf8");

@@ -620,7 +620,7 @@ assert(docs.includes("GRAND TOTAL"), "docs GRAND TOTAL");
 assert(docs.includes("qrSection"), "docs qrSection");
 assert(docs.includes("normalState"), "docs normalState");
 assert(docs.includes("bankDetailsSection"), "docs bankDetailsSection");
-assert(docs.includes("contentClearanceFeed"), "docs contentClearanceFeed");
+assert(docs.includes("cutAfterLastContent"), "docs cutAfterLastContent after merchant QR");
 assert(docs.includes("bank_branch"), "docs bank_branch");
 
 const escposSrc = readFileSync(join(__dirname, "../src/utils/escpos.ts"), "utf8");
