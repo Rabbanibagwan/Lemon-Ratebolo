@@ -20,7 +20,7 @@ Do not mark PASS only because a button exists — verify the call path.
 | PARTIAL | **1** (backend optional `upi_name` not on ShopProfile model) |
 | UNVERIFIED (needs human/device) | **2** (login visual; Drive backup E2E) + thermal **PHYSICAL TEST REQUIRED** |
 
-Automated gate: `npm run verify:release` → **15/15 automated PASS**, **2 PHYSICAL TEST REQUIRED**.  
+Automated gate: `npm run verify:release` → **16/16 automated PASS**, **2 PHYSICAL TEST REQUIRED**.  
 OCR party verify: **27 PASS** (farmer AAM≠AAMG + vendor BB≠JBB).  
 OCR backend resilience/concurrency (mocked): **38 PASS**.
 
@@ -42,6 +42,7 @@ OCR backend resilience/concurrency (mocked): **38 PASS**.
 | 8 | Driver Day Setup | Modal ranges | #21 + gates | Yes | Yes | — | — | verify-set-driver-nav | PASS | **PASS** |
 | 9 | Dashboard SET DRIVER | Opens setup w/ source=dashboard | integrate | Yes | Yes | — | — | verify-set-driver-nav | PASS | **PASS** |
 | 10 | Auction driver-button visibility | No stale auto-open | integrate source gate | Yes | Yes | — | — | verify-set-driver-nav | PASS | **PASS** |
+| 10b | Entry Book receiver entry | Tap Patti → focused UPDATE RECEIVER (from=entry) | entry-book-receiver-preview | Yes | Yes | — | — | verify-entry-book-receiver | PASS | **PASS** |
 | 11 | Driver Report (list) | Summary thermal PRINT | #46 / 50e5fe9 | Yes | Yes | Missing on main/APK-from-main | Present on integrate APK | verify-reports-thermal-print | PASS | **PASS** |
 | 12 | Individual Driver Details PRINT | Bluetooth ESC/POS only | **a2e1cae** → recovery | Yes | Yes | **REGRESSED** on 50e5fe9/6333ed4 APK | **REGRESSED** (system dialog) | verify-reports + verify-thermal-print | PASS code | **PASS** code / **PHYSICAL TEST REQUIRED** |
 | 13 | Farmer Details printing | PDF/XLSX save/share | reports | Yes | Yes | — | — | UI wiring | — | **PASS** |
