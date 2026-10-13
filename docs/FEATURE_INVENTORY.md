@@ -51,10 +51,10 @@ OCR backend resilience/concurrency (mocked): **38 PASS**.
 | 16 | Vendor Purchase Chart | Chart data UI | #33 / integrate | Yes | Yes | Missing on main | Present integrate | verify-vendor-purchase-chart | PASS | **PASS** |
 | 17 | Vendor Chart thermal PRINT | requireBluetooth | integrate | Yes | Yes | Missing on main | Present integrate | verify-chart-vendor-print | PASS | **PASS** / PHYSICAL |
 | 18 | Farmer Patti thermal | ESC/POS widths | print PRs | Yes | Yes | — | — | verify-thermal-print | PASS code | **PASS** / PHYSICAL |
-| 19 | Vendor Bill thermal | ESC/POS + Lemon label | print PRs | Yes | Yes | — | — | verify-thermal-print | PASS code | **PASS** / PHYSICAL |
-| 20 | Merchant UPI QR upload + print | Shop upload + bill QR | integrate / combine | Yes | Yes | Missing on main | Present integrate | verify-merchant-upi + qr-upload | PASS | **PASS** |
+| 19 | Vendor Bill thermal | ESC/POS + Lemon + No. of Bags + merchant QR + cut after QR | staff-driver-vendor-qr | Yes | Yes | — | — | verify-thermal-print + no-bags + merchant-qr | PASS code | **PASS** / PHYSICAL |
+| 20 | Merchant UPI QR upload + print | Shop upload PNG + bill preview + ESC/POS raster | staff-driver-vendor-qr | Yes | Yes | Missing on main | Present recovery | verify-merchant-upi + qr-upload | PASS | **PASS** / PHYSICAL QR scan |
 | 21 | 58/80/100 paper widths | Settings + encoders | thermal width PRs | Yes | Yes | — | — | multiple verifies | PASS | **PASS** |
-| 22 | Feed/cut + print buffer | Cut after content | integrate cutAfterLastContent | Yes | Yes | — | — | escpos cut checks | PASS | **PASS** |
+| 22 | Feed/cut + print buffer | cutAfterLastContent = qrClearanceFeed + GS V 0 after QR | staff-driver-vendor-qr | Yes | Yes | — | — | verify-merchant-qr-upload cut order | PASS | **PASS** / PHYSICAL |
 | 23 | Cash Book | Live API CREDIT/DEBIT day book; shop isolation; opening/closing balance; local import | cash-book-live-api | Yes | Yes | Missing on main until backend deploy | — | verify-cash-book-live + test_cash_book | PASS (unit); prod deploy required | **PASS** code / deploy pending |
 | 24 | Bag Balance | Balance UI | #19 lineage | Yes | Yes | — | — | — | — | **PASS** |
 | 25 | Bag Balance invoices | PDF/print invoice | #19/#23 | Yes | Yes | — | — | — | — | **PASS** |
@@ -62,7 +62,7 @@ OCR backend resilience/concurrency (mocked): **38 PASS**.
 | 27 | Free Bags claim/usage | Merchant free bags | #22 | Yes | Yes | — | — | — | — | **PASS** |
 | 28 | Admin Free Bags | Admin allocation | #27/#24 | Yes | Yes | — | — | backend free_bags tests | — | **PASS** |
 | 29 | Bag purchase enable/disable | Hide balance when off | #43 | Yes | Yes | — | — | — | — | **PASS** |
-| 30 | Staff print permissions | Staff list thermal | #46 | Yes | Yes | — | — | verify-reports staff gates | PASS | **PASS** |
+| 30 | Staff print permissions | Staff list + individual driver PRINT/SHARE | staff-driver-vendor-qr | Yes | Yes | Individual was owner-only after 50e5fe9 | Restored canUserExportReport | verify-reports staff + detail gates | PASS | **PASS** / PHYSICAL |
 | 31 | Global working date | App + admin | #40 | Yes | Yes | — | — | — | — | **PASS** |
 | 32 | Physical keyboard nav | Enter/arrows | #34 / 50e5fe9 | Yes | Yes | Missing on main | Present integrate | verify-physical-keyboard | PASS | **PASS** |
 | 33 | Login / Product by RateBolo | Login redesign | #20 | Yes | Yes | — | — | visual | — | **UNVERIFIED** visual |

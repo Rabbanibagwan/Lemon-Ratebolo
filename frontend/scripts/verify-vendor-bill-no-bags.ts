@@ -1,5 +1,5 @@
 /**
- * Vendor Bill — No. Bags calculation + surface wiring (no RN / expo imports).
+ * Vendor Bill — No. of Bags calculation + surface wiring (no RN / expo imports).
  * Run: npx --yes tsx scripts/verify-vendor-bill-no-bags.ts
  */
 import { readFileSync } from "fs";
@@ -36,7 +36,7 @@ function makeBill(lines: Line[], total_bags?: number) {
   };
 }
 
-// Example: 4 × 1 bag → No. Bags 4; Lemon 15770; Comm 40; Grand 15810
+// Example: 4 × 1 bag → No. of Bags 4; Lemon 15770; Comm 40; Grand 15810
 const ex = makeBill([
   { bags: 1, rate: 4830 },
   { bags: 1, rate: 4330 },
@@ -70,45 +70,49 @@ const many = makeBill(Array.from({ length: 12 }, (_, i) => ({ bags: 1 + (i % 3),
 assert(vendorBillNoBags(many) === many.lines.reduce((n, l) => n + l.bags, 0), "many lots sum");
 
 const root = join(__dirname, "..");
+const LABEL = "No. of Bags";
 const ui = readFileSync(join(root, "app/vendor-bill/[id].tsx"), "utf8");
-assert(ui.includes("No. Bags"), "preview No. Bags");
+assert(ui.includes(LABEL), "preview No. of Bags");
 assert(ui.includes("vendorBillNoBags"), "preview uses helper");
 assert(ui.includes('label="Lemon"'), "preview Lemon");
-assert(ui.indexOf("No. Bags") < ui.indexOf('label="Lemon"'), "preview order");
+assert(ui.indexOf(LABEL) < ui.indexOf('label="Lemon"'), "preview order");
+assert(ui.includes("bill-upi-qr-missing"), "preview missing-QR message");
 
 const newUi = readFileSync(join(root, "app/vendor-bill/new.tsx"), "utf8");
-assert(newUi.includes('label="No. Bags"'), "new bill No. Bags");
+assert(newUi.includes(`label="${LABEL}"`), "new bill No. of Bags");
 assert(newUi.includes('label="Lemon"'), "new bill Lemon");
-assert(newUi.indexOf('label="No. Bags"') < newUi.indexOf('label="Lemon"'), "new bill order");
+assert(newUi.indexOf(`label="${LABEL}"`) < newUi.indexOf('label="Lemon"'), "new bill order");
 
 const printSrc = readFileSync(join(root, "src/utils/vendor-bill-print.ts"), "utf8");
-assert(printSrc.includes("No. Bags"), "print util No. Bags");
+assert(printSrc.includes(LABEL), "print util No. of Bags");
 assert(printSrc.includes("vendorBillNoBags"), "print util helper");
 assert(printSrc.includes("<span>Lemon</span>"), "PDF/thermal Lemon");
 const pdfBlock = printSrc.match(/export function renderVendorBillPdfHtml[\s\S]*?^export /m)?.[0] || "";
-assert(pdfBlock.includes("No. Bags"), "PDF function No. Bags");
-assert(pdfBlock.indexOf("No. Bags") < pdfBlock.indexOf("Lemon"), "PDF order");
+assert(pdfBlock.includes(LABEL), "PDF function No. of Bags");
+assert(pdfBlock.indexOf(LABEL) < pdfBlock.indexOf("Lemon"), "PDF order");
 const thermBlock = printSrc.match(/export function renderThermalVendorBillHtml[\s\S]*?^export /m)?.[0] || "";
-assert(thermBlock.includes("No. Bags"), "thermal HTML No. Bags");
-assert(thermBlock.indexOf("No. Bags") < thermBlock.indexOf("Lemon"), "thermal HTML order");
+assert(thermBlock.includes(LABEL), "thermal HTML No. of Bags");
+assert(thermBlock.indexOf(LABEL) < thermBlock.indexOf("Lemon"), "thermal HTML order");
 
 const docs = readFileSync(join(root, "src/utils/thermal-escpos-docs.ts"), "utf8");
-assert(docs.includes('kv("No. Bags"'), "escpos kv No. Bags");
+assert(docs.includes(`kv("${LABEL}"`), "escpos kv No. of Bags");
 assert(docs.includes("vendorBillNoBags"), "escpos uses helper");
 const escFn = docs.match(/export function encodeVendorBillEscPos[\s\S]*?^export /m)?.[0] || docs;
-assert(escFn.includes("No. Bags"), "escpos fn No. Bags");
-assert(escFn.indexOf("No. Bags") < escFn.indexOf('kv("Lemon"'), "escpos source order");
+assert(escFn.includes(LABEL), "escpos fn No. of Bags");
+assert(escFn.indexOf(LABEL) < escFn.indexOf('kv("Lemon"'), "escpos source order");
+assert(escFn.includes("cutAfterLastContent"), "escpos cuts after QR");
+assert(escFn.includes("merchantUploadedQrSection"), "escpos uses saved merchant QR");
 
 const totalsSrc = readFileSync(join(root, "src/utils/vendor-bill-totals.ts"), "utf8");
 assert(!totalsSrc.includes('from "@/src/api"'), "totals has no api runtime import");
 assert(totalsSrc.includes("export function vendorBillNoBags"), "helper exported");
 
-console.log("example No. Bags=", vendorBillNoBags(ex), "Lemon=", ex.goods_total, "Grand=", ex.grand_total);
-console.log("multi No. Bags=", vendorBillNoBags(multi));
+console.log("example No. of Bags=", vendorBillNoBags(ex), "Lemon=", ex.goods_total, "Grand=", ex.grand_total);
+console.log("multi No. of Bags=", vendorBillNoBags(multi));
 console.log("\nRESULTS:");
-console.log("  NO. BAGS CALCULATION: PASS");
+console.log("  NO. OF BAGS CALCULATION: PASS");
 console.log("  PREVIEW wiring: PASS");
 console.log("  PDF/SHARE: PASS");
 console.log("  THERMAL PRINT: PASS");
 console.log("  MULTIPLE BAG QUANTITIES: PASS");
-console.log("ALL VENDOR BILL NO. BAGS CHECKS OK");
+console.log("ALL VENDOR BILL NO. OF BAGS CHECKS OK");

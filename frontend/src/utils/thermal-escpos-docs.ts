@@ -115,7 +115,7 @@ export function encodeVendorBillEscPos(bill: VendorBill, profile: ShopProfile, p
   }
 
   b.hr()
-    .kv("No. Bags", String(vendorBillNoBags(bill)))
+    .kv("No. of Bags", String(vendorBillNoBags(bill)))
     .kv("Lemon", rupees(bill.goods_total))
     .kv("Commission", rupees(bill.commission_total))
     .kv("Hamali", rupees(bill.hamali));
@@ -143,11 +143,14 @@ export function encodeVendorBillEscPos(bill: VendorBill, profile: ShopProfile, p
   }
 
   // Bottom of slip: merchant-uploaded QR (preferred), else generated UPI deep-link QR.
-  // Merchant QR is the LAST printable content — no bank/notes/padding after it.
+  // Merchant QR is the LAST printable content — cut only after QR + clearance feed.
   const uploaded = String(profile.upi_qr_base64 || "").trim();
+  let usedUploaded = false;
   if (uploaded) {
-    b.merchantUploadedQrSection(uploaded, paperMm);
-  } else {
+    // Prefer saved shop QR image; skip silently-broken non-PNG so UPI can still print.
+    usedUploaded = b.merchantUploadedQrSection(uploaded, paperMm);
+  }
+  if (!usedUploaded) {
     const upiId = normalizeUpiId(profile.upi_id);
     const upiPayload = buildMerchantUpiPayUrl({
       upiId,
@@ -159,8 +162,8 @@ export function encodeVendorBillEscPos(bill: VendorBill, profile: ShopProfile, p
     }
   }
 
-  // Immediate cut after last content (Merchant QR). No contentClearanceFeed /
-  // qrClearanceFeed stack — those produced a long blank tail before the cutter.
+  // Cut AFTER complete QR (+ SCAN line) with head→cutter clearance — not mid-image.
+  // Uses cutAfterLastContent (qrClearanceFeed + GS V 0), not contentClearanceFeed stack.
   b.cutAfterLastContent();
   return b.toBase64();
 }

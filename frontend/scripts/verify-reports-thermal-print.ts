@@ -230,6 +230,29 @@ check(
   "individual driver PRINT not system-preview message",
   !reportsTsx.includes("Driver report preview is open — use Print from that window."),
 );
+// Staff (counter) must reach individual driver PRINT/SHARE — not owner-only.
+const exportDriverFn = reportsTsx.match(
+  /const exportDriver\s*=\s*\([\s\S]*?\n  \};/,
+)?.[0] || "";
+check(
+  "individual driver exportDriver uses canUserExportReport (staff allowed)",
+  exportDriverFn.includes('canUserExportReport(session, "driver")') &&
+    !/if\s*\(\s*!isOwner\s*\)\s*return/.test(exportDriverFn),
+);
+check(
+  "individual driver detail actions use showDriverDetailActions",
+  reportsTsx.includes("showDriverDetailActions") &&
+    /showDriverDetailActions[\s\S]*?canUserExportReport\(session,\s*"driver"\)/.test(reportsTsx),
+);
+check(
+  "individual driver PRINT not gated by isOwner-only showSaveShare",
+  /showDriverDetailActions && driverDetail/.test(reportsTsx) &&
+    reportsTsx.includes('testID="reports-driver-detail-print"'),
+);
+check(
+  "list driver thermal PRINT still staff-open and list-only",
+  /showDriverThermalPrint[\s\S]*?!driverDetail/.test(reportsTsx),
+);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

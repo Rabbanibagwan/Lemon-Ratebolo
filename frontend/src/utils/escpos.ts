@@ -755,8 +755,9 @@ export class EscPosBuilder {
    * Printed at the bottom after bank details. Quiet zone comes from the image
    * margins (width capped below contentDots). Does not cut or pad — caller
    * finalizes with cutAfterLastContent() immediately after this section.
+   * @returns true when raster bytes were emitted (saved PNG decoded).
    */
-  merchantUploadedQrSection(imageBase64: string, paperMm?: number): this {
+  merchantUploadedQrSection(imageBase64: string, paperMm?: number): boolean {
     const mm = paperMm ?? this.paperMm;
     // Quiet zone via margins: target ~70% of content width, max per paper.
     const maxDots =
@@ -764,14 +765,14 @@ export class EscPosBuilder {
       mm <= 80 ? Math.min(this.printDots - 24, 384) :
       Math.min(this.printDots - 32, 480);
     const bmp = pngBase64ToMonoBitmap(imageBase64, maxDots);
-    if (!bmp) return this;
+    if (!bmp) return false;
     this.normalState().align("left").hr("-");
     this.align("center").bold(true).size("normal").line("MERCHANT QR CODE").bold(false);
     this.rasterBitmap(bmp);
-    // Last printable content: SCAN label. No trailing hr / clearance feed.
+    // Last printable content: SCAN label. Clearance + cut are caller's job.
     this.normalState().align("center").bold(true).line("SCAN TO PAY").bold(false);
     this.normalState();
-    return this;
+    return true;
   }
 
   qr(data: string, moduleSize = 4): this {
@@ -804,14 +805,14 @@ export class EscPosBuilder {
   }
 
   /**
-   * Vendor Bill finalize after last content (Merchant QR): minimal LF then CUT.
-   * Uses GS V 0 (full cut, no feed-and-cut units) so the cutter does not dump a
-   * long blank tail. Do not stack contentClearanceFeed / qrClearanceFeed before this.
+   * Vendor Bill finalize after last content (Merchant QR + SCAN line):
+   * head→cutter clearance feed, then GS V 0 full cut (no feed-and-cut units).
+   * Clearance matches qrClearanceFeed (~12–18 mm) so the QR is not sliced;
+   * avoids stacking contentClearanceFeed (long blank tail).
    */
   cutAfterLastContent(): this {
     this.normalState();
-    // Minimum head→cutter clearance (~1 line). Quiet zone stays in the QR image.
-    return this.feed(1).raw(u8(0x1d, 0x56, 0x00));
+    return this.feed(this.qrClearanceFeed()).raw(u8(0x1d, 0x56, 0x00));
   }
 
   /**
