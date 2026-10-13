@@ -55,7 +55,7 @@ OCR backend resilience/concurrency (mocked): **38 PASS**.
 | 20 | Merchant UPI QR upload + print | Shop upload + bill QR | integrate / combine | Yes | Yes | Missing on main | Present integrate | verify-merchant-upi + qr-upload | PASS | **PASS** |
 | 21 | 58/80/100 paper widths | Settings + encoders | thermal width PRs | Yes | Yes | — | — | multiple verifies | PASS | **PASS** |
 | 22 | Feed/cut + print buffer | Cut after content | integrate cutAfterLastContent | Yes | Yes | — | — | escpos cut checks | PASS | **PASS** |
-| 23 | Cash Book | Nav + CREDIT/DEBIT; local-only store; double-save + write lock | integrate / #36 + #58 | Yes | Yes | Missing on main | Present integrate | verify-cash-book-local | PASS | **PASS** |
+| 23 | Cash Book | Live API CREDIT/DEBIT day book; shop isolation; opening/closing balance; local import | cash-book-live-api | Yes | Yes | Missing on main until backend deploy | — | verify-cash-book-live + test_cash_book | PASS (unit); prod deploy required | **PASS** code / deploy pending |
 | 24 | Bag Balance | Balance UI | #19 lineage | Yes | Yes | — | — | — | — | **PASS** |
 | 25 | Bag Balance invoices | PDF/print invoice | #19/#23 | Yes | Yes | — | — | — | — | **PASS** |
 | 26 | GST / invoice details | GST split on invoice | #23 | Yes | Yes | — | — | — | — | **PASS** |
