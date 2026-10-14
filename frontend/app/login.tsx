@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   StyleSheet,
   Text,
@@ -10,7 +10,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 
 import { useAuth } from "@/src/context/AuthContext";
-import { apiErrorMessage } from "@/src/api";
+import { authErrorMessage } from "@/src/api";
 import { KeyboardFormScroll } from "@/src/components/KeyboardForm";
 import { Button, Input } from "@/src/components/ui";
 import { colors, font, spacing } from "@/src/theme";
@@ -23,6 +23,8 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  /** Sync guard: React state alone cannot block rapid double-taps before re-render. */
+  const submittingRef = useRef(false);
 
   const contentWidth = Math.min(windowWidth - spacing.lg * 2, 420);
   const isShort = windowHeight < 700;
@@ -31,19 +33,23 @@ export default function Login() {
   const brandGap = isShort ? spacing.lg : spacing.xl;
 
   const onLogin = async () => {
+    if (submittingRef.current) return;
     setError(null);
     if (!username.trim() || !password) {
       setError("Enter username and password");
       return;
     }
+    submittingRef.current = true;
     try {
       setLoading(true);
       await login(username.trim(), password);
       router.replace("/(tabs)");
     } catch (e: any) {
-      setError(apiErrorMessage(e, "Login failed"));
+      // Auth-only mapping — never show OCR timeout/extraction copy on login.
+      setError(authErrorMessage(e, "Login failed"));
     } finally {
       setLoading(false);
+      submittingRef.current = false;
     }
   };
 

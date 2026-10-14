@@ -9,7 +9,13 @@ import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
 
-import { api, apiErrorMessage, OCR_API_TIMEOUT_MS, type ApiError } from "@/src/api";
+import {
+  api,
+  apiErrorMessage,
+  OCR_API_TIMEOUT_MS,
+  OCR_TIMEOUT_USER_MESSAGE,
+  type ApiError,
+} from "@/src/api";
 import { setOcrSession, OcrExtractedRow, BLANK_LOT_ROWS, DEMO_OCR_ROWS } from "@/src/ocr-session";
 import { KeyboardFormScroll } from "@/src/components/KeyboardForm";
 import { Button, Input } from "@/src/components/ui";
@@ -388,7 +394,11 @@ export default function OcrCapture() {
           const resp = await api.post<{ rows: OcrExtractedRow[]; model: string; warning?: string }>(
             "/ocr/action-diary",
             payload,
-            { timeoutMs: OCR_API_TIMEOUT_MS, signal: ac.signal },
+            {
+              timeoutMs: OCR_API_TIMEOUT_MS,
+              timeoutDetail: OCR_TIMEOUT_USER_MESSAGE,
+              signal: ac.signal,
+            },
           );
           if (__DEV__) console.log("[ocr] response received", { rows: resp.rows?.length, model: resp.model, warning: resp.warning });
           if (resp.warning === "NO_CLOUD_OCR_KEY") {
