@@ -1,11 +1,21 @@
 import { Platform } from "react-native";
 import { storage } from "@/src/utils/storage";
+import {
+  apiErrorMessage as _apiErrorMessage,
+  authErrorMessage as _authErrorMessage,
+  GENERIC_TIMEOUT_USER_MESSAGE,
+  OCR_TIMEOUT_USER_MESSAGE,
+  USER_CONNECT_ERROR,
+} from "@/src/utils/api-errors";
 
 export const AUTH_TOKEN_KEY = "lm.auth.token";
 export const AUTH_SHOP_KEY = "lm.auth.shop";
 
-const USER_CONNECT_ERROR =
-  "Unable to connect to server. Please check your internet connection or try again.";
+export {
+  GENERIC_TIMEOUT_USER_MESSAGE,
+  OCR_TIMEOUT_USER_MESSAGE,
+  USER_CONNECT_ERROR,
+} from "@/src/utils/api-errors";
 
 function stripSlash(url: string): string {
   return url.replace(/\/$/, "");
@@ -51,8 +61,13 @@ export type ApiError = {
 
 export type RequestOptions = {
   auth?: boolean;
-  /** Abort / fail after this many ms. OCR needs a long window (e.g. 180000). */
+  /** Abort / fail after this many ms. OCR needs a long window (e.g. 360000). */
   timeoutMs?: number;
+  /**
+   * User-facing message when this request times out.
+   * Defaults to GENERIC_TIMEOUT_USER_MESSAGE. OCR must pass OCR_TIMEOUT_USER_MESSAGE.
+   */
+  timeoutDetail?: string;
   signal?: AbortSignal;
 };
 
@@ -92,7 +107,7 @@ async function request<T>(path: string, init: RequestInit = {}, opts: RequestOpt
         status: 0,
         code: timedOut ? "TIMEOUT" : "ABORTED",
         detail: timedOut
-          ? "OCR is still running longer than expected. Please try again with a clearer crop, or wait and retry."
+          ? (opts.timeoutDetail || GENERIC_TIMEOUT_USER_MESSAGE)
           : "Request cancelled.",
       } as ApiError;
     }
@@ -126,42 +141,16 @@ function safeJson(t: string): any {
   try { return JSON.parse(t); } catch { return t; }
 }
 
-export function apiErrorMessage(e: unknown, fallback = "Request failed"): string {
-  const err = e as ApiError | undefined;
-  const status = typeof err?.status === "number" ? err.status : undefined;
-  const d = err?.detail;
-  const text =
-    typeof d === "string"
-      ? d
-      : d && typeof d === "object" && "message" in d
-        ? String((d as { message: unknown }).message)
-        : "";
-
-  // Transport failure only (fetch threw). HTTP 4xx/5xx must not be shown as "no internet".
-  if (status === 0) {
-    if (err?.code === "TIMEOUT") {
-      return text || "The extraction is taking longer than expected. Please try again.";
-    }
-    if (err?.code === "ABORTED") {
-      return text || "Request cancelled.";
-    }
-    return USER_CONNECT_ERROR;
-  }
-
-  if (text) {
-    if (__DEV__ && status && status >= 400) {
-      return `${fallback}: ${text} (${status})`;
-    }
-    return text;
-  }
-  if (status && status >= 400) {
-    return __DEV__ ? `${fallback} (${status})` : fallback;
-  }
-  return fallback;
-}
+export const apiErrorMessage = _apiErrorMessage;
+export const authErrorMessage = _authErrorMessage;
 
 /** Default request timeout — short CRUD. OCR uses a longer explicit timeout. */
 export const DEFAULT_API_TIMEOUT_MS = 45_000;
+/**
+ * Auth login/signup — allow Render cold start without failing as often as 45s CRUD.
+ * Still bounded; does not disable password verification.
+ */
+export const AUTH_API_TIMEOUT_MS = 120_000;
 /** Action Diary photo OCR: upload + Gemini + parse. Generous wall clock so slow pages don't false-timeout. */
 export const OCR_API_TIMEOUT_MS = 360_000;
 
