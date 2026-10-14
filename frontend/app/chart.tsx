@@ -6,7 +6,6 @@
  */
 import { useCallback, useMemo, useState } from "react";
 import {
-  ActivityIndicator,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -26,6 +25,7 @@ import { DatePickerModal } from "@/src/components/DatePickerModal";
 import { Empty } from "@/src/components/ui";
 import { colors, font, money, spacing } from "@/src/theme";
 import { printVendorChartColumn } from "@/src/utils/chart-print";
+import { LemonLoader } from "@/src/components/LemonLoader";
 import {
   buildVendorPurchaseChart,
   filterVendorPurchaseChart,
@@ -246,7 +246,7 @@ function VendorColumn({
         testID={`chart-vendor-print-${col.vendor_id}`}
       >
         {printing ? (
-          <ActivityIndicator size="small" color={colors.onSurfaceInverse} />
+          <LemonLoader size="small" />
         ) : (
           <Ionicons name="print-outline" size={14} color={colors.onSurfaceInverse} />
         )}

@@ -11,6 +11,7 @@ import { useRouter } from "expo-router";
 
 import { useAuth } from "@/src/context/AuthContext";
 import { authErrorMessage } from "@/src/api";
+import { BrandLogo } from "@/src/components/BrandLogo";
 import { KeyboardFormScroll } from "@/src/components/KeyboardForm";
 import { Button, Input } from "@/src/components/ui";
 import { colors, font, spacing } from "@/src/theme";
@@ -28,9 +29,9 @@ export default function Login() {
 
   const contentWidth = Math.min(windowWidth - spacing.lg * 2, 420);
   const isShort = windowHeight < 700;
-  const logoSize = Math.max(56, Math.min(isShort ? 68 : 80, Math.round(windowWidth * 0.18)));
+  const logoSize = Math.max(112, Math.min(isShort ? 132 : 156, Math.round(windowWidth * 0.36)));
   const brandTopPad = isShort ? spacing.md : spacing.xxl;
-  const brandGap = isShort ? spacing.lg : spacing.xl;
+  const brandGap = isShort ? spacing.md : spacing.lg;
 
   const onLogin = async () => {
     if (submittingRef.current) return;
@@ -63,14 +64,10 @@ export default function Login() {
       >
         <View style={[styles.column, { width: contentWidth }]}>
           <View style={[styles.brand, { marginBottom: brandGap }]}>
-            {/* Existing Lemon Mandi brand mark from the current login screen */}
-            <View
-              style={[styles.brandBox, { width: logoSize, height: logoSize }]}
-              accessibilityLabel="Lemon Mandi logo"
-            >
-              <Text style={[styles.brandGlyph, { fontSize: Math.round(logoSize * 0.52) }]}>◤</Text>
-            </View>
-            <Text style={[styles.title, isShort && styles.titleCompact]}>LEMON MANDI</Text>
+            <BrandLogo size={logoSize} animate testID="login-brand-logo" />
+            <Text style={[styles.title, isShort && styles.titleCompact]} accessibilityRole="header">
+              LEMON MANDI
+            </Text>
             <Text style={styles.subtitle}>Merchant Billing / Patti</Text>
           </View>
 
@@ -150,28 +147,17 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: spacing.sm,
   },
-  brandBox: {
-    backgroundColor: colors.brandPrimary,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 2,
-    borderColor: colors.brand,
-  },
-  brandGlyph: {
-    color: colors.onBrandPrimary,
-    fontFamily: font.display,
-    fontWeight: "900",
-  },
   title: {
-    fontSize: 32,
+    fontSize: 26,
     fontWeight: "900",
     color: colors.onSurface,
     fontFamily: font.display,
-    letterSpacing: -0.8,
+    letterSpacing: -0.6,
     textAlign: "center",
+    marginTop: spacing.xs,
   },
   titleCompact: {
-    fontSize: 28,
+    fontSize: 22,
   },
   subtitle: {
     fontSize: 12,

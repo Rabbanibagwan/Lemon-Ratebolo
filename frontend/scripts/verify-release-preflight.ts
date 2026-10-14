@@ -31,7 +31,7 @@ console.log(`dirty=${porcelain.trim() ? "yes" : "no"}`);
 check("git SHA readable", /^[0-9a-f]{40}$/.test(sha));
 check(
   "on recovery, integrate, OCR-fix, capacity-audit, preview, or main branch",
-  /permanent-feature-recovery|integrate-cash-chart-upi|fix-ocr|capacity-ocr-cashbook-audit|entry-book-receiver-preview|cash-book-live-api|staff-driver-vendor-qr|ocr-exact-match-apk|fix-login-ocr-error|^main$/.test(
+  /permanent-feature-recovery|integrate-cash-chart-upi|fix-ocr|capacity-ocr-cashbook-audit|entry-book-receiver-preview|cash-book-live-api|staff-driver-vendor-qr|ocr-exact-match-apk|fix-login-ocr-error|lemon-brand-icon-loader|^main$/.test(
     branch,
   ) || branch === "HEAD",
 );

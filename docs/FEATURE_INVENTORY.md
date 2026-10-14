@@ -65,7 +65,8 @@ OCR backend resilience/concurrency (mocked): **38 PASS**.
 | 30 | Staff print permissions | Staff list + individual driver PRINT/SHARE | staff-driver-vendor-qr | Yes | Yes | Individual was owner-only after 50e5fe9 | Restored canUserExportReport | verify-reports staff + detail gates | PASS | **PASS** / PHYSICAL |
 | 31 | Global working date | App + admin | #40 | Yes | Yes | — | — | — | — | **PASS** |
 | 32 | Physical keyboard nav | Enter/arrows | #34 / 50e5fe9 | Yes | Yes | Missing on main | Present integrate | verify-physical-keyboard | PASS | **PASS** |
-| 33 | Login / Product by RateBolo | Login redesign + OCR error isolation | fix-login-ocr-error | Yes | Yes | OCR timeout leaked onto login | Fixed authErrorMessage | verify-login-ocr-isolation | PASS | **PASS** |
+| 33 | Login / Product by RateBolo | Login redesign + OCR error isolation + brand logo | lemon-brand-icon-loader | Yes | Yes | OCR timeout leaked onto login | Fixed + BrandLogo | verify-login-ocr-isolation + brand-icon-loader | PASS | **PASS** |
+| 33b | App icon + LemonLoader | Official logo icon; animated sign-in; lemon loaders | lemon-brand-icon-loader | Yes | Yes | Triangle glyph / RN spinner | Replaced | verify-brand-icon-loader | PASS | **PASS** (native icon needs new APK) |
 | 34 | Search + reports | Search filters | main | Yes | Yes | — | — | — | — | **PASS** |
 | 35 | Backup / restore | Drive backup UI | backup.tsx | Yes | Yes | — | — | backend backup tests | — | **UNVERIFIED** E2E Drive |
 | 36 | pako / png-mono for EAS | Declared dependency | 6333ed4 | Yes | Yes | N/A | Fixed in e2fe065d lineage | preflight | PASS | **PASS** |

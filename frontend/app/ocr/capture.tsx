@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Alert, Image, Linking, Modal, Platform, Pressable,
-  StyleSheet, Text, View, ActivityIndicator,
+  StyleSheet, Text, View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -20,6 +20,7 @@ import { setOcrSession, OcrExtractedRow, BLANK_LOT_ROWS, DEMO_OCR_ROWS } from "@
 import { KeyboardFormScroll } from "@/src/components/KeyboardForm";
 import { Button, Input } from "@/src/components/ui";
 import { colors, font, spacing } from "@/src/theme";
+import { LemonLoader } from "@/src/components/LemonLoader";
 
 type Stage = "pick" | "crop" | "ready";
 type OcrJobUiState =
@@ -659,7 +660,7 @@ export default function OcrCapture() {
       <Modal visible={processing} transparent animationType="fade" statusBarTranslucent>
         <View style={styles.overlay} testID="ocr-extracting-overlay">
           <View style={styles.overlayCard}>
-            <ActivityIndicator size="large" color={colors.brandPrimary} style={{ marginVertical: spacing.md }} />
+            <LemonLoader size="large" style={{ marginVertical: spacing.md }} />
             <Text style={styles.overlayWait} testID="ocr-extract-wait">
               {jobState === "UPLOADING"
                 ? "Uploading image..."
