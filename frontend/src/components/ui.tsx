@@ -1,5 +1,6 @@
 import React from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, TextInputProps, View, ViewStyle } from "react-native";
+import { Pressable, StyleSheet, Text, TextInput, TextInputProps, View, ViewStyle } from "react-native";
+import { LemonLoader } from "@/src/components/LemonLoader";
 import { colors, font, spacing } from "@/src/theme";
 
 // Brutalist Button — sharp corners, 2pt border
@@ -58,7 +59,7 @@ export function Button({
       ]}
     >
       {loading ? (
-        <ActivityIndicator color={fg} />
+        <LemonLoader size="small" label="Loading" testID={testID ? `${testID}-loading` : "button-loading"} />
       ) : (
         <Text style={[styles.btnLabel, { color: fg, fontSize: small ? 14 : 16 }]}>{label}</Text>
       )}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from "react-native";
+import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { CameraView, useCameraPermissions } from "expo-camera";
@@ -8,6 +8,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { api, Patti } from "@/src/api";
 import { Button } from "@/src/components/ui";
 import { colors, font, spacing } from "@/src/theme";
+import { LemonLoader } from "@/src/components/LemonLoader";
 
 export default function Scan() {
   const router = useRouter();
@@ -40,7 +41,7 @@ export default function Scan() {
 
   if (!permission) {
     return (
-      <SafeAreaView style={styles.root}><View style={styles.center}><ActivityIndicator color={colors.brandPrimary} /></View></SafeAreaView>
+      <SafeAreaView style={styles.root}><View style={styles.center}><LemonLoader size="medium" /></View></SafeAreaView>
     );
   }
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Alert, Image, Linking, Modal, Platform, Pressable,
-  StyleSheet, Text, View, ActivityIndicator,
+  StyleSheet, Text, View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -9,11 +9,18 @@ import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
 
-import { api, apiErrorMessage, OCR_API_TIMEOUT_MS, type ApiError } from "@/src/api";
+import {
+  api,
+  apiErrorMessage,
+  OCR_API_TIMEOUT_MS,
+  OCR_TIMEOUT_USER_MESSAGE,
+  type ApiError,
+} from "@/src/api";
 import { setOcrSession, OcrExtractedRow, BLANK_LOT_ROWS, DEMO_OCR_ROWS } from "@/src/ocr-session";
 import { KeyboardFormScroll } from "@/src/components/KeyboardForm";
 import { Button, Input } from "@/src/components/ui";
 import { colors, font, spacing } from "@/src/theme";
+import { LemonLoader } from "@/src/components/LemonLoader";
 
 type Stage = "pick" | "crop" | "ready";
 type OcrJobUiState =
@@ -373,7 +380,10 @@ export default function OcrCapture() {
       hint: hint.trim() || "1/5 ABDG (50) then MM 02 1000. Bhada in () is LOT TOTAL.",
     };
 
-    const maxClientRetries = 2;
+    // Server already retries models with backoff. Client may retry once only for
+    // transport failures (no structured OCR payload) — never re-fire after server
+    // exhausted provider attempts (avoids multiplying Gemini load under contention).
+    const maxClientRetries = 1;
     let lastError: unknown = null;
 
     try {
@@ -385,7 +395,11 @@ export default function OcrCapture() {
           const resp = await api.post<{ rows: OcrExtractedRow[]; model: string; warning?: string }>(
             "/ocr/action-diary",
             payload,
-            { timeoutMs: OCR_API_TIMEOUT_MS, signal: ac.signal },
+            {
+              timeoutMs: OCR_API_TIMEOUT_MS,
+              timeoutDetail: OCR_TIMEOUT_USER_MESSAGE,
+              signal: ac.signal,
+            },
           );
           if (__DEV__) console.log("[ocr] response received", { rows: resp.rows?.length, model: resp.model, warning: resp.warning });
           if (resp.warning === "NO_CLOUD_OCR_KEY") {
@@ -411,14 +425,20 @@ export default function OcrCapture() {
             const detail = e?.detail;
             console.warn("[ocr] attempt failed", { attempt: attempt + 1, code: e?.code, status: e?.status, detail, classified });
           }
-          if (!classified.retryable || attempt >= maxClientRetries) {
+          const detailObj = e?.detail && typeof e.detail === "object" ? (e.detail as Record<string, unknown>) : null;
+          const serverAlreadyRetried = Array.isArray(detailObj?.attempts) && (detailObj!.attempts as unknown[]).length > 0;
+          // Network drop only — never auto-retry TIMEOUT (server may still be extracting).
+          const transportOnly =
+            (e as ApiError)?.code === "NETWORK" ||
+            (!detailObj && (e?.status == null || e?.status === 0) && (e as ApiError)?.code !== "TIMEOUT");
+          // Do not client-retry when the server already walked the model/fallback chain.
+          if (!classified.retryable || attempt >= maxClientRetries || serverAlreadyRetried || !transportOnly) {
             if (isGenuineOcrConfigError(e)) setKeyConfigured(false);
             setJobState(classified.uiState);
             setError(classified.message);
             return;
           }
           // Respect server retry_after when present
-          const detailObj = e?.detail && typeof e.detail === "object" ? e.detail as Record<string, unknown> : null;
           const ra = typeof detailObj?.retry_after_seconds === "number" ? detailObj.retry_after_seconds : null;
           const delayMs = Math.min(45_000, Math.max(1500, (ra != null ? ra * 1000 : 2000 * (attempt + 1))));
           setJobState("RETRYING");
@@ -640,7 +660,7 @@ export default function OcrCapture() {
       <Modal visible={processing} transparent animationType="fade" statusBarTranslucent>
         <View style={styles.overlay} testID="ocr-extracting-overlay">
           <View style={styles.overlayCard}>
-            <ActivityIndicator size="large" color={colors.brandPrimary} style={{ marginVertical: spacing.md }} />
+            <LemonLoader size="large" style={{ marginVertical: spacing.md }} />
             <Text style={styles.overlayWait} testID="ocr-extract-wait">
               {jobState === "UPLOADING"
                 ? "Uploading image..."

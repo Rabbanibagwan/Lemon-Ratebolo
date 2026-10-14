@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import {
-  ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View,
+  Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
@@ -12,6 +12,7 @@ import { colors, font, money, spacing } from "@/src/theme";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
 import { clampPaperMm, thermalPrintUserMessage } from "@/src/utils/thermal-print";
 import { shareLedgerPdf, thermalPrintLedger } from "@/src/utils/ledger-print";
+import { LemonLoader } from "@/src/components/LemonLoader";
 
 function cellAmt(n: number): string {
   return n > 0.0001 ? money(n) : "—";
@@ -87,7 +88,7 @@ export default function LedgerDetailScreen() {
       </View>
 
       {loading && !data ? (
-        <ActivityIndicator style={{ marginTop: 40 }} color={colors.brandPrimary} />
+        <LemonLoader size="medium" style={{ marginTop: 40 }} />
       ) : (
         <ScrollView
           contentContainerStyle={{ padding: spacing.lg, paddingBottom: 160 }}
