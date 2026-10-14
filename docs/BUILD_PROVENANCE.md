@@ -32,6 +32,7 @@ After EAS finishes, copy fields from the EAS JSON/`build:view` output into the t
 | Final iOS production attempt | iOS | production | N/A (never queued) | FAILED credentials | Attempted at `50e5fe9` | No Apple team linked to Expo account |
 | Current recovery tip | — | — | not built yet | — | `7e4347d6a4efac8008348d8163bdaaf175bcb65a` | Includes individual driver Bluetooth fix + gate/CI |
 | OCR exact-match + staff/QR tip APK | Android | preview | `ec743a5d-70c3-4aa1-8f5d-b960c72bcead` | FINISHED | `8f5a085238c5d0040e715db3a4de33bd632ed80f` | OCR exact-only (33 PASS), staff driver print, vendor QR/bags/cut, Cash Book live API code |
+| Login OCR isolation APK | Android | preview | `cbd082ec-c3ea-4b67-bce0-57bdaef57475` | FINISHED | `1b9aea214bd776b2242f2d3ddabaa5b97bc0e73b` | Login no longer shows OCR timeout; authErrorMessage + 120s AUTH timeout |
 
 ## Preview provenance (fill per run)
 
@@ -50,14 +51,14 @@ After EAS finishes, copy fields from the EAS JSON/`build:view` output into the t
 | Field | Value |
 |---|---|
 | Branch | `cursor/permanent-feature-recovery-80c6` |
-| Full commit SHA | `8f5a085238c5d0040e715db3a4de33bd632ed80f` |
+| Full commit SHA | `1b9aea214bd776b2242f2d3ddabaa5b97bc0e73b` |
 | App version | 1.0.1 |
 | versionCode | 3 |
-| EAS build ID | `ec743a5d-70c3-4aa1-8f5d-b960c72bcead` |
-| EAS URL | https://expo.dev/accounts/rabanibagawan/projects/lemon-ratebolo/builds/ec743a5d-70c3-4aa1-8f5d-b960c72bcead |
-| APK URL | https://expo.dev/artifacts/eas/5yNSqZMF1by5F22A2wVlPtFBRHZ8PRVfI-mlnbKsG9E.apk |
-| Inventory revision SHA | `8f5a085` |
-| Release gate | 16 PASS / 0 FAIL / 2 PHYSICAL |
+| EAS build ID | `cbd082ec-c3ea-4b67-bce0-57bdaef57475` |
+| EAS URL | https://expo.dev/accounts/rabanibagawan/projects/lemon-ratebolo/builds/cbd082ec-c3ea-4b67-bce0-57bdaef57475 |
+| APK URL | https://expo.dev/artifacts/eas/Crfr9w0o-nF4p0Qs1csQvTTIvZPyyzfPHwTNMRnSnL4.apk |
+| Inventory revision SHA | `1b9aea2` |
+| Release gate | 17 PASS / 0 FAIL / 2 PHYSICAL |
 | Physical printer | PHYSICAL TEST REQUIRED |
 
 ## iOS IPA provenance (fill per build)
