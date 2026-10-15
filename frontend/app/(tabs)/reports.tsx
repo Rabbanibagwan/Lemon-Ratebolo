@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   FlatList,
   Modal,
@@ -42,7 +43,6 @@ import { useWorkingDate } from "@/src/context/WorkingDateContext";
 import { canUserExportReport } from "@/src/utils/patti-print";
 import { Empty, Input } from "@/src/components/ui";
 import { colors, font, money, spacing } from "@/src/theme";
-import { LemonLoader } from "@/src/components/LemonLoader";
 
 type Mode = "entry" | "driver" | "farmer" | "vendor" | "audit";
 type ExportKind = "farmer" | "vendor" | "audit";
@@ -507,7 +507,7 @@ export default function Reports() {
 
       {loading && pattis === null && bills === null ? (
         <View style={{ padding: spacing.xxl, alignItems: "center" }}>
-          <LemonLoader size="medium" />
+          <ActivityIndicator color={colors.brandPrimary} />
         </View>
       ) : mode === "entry" ? (
         <EntryBook

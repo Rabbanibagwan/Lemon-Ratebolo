@@ -1,5 +1,5 @@
 /**
- * Brand icon + sign-in logo + LemonLoader wiring guards.
+ * Brand icon + sign-in logo guards (circular ActivityIndicator restored).
  * Run: npx --yes tsx scripts/verify-brand-icon-loader.ts
  */
 import { existsSync, readFileSync, statSync } from "fs";
@@ -19,7 +19,6 @@ const assets = [
   "assets/images/icon.png",
   "assets/images/adaptive-icon.png",
   "assets/images/lemon-mandi-logo.png",
-  "assets/images/lemon-loader.png",
   "assets/images/splash-image.png",
   "assets/images/favicon.png",
 ];
@@ -28,6 +27,9 @@ for (const a of assets) {
   assert(existsSync(p), `${a} exists`);
   assert(statSync(p).size > 5_000, `${a} has content`);
 }
+
+assert(!existsSync(join(root, "src/components/LemonLoader.tsx")), "LemonLoader component removed");
+assert(!existsSync(join(root, "assets/images/lemon-loader.png")), "lemon-loader asset removed");
 
 const appJson = readFileSync(join(root, "app.json"), "utf8");
 assert(appJson.includes('"./assets/images/icon.png"'), "app.json icon path");
@@ -46,32 +48,30 @@ assert(brand.includes("withRepeat"), "BrandLogo breathing animation");
 assert(brand.includes("isReduceMotionEnabled"), "BrandLogo respects reduced motion");
 assert(brand.includes("0.95") && brand.includes("1.03"), "BrandLogo zoom range ~95–103%");
 
-const loader = readFileSync(join(root, "src/components/LemonLoader.tsx"), "utf8");
-assert(loader.includes("lemon-loader.png"), "LemonLoader uses lemon asset");
-assert(loader.includes("withRepeat"), "LemonLoader animated");
-assert(loader.includes("isReduceMotionEnabled"), "LemonLoader respects reduced motion");
-assert(loader.includes('"small"') && loader.includes('"medium"') && loader.includes('"large"'), "size variants");
-
 const ui = readFileSync(join(root, "src/components/ui.tsx"), "utf8");
-assert(ui.includes("LemonLoader"), "Button loading uses LemonLoader");
-assert(!ui.includes("ActivityIndicator"), "ui.tsx has no ActivityIndicator");
+assert(ui.includes("ActivityIndicator"), "Button loading uses ActivityIndicator");
+assert(!ui.includes("LemonLoader"), "ui.tsx has no LemonLoader");
 
-const screens = [
-  "app/index.tsx",
-  "app/search.tsx",
-  "app/(tabs)/reports.tsx",
-  "app/ocr/capture.tsx",
-  "app/patti/[id].tsx",
-  "app/vendor-bill/[id].tsx",
-  "app/chart.tsx",
-  "app/scan.tsx",
-  "app/backup.tsx",
-  "app/edit-patti.tsx",
+const screens: Array<{ path: string; expectIndicator?: boolean }> = [
+  { path: "app/index.tsx" },
+  { path: "app/search.tsx" },
+  { path: "app/(tabs)/reports.tsx" },
+  { path: "app/ocr/capture.tsx" },
+  { path: "app/patti/[id].tsx" },
+  { path: "app/vendor-bill/[id].tsx" },
+  { path: "app/chart.tsx" },
+  { path: "app/scan.tsx" },
+  { path: "app/backup.tsx" },
+  { path: "app/edit-patti.tsx" },
+  { path: "app/account-ledger/[kind]/[id].tsx" },
 ];
 for (const s of screens) {
-  const src = readFileSync(join(root, s), "utf8");
-  assert(src.includes("LemonLoader"), `${s} uses LemonLoader`);
-  assert(!src.includes("ActivityIndicator"), `${s} has no ActivityIndicator`);
+  const src = readFileSync(join(root, s.path), "utf8");
+  assert(src.includes("ActivityIndicator"), `${s.path} uses ActivityIndicator`);
+  assert(!src.includes("LemonLoader"), `${s.path} has no LemonLoader`);
 }
 
-console.log("\nAll brand icon/loader guards passed.");
+const cashEntry = readFileSync(join(root, "app/cash-book/entry.tsx"), "utf8");
+assert(!cashEntry.includes("LemonLoader"), "cash-book/entry has no LemonLoader");
+
+console.log("\nAll brand icon + circular loader guards passed.");

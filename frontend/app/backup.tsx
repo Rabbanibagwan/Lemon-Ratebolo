@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   FlatList,
   Modal,
@@ -20,7 +21,6 @@ import { api, apiErrorMessage } from "@/src/api";
 import { useAuth } from "@/src/context/AuthContext";
 import { Button } from "@/src/components/ui";
 import { colors, font, spacing } from "@/src/theme";
-import { LemonLoader } from "@/src/components/LemonLoader";
 import {
   clearGoogleSession,
   downloadBackupFromDrive,
@@ -739,7 +739,7 @@ export default function BackupScreen() {
       <Modal visible={working && !!progress} transparent animationType="fade">
         <View style={styles.overlay}>
           <View style={styles.overlayCard}>
-            <LemonLoader size="large" />
+            <ActivityIndicator size="large" color={colors.brandPrimary} />
             <Text style={styles.overlayTitle}>{overlayTitle}</Text>
             <Text style={styles.overlayBody}>{progress}</Text>
           </View>

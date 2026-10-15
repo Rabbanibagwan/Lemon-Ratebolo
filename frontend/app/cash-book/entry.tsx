@@ -6,7 +6,6 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import { DatePickerModal } from "@/src/components/DatePickerModal";
-import { LemonLoader } from "@/src/components/LemonLoader";
 import { Button, Input } from "@/src/components/ui";
 import { useAuth } from "@/src/context/AuthContext";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
@@ -166,10 +165,7 @@ export default function CashBookEntryScreen() {
         keyboardShouldPersistTaps="handled"
       >
         {loadingEdit ? (
-          <View style={{ alignItems: "center", paddingVertical: spacing.lg, gap: spacing.sm }}>
-            <LemonLoader size="medium" label="Loading entry" />
-            <Text style={styles.hint}>Loading entry…</Text>
-          </View>
+          <Text style={styles.hint}>Loading entry…</Text>
         ) : (
           <>
             <Input

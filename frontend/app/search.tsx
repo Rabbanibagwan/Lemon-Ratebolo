@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   FlatList,
   Pressable,
   StyleSheet,
@@ -13,7 +14,6 @@ import { Ionicons } from "@expo/vector-icons";
 import { api, Patti, VendorBill } from "@/src/api";
 import { Empty, Input } from "@/src/components/ui";
 import { colors, font, money, spacing } from "@/src/theme";
-import { LemonLoader } from "@/src/components/LemonLoader";
 
 type Tab = "farmer" | "vendor";
 
@@ -121,7 +121,7 @@ export default function SearchScreen() {
 
       {loading ? (
         <View style={styles.center}>
-          <LemonLoader size="medium" />
+          <ActivityIndicator color={colors.brandPrimary} />
         </View>
       ) : tab === "farmer" ? (
         <FlatList

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  Alert, Image, Modal, Pressable, ScrollView,
+  ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView,
   StyleSheet, Text, View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -16,7 +16,6 @@ import { qrDataUri } from "@/src/utils/qr";
 import { thermalPrintAndMark, sharePattiPdf, canUserPrintPatti, canUserSharePatti, staffPrintBlockedMessage, staffShareBlockedMessage } from "@/src/utils/patti-print";
 import { clampPaperMm, thermalPrintUserMessage } from "@/src/utils/thermal-print";
 import { routeParam } from "@/src/utils/route-params";
-import { LemonLoader } from "@/src/components/LemonLoader";
 
 export default function PattiDetail() {
   const params = useLocalSearchParams<{ id: string; fresh?: string; autoPrint?: string; autoShare?: string; from?: string }>();
@@ -257,7 +256,7 @@ export default function PattiDetail() {
     if (loading) {
       return (
         <SafeAreaView style={styles.root}>
-          <View style={styles.center}><LemonLoader size="medium" /></View>
+          <View style={styles.center}><ActivityIndicator color={colors.brandPrimary} /></View>
         </SafeAreaView>
       );
     }
@@ -275,7 +274,7 @@ export default function PattiDetail() {
     return (
       <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
         <View style={styles.center}>
-          <LemonLoader size="medium" />
+          <ActivityIndicator color={colors.brandPrimary} />
         </View>
         {receiverModal}
       </SafeAreaView>
@@ -284,7 +283,7 @@ export default function PattiDetail() {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.root}><View style={styles.center}><LemonLoader size="medium" /></View></SafeAreaView>
+      <SafeAreaView style={styles.root}><View style={styles.center}><ActivityIndicator color={colors.brandPrimary} /></View></SafeAreaView>
     );
   }
   if (!p) {

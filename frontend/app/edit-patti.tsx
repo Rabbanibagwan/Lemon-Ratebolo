@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Alert, Modal,
+  ActivityIndicator, Alert, Modal,
   Pressable, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -16,7 +16,6 @@ import { colors, font, money, spacing } from "@/src/theme";
 import { thermalPrintAndMark, canUserPrintPatti, staffPrintBlockedMessage } from "@/src/utils/patti-print";
 import { clampPaperMm, thermalPrintUserMessage } from "@/src/utils/thermal-print";
 import { handleBagBillingError } from "@/src/utils/bag-billing";
-import { LemonLoader } from "@/src/components/LemonLoader";
 
 type LocalSale = { key: string; vendor_id: string | null; vendor_name: string; bags: string; rate: string };
 type LocalLot = {
@@ -260,7 +259,7 @@ export default function EditPatti() {
   if (loading) {
     return (
       <SafeAreaView style={styles.root}>
-        <View style={styles.center}><LemonLoader size="medium" /></View>
+        <View style={styles.center}><ActivityIndicator color={colors.brandPrimary} /></View>
       </SafeAreaView>
     );
   }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  Alert, Image, Modal, Pressable, ScrollView,
+  ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView,
   StyleSheet, Text, View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -23,7 +23,6 @@ import { clampPaperMm, thermalPrintUserMessage } from "@/src/utils/thermal-print
 import { shareVendorBillPdf, thermalPrintVendorBill } from "@/src/utils/vendor-bill-print";
 import { vendorBillNoBags } from "@/src/utils/vendor-bill-totals";
 import { routeParam } from "@/src/utils/route-params";
-import { LemonLoader } from "@/src/components/LemonLoader";
 
 export default function VendorBillDetail() {
   const params = useLocalSearchParams<{ id: string; autoPrint?: string; autoShare?: string }>();
@@ -177,7 +176,7 @@ export default function VendorBillDetail() {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.root}><View style={styles.center}><LemonLoader size="medium" /></View></SafeAreaView>
+      <SafeAreaView style={styles.root}><View style={styles.center}><ActivityIndicator color={colors.brandPrimary} /></View></SafeAreaView>
     );
   }
   if (!b) {
@@ -314,7 +313,7 @@ export default function VendorBillDetail() {
                 {upiQrUri ? (
                   <Image source={{ uri: upiQrUri }} style={styles.upiQr} accessibilityLabel="Merchant QR" />
                 ) : (
-                  <LemonLoader size="medium" style={{ marginVertical: spacing.md }} />
+                  <ActivityIndicator color={colors.brandPrimary} style={{ marginVertical: spacing.md }} />
                 )}
                 <Text style={styles.upiScan}>SCAN TO PAY</Text>
                 {upiIdShown ? <Text style={styles.upiId}>Merchant UPI: {upiIdShown}</Text> : null}
