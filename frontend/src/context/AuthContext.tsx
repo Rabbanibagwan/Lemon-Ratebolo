@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { storage } from "@/src/utils/storage";
-import { api, ApiError, AUTH_SHOP_KEY, AUTH_TOKEN_KEY, Session } from "@/src/api";
+import { api, ApiError, AUTH_API_TIMEOUT_MS, AUTH_SHOP_KEY, AUTH_TOKEN_KEY, Session } from "@/src/api";
 
 type AuthState = {
   loading: boolean;
@@ -66,12 +66,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const login = useCallback(async (username: string, password: string) => {
-    const res = await api.post<TokenRes>("/auth/login", { username, password }, false);
+    const res = await api.post<TokenRes>(
+      "/auth/login",
+      { username, password },
+      { auth: false, timeoutMs: AUTH_API_TIMEOUT_MS },
+    );
     await persist(res);
   }, []);
 
   const signup = useCallback(async (shop_name: string, username: string, password: string) => {
-    const res = await api.post<TokenRes>("/auth/signup", { shop_name, username, password }, false);
+    const res = await api.post<TokenRes>(
+      "/auth/signup",
+      { shop_name, username, password },
+      { auth: false, timeoutMs: AUTH_API_TIMEOUT_MS },
+    );
     await persist(res);
   }, []);
 
