@@ -25,6 +25,9 @@ export default function PattiDetail() {
   const autoShare = routeParam(params.autoShare);
   const fromScreen = routeParam(params.from);
   const fromScan = fromScreen === "scan";
+  /** Entry Book / Scan: open focused receiver entry, not the full Patti shell first. */
+  const fromEntryBook = fromScreen === "entry";
+  const openReceiverDirect = fromScan || fromEntryBook;
   const router = useRouter();
   const { session } = useAuth();
   const isOwner = session?.role === "owner";
@@ -41,7 +44,7 @@ export default function PattiDetail() {
   const [receiver, setReceiver] = useState("");
   const [receiverErr, setReceiverErr] = useState<string | null>(null);
   const [savingReceiver, setSavingReceiver] = useState(false);
-  const [scanReceiverOpened, setScanReceiverOpened] = useState(false);
+  const [directReceiverOpened, setDirectReceiverOpened] = useState(false);
 
   const canPrint = isOwner && canUserPrintPatti(p, session);
   const canShare = canUserSharePatti(session);
@@ -74,23 +77,23 @@ export default function PattiDetail() {
 
   useEffect(() => { load(); }, [load]);
 
-  // SCAN PATTI → open UPDATE RECEIVER directly (same modal as EDIT RECEIVER).
+  // SCAN PATTI or Entry Book row → open UPDATE RECEIVER directly (same modal as EDIT RECEIVER).
   useEffect(() => {
-    if (!fromScan || loading || !p || scanReceiverOpened) return;
+    if (!openReceiverDirect || loading || !p || directReceiverOpened) return;
     setReceiver(p.receiver_name || "");
     setReceiverErr(null);
     setShowReceiver(true);
-    setScanReceiverOpened(true);
-  }, [fromScan, loading, p, scanReceiverOpened]);
+    setDirectReceiverOpened(true);
+  }, [openReceiverDirect, loading, p, directReceiverOpened]);
 
-  const leaveScanReceiver = useCallback(() => {
+  const leaveDirectReceiver = useCallback(() => {
     setShowReceiver(false);
-    if (fromScan) {
-      // scan.tsx used replace → back returns to screen before SCAN PATTI (usually Home).
+    if (openReceiverDirect) {
+      // Return to Entry Book / prior screen (Scan used replace → usually Home).
       if (router.canGoBack()) router.back();
-      else router.replace("/(tabs)");
+      else router.replace(fromEntryBook ? "/(tabs)/reports" : "/(tabs)");
     }
-  }, [fromScan, router]);
+  }, [openReceiverDirect, fromEntryBook, router]);
 
   // Auto-trigger print/share when navigated with query param from add-lot/save flows.
   useEffect(() => {
@@ -192,7 +195,7 @@ export default function PattiDetail() {
       setSavingReceiver(true);
       const d = await api.put<Patti>(`/pattis/${id}/receiver`, { receiver_name: receiver.trim() });
       setP(d);
-      if (fromScan) leaveScanReceiver();
+      if (openReceiverDirect) leaveDirectReceiver();
       else setShowReceiver(false);
     } catch (e: any) {
       setReceiverErr(e?.detail || "Failed to save");
@@ -206,18 +209,18 @@ export default function PattiDetail() {
       visible={showReceiver}
       transparent
       animationType="fade"
-      onRequestClose={() => (fromScan ? leaveScanReceiver() : setShowReceiver(false))}
+      onRequestClose={() => (openReceiverDirect ? leaveDirectReceiver() : setShowReceiver(false))}
     >
       <KeyboardFormAvoid style={styles.modalRoot}>
         <Pressable
           style={styles.backdrop}
-          onPress={() => (fromScan ? leaveScanReceiver() : setShowReceiver(false))}
+          onPress={() => (openReceiverDirect ? leaveDirectReceiver() : setShowReceiver(false))}
         />
         <View style={styles.modalSheet}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>UPDATE RECEIVER</Text>
             <Pressable
-              onPress={() => (fromScan ? leaveScanReceiver() : setShowReceiver(false))}
+              onPress={() => (openReceiverDirect ? leaveDirectReceiver() : setShowReceiver(false))}
               hitSlop={12}
               testID="receiver-close"
             >
@@ -225,7 +228,7 @@ export default function PattiDetail() {
             </Pressable>
           </View>
           <View style={{ padding: spacing.lg }}>
-            {fromScan && p ? (
+            {openReceiverDirect && p ? (
               <Text style={styles.hintDim}>Patti #{p.patti_no} · {p.farmer_name || "—"}</Text>
             ) : null}
             <Text style={styles.hintDim}>
@@ -248,8 +251,8 @@ export default function PattiDetail() {
     </Modal>
   );
 
-  // SCAN PATTI: show only UPDATE RECEIVER (reuse same modal/API), not the details screen.
-  if (fromScan) {
+  // SCAN / Entry Book: show only UPDATE RECEIVER (reuse same modal/API), not the details screen.
+  if (openReceiverDirect) {
     if (loading) {
       return (
         <SafeAreaView style={styles.root}>
@@ -263,7 +266,7 @@ export default function PattiDetail() {
           <View style={styles.center}>
             <Text style={styles.err}>Patti not found</Text>
             <View style={{ height: spacing.md }} />
-            <Button label="GO BACK" onPress={leaveScanReceiver} testID="scan-receiver-missing-back" />
+            <Button label="GO BACK" onPress={leaveDirectReceiver} testID="scan-receiver-missing-back" />
           </View>
         </SafeAreaView>
       );
