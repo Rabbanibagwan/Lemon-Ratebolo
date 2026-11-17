@@ -36,7 +36,7 @@ export default function History() {
   const load = useCallback(async (dt: Date | null | undefined = dateFilter) => {
     try {
       setLoading(true);
-      const qs = dt ? `?date=${toISODate(dt)}` : "";
+      const qs = dt ? `?date=${encodeURIComponent(toISODate(dt))}&limit=10000` : "";
       const d = await api.get<Patti[]>(`/pattis${qs}`);
       setItems(d);
     } catch {

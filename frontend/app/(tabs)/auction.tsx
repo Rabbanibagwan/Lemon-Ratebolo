@@ -43,7 +43,7 @@ export default function Auction() {
       setLoading(true);
       const d = await api.get<AuctionDay>(`/auction-days/today?date=${dateISO}`);
       setDay(d);
-      const ps = await api.get<Patti[]>(`/pattis?date=${dateISO}`);
+      const ps = await api.get<Patti[]>(`/pattis?date=${encodeURIComponent(dateISO)}&limit=10000`);
       setPattis(ps);
     } catch {
       // silent
