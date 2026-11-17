@@ -36,6 +36,7 @@ run "print-document" npx --yes tsx scripts/verify-print-document.ts
 run "chart-vendor-print" npx --yes tsx scripts/verify-chart-vendor-print.ts
 run "vendor-purchase-chart" npx --yes tsx scripts/verify-vendor-purchase-chart.ts
 run "vendor-bill-no-bags" npx --yes tsx scripts/verify-vendor-bill-no-bags.ts
+run "vendor-bill-extra" npx --yes tsx scripts/verify-vendor-bill-extra.ts
 run "merchant-upi" npx --yes tsx scripts/verify-merchant-upi.ts
 run "merchant-qr-upload" npx --yes tsx scripts/verify-merchant-qr-upload.ts
 run "ocr-farmer-name-snapshot" npx --yes tsx scripts/verify-ocr-farmer-name-snapshot.ts

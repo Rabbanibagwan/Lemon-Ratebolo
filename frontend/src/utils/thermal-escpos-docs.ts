@@ -114,8 +114,12 @@ export function encodeVendorBillEscPos(bill: VendorBill, profile: ShopProfile, p
     b.itemRow4(l.lot_no, l.farmer_name, `${l.bags} x ${rupees(l.vendor_rate)}`, rupees(l.amount));
   }
 
-  b.hr()
-    .kv("No. of Bags", String(vendorBillNoBags(bill)))
+  b.hr();
+  if ((Number(bill.extra_per_bag) || 0) > 0) {
+    b.kv("Margin / Bag", rupees(bill.margin_per_bag))
+      .kv("+ Extra / Bag", rupees(Number(bill.extra_per_bag) || 0));
+  }
+  b.kv("No. of Bags", String(vendorBillNoBags(bill)))
     .kv("Lemon", rupees(bill.goods_total))
     .kv("Commission", rupees(bill.commission_total))
     .kv("Hamali", rupees(bill.hamali));

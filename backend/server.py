@@ -682,6 +682,8 @@ class VendorBillIn(BaseModel):
     lines: List[VendorBillLineIn] = Field(min_length=1)
     vendor_factor: float = Field(default=1.06, gt=0)  # snapshotted; independent of farmer payment_factor
     margin_per_bag: float = Field(ge=0)
+    # Vendor-side only surcharge; never applied to Farmer Patti. Legacy bills omit → 0.
+    extra_per_bag: float = Field(default=0.0, ge=0)
     commission_per_bag: float = Field(ge=0)
     hamali: float = Field(ge=0)  # per-bill absolute amount entered by biller
     cess: float = Field(default=0.0, ge=0)
@@ -694,7 +696,7 @@ class VendorBillLineOut(BaseModel):
     farmer_name: str
     bags: int
     auction_rate: float
-    vendor_rate: float  # auction_rate * vendor_factor + margin_per_bag
+    vendor_rate: float  # auction_rate * vendor_factor + margin_per_bag + extra_per_bag
     amount: float
 
 
@@ -711,6 +713,7 @@ class VendorBillOut(BaseModel):
     goods_total: float
     vendor_factor: float = 1.06
     margin_per_bag: float
+    extra_per_bag: float = 0.0
     commission_per_bag: float
     commission_total: float
     hamali: float
@@ -1230,6 +1233,7 @@ async def _sync_vendor_bills_for_lot(
 
         factor = float(bill.get("vendor_factor") or 1.06)
         margin = float(bill.get("margin_per_bag") or 0)
+        extra = float(bill.get("extra_per_bag") or 0)
         commission_per_bag = float(bill.get("commission_per_bag") or 0)
         lines_out: List[dict] = []
         changed = False
@@ -1243,7 +1247,7 @@ async def _sync_vendor_bills_for_lot(
                 continue
             auction_rate = float(sale["rate_per_bag"])
             bags = int(sale["bags"])
-            vendor_rate = _round2(auction_rate * factor + margin)
+            vendor_rate = _round2(_vendor_selling_rate(auction_rate, factor, margin, extra))
             amount = _round2(bags * vendor_rate)
             lines_out.append({
                 "lot_id": lot_id,
@@ -2717,18 +2721,28 @@ async def _next_bill_no(shop_id: str) -> int:
     return int(c["seq"])
 
 
+def _vendor_selling_rate(auction_rate: float, factor: float, margin_per_bag: float, extra_per_bag: float = 0.0) -> float:
+    """Vendor Bill selling rate only — never used for Farmer Patti.
+
+    rate = auction_rate × vendor_factor + margin_per_bag + extra_per_bag
+    Extra is added once per bag (not through commission/hamali/cess).
+    """
+    return float(auction_rate) * float(factor) + float(margin_per_bag or 0) + float(extra_per_bag or 0)
+
+
 def _compute_bill(body: VendorBillIn) -> tuple[List[dict], int, float, float, float]:
-    """Vendor rate = auction_rate * vendor_factor + margin_per_bag (never touches Farmer Patti).
+    """Vendor rate = auction × factor + margin + extra (never touches Farmer Patti).
     Per-line vendor_rate override (edit price) is allowed and does not change auction_rate."""
     lines: List[dict] = []
     bags = 0
     goods = 0.0
     factor = float(body.vendor_factor)
+    extra = float(getattr(body, "extra_per_bag", 0) or 0)
     for L in body.lines:
         if L.vendor_rate is not None:
             vendor_rate = float(L.vendor_rate)
         else:
-            vendor_rate = L.auction_rate * factor + body.margin_per_bag
+            vendor_rate = _vendor_selling_rate(L.auction_rate, factor, body.margin_per_bag, extra)
         amount = L.bags * vendor_rate
         lines.append({
             "lot_id": L.lot_id, "lot_no": L.lot_no.strip(),
@@ -3016,6 +3030,7 @@ async def _bill_to_out(shop_id: str, doc: dict) -> VendorBillOut:
         total_bags=int(doc["total_bags"]), goods_total=float(doc["goods_total"]),
         vendor_factor=float(doc.get("vendor_factor", 1.0)),  # legacy bills without factor → 1.0
         margin_per_bag=float(doc["margin_per_bag"]),
+        extra_per_bag=float(doc.get("extra_per_bag") or 0),  # legacy bills omit → 0 (totals unchanged)
         commission_per_bag=float(doc["commission_per_bag"]),
         commission_total=float(doc["commission_total"]),
         hamali=float(doc.get("hamali", 0)), cess=float(doc.get("cess", 0)),
@@ -3056,6 +3071,7 @@ async def create_vendor_bill(body: VendorBillIn, user=Depends(current_user)):
         "goods_total": goods,
         "vendor_factor": float(body.vendor_factor),
         "margin_per_bag": float(body.margin_per_bag),
+        "extra_per_bag": float(body.extra_per_bag or 0),
         "commission_per_bag": float(body.commission_per_bag),
         "commission_total": commission,
         "hamali": float(body.hamali),
@@ -3122,6 +3138,7 @@ async def pending_vendor_bills(user=Depends(current_user), date: Optional[str] =
     margin = float(settings_doc.get("vendor_margin_per_bag", 30.0))
     commission_per_bag = float(settings_doc.get("commission_per_bag", 10.0))
     hamali_default = float(settings_doc.get("vendor_hamali_default", 0.0))
+    # Pending preview uses settings margin only; Extra / Bag is chosen when creating the bill.
 
     grouped: dict[str, dict] = {}
     # No date filter — show all unposted sales so vendors never disappear based on working date.
@@ -3132,7 +3149,7 @@ async def pending_vendor_bills(user=Depends(current_user), date: Optional[str] =
             vid = s["vendor_id"]
             bags = int(s.get("bags") or 0)
             auction = float(s.get("rate_per_bag") or 0)
-            vendor_rate = auction * factor + margin
+            vendor_rate = _vendor_selling_rate(auction, factor, margin, 0.0)
             amount = bags * vendor_rate
             row = grouped.get(vid)
             if not row:
@@ -3209,6 +3226,7 @@ async def update_vendor_bill(bill_id: str, body: VendorBillIn, user=Depends(curr
         "goods_total": goods,
         "vendor_factor": float(body.vendor_factor),
         "margin_per_bag": float(body.margin_per_bag),
+        "extra_per_bag": float(body.extra_per_bag or 0),
         "commission_per_bag": float(body.commission_per_bag),
         "commission_total": commission,
         "hamali": float(body.hamali), "cess": float(body.cess),
@@ -3219,10 +3237,10 @@ async def update_vendor_bill(bill_id: str, body: VendorBillIn, user=Depends(curr
         "updated_at": utc_now(),
     }
     before = {k: existing.get(k) for k in ("total_bags", "goods_total", "vendor_factor", "margin_per_bag",
-                                           "commission_per_bag", "commission_total",
+                                           "extra_per_bag", "commission_per_bag", "commission_total",
                                            "hamali", "cess", "grand_total")}
     after = {k: upd[k] for k in ("total_bags", "goods_total", "vendor_factor", "margin_per_bag",
-                                  "commission_per_bag", "commission_total",
+                                  "extra_per_bag", "commission_per_bag", "commission_total",
                                   "hamali", "cess", "grand_total")}
     d = await db.vendor_bills.find_one_and_update(
         {"id": bill_id, "shop_id": user["shop_id"]},

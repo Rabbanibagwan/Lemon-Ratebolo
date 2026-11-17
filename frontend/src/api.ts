@@ -436,7 +436,10 @@ export type VendorBill = {
   lines: VendorBillLine[];
   total_bags: number; goods_total: number;
   vendor_factor: number;
-  margin_per_bag: number; commission_per_bag: number; commission_total: number;
+  margin_per_bag: number;
+  /** Vendor-side only; legacy bills omit → treat as 0. Never used on Farmer Patti. */
+  extra_per_bag?: number;
+  commission_per_bag: number; commission_total: number;
   hamali: number; cess: number; grand_total: number;
   paid: number; balance: number;
   status: "unpaid" | "partial" | "paid" | "deleted";

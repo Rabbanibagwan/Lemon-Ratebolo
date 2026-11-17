@@ -273,6 +273,12 @@ export default function VendorBillDetail() {
             </View>
           ))}
           <View style={styles.divider} />
+          {(Number(b.extra_per_bag) || 0) > 0 ? (
+            <>
+              <Row label="Margin / Bag" value={money(b.margin_per_bag)} />
+              <Row label="+ Extra / Bag" value={money(Number(b.extra_per_bag) || 0)} testID="bill-extra-per-bag" />
+            </>
+          ) : null}
           <Row label="No. of Bags" value={String(vendorBillNoBags(b))} testID="bill-no-bags" />
           <Row label="Lemon" value={money(b.goods_total)} testID="bill-lemon" />
           <Row label="Commission" value={money(b.commission_total)} />

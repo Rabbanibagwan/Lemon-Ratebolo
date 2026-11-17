@@ -186,6 +186,7 @@ export function renderVendorBillPdfHtml(
       <tbody>${rows}</tbody>
     </table>
     <div style="margin-top:10px">
+      ${(Number(b.extra_per_bag) || 0) > 0 ? `<div class="trow"><span>Margin / Bag</span><span class="mono">${fmt(b.margin_per_bag)}</span></div><div class="trow"><span>+ Extra / Bag</span><span class="mono">${fmt(Number(b.extra_per_bag) || 0)}</span></div>` : ""}
       <div class="trow"><span>No. of Bags</span><span class="mono">${vendorBillNoBags(b)}</span></div>
       <div class="trow"><span>Lemon</span><span class="mono">${fmt(b.goods_total)}</span></div>
       <div class="trow"><span>Commission</span><span class="mono">${fmt(b.commission_total)}</span></div>
@@ -248,6 +249,7 @@ export function renderThermalVendorBillHtml(
     <div class="row th"><span class="lot">LOT</span><span class="farm">FARMER</span><span class="bags">BAGS × RATE</span><span class="right">AMOUNT</span></div>
     ${lines}
     <div class="hr"></div>
+    ${(Number(b.extra_per_bag) || 0) > 0 ? `<div class="kv"><span>Margin / Bag</span><span>${fmt(b.margin_per_bag)}</span></div><div class="kv"><span>+ Extra / Bag</span><span>${fmt(Number(b.extra_per_bag) || 0)}</span></div>` : ""}
     <div class="kv"><span>No. of Bags</span><span>${vendorBillNoBags(b)}</span></div>
     <div class="kv"><span>Lemon</span><span>${fmt(b.goods_total)}</span></div>
     <div class="kv"><span>Commission</span><span>${fmt(b.commission_total)}</span></div>
