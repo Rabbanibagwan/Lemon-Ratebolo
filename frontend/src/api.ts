@@ -26,9 +26,16 @@ function isLoopbackHost(hostname: string): boolean {
 }
 
 /**
+ * Canonical hosted Lemon Mandi API (EAS builds + public HTTPS web previews).
+ * Never point this at a temporary tunnel URL — tunnels change per session.
+ */
+export const PRODUCTION_BACKEND_URL = "https://lemon-ratebolo.onrender.com";
+
+/**
  * Single API origin for every request.
- * Source of truth: EXPO_PUBLIC_BACKEND_URL (.env for local, eas.json / .env.device for hosted).
+ * Source of truth: EXPO_PUBLIC_BACKEND_URL (.env for local, eas.json for hosted builds).
  * Web + loopback only: rewrite hostname to the page host so localhost vs 127.0.0.1 does not break fetch.
+ * Web on a public host (Cloudflare Tunnel, etc.) without env → production API (not 127.0.0.1).
  */
 export function resolveBackendBase(): string {
   const fromEnv = stripSlash(process.env.EXPO_PUBLIC_BACKEND_URL || "");
@@ -46,8 +53,12 @@ export function resolveBackendBase(): string {
     }
     return fromEnv;
   }
-  if (Platform.OS === "web" && typeof window !== "undefined" && isLoopbackHost(window.location.hostname)) {
-    return `${window.location.protocol}//${window.location.hostname}:8001`;
+  if (Platform.OS === "web" && typeof window !== "undefined" && window.location?.hostname) {
+    if (isLoopbackHost(window.location.hostname)) {
+      return `${window.location.protocol}//${window.location.hostname}:8001`;
+    }
+    // Public web preview / hosted SPA without env must hit production, never the phone's localhost.
+    return PRODUCTION_BACKEND_URL;
   }
   return "http://127.0.0.1:8001";
 }
