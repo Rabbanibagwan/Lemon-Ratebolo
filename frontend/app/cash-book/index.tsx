@@ -1,11 +1,20 @@
-import { useCallback, useState } from "react";
-import { Alert, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  Modal,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import { DatePickerModal } from "@/src/components/DatePickerModal";
-import { Button } from "@/src/components/ui";
 import { useAuth } from "@/src/context/AuthContext";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
 import { colors, font, money, spacing } from "@/src/theme";
@@ -31,6 +40,8 @@ const EMPTY_DAY = (date: string): CashBookDay => ({
   closingBalance: 0,
 });
 
+const MAX_AUTO_RETRIES = 2;
+
 export default function CashBookScreen() {
   const router = useRouter();
   const { session } = useAuth();
@@ -39,6 +50,8 @@ export default function CashBookScreen() {
   const [day, setDay] = useState<CashBookDay>(EMPTY_DAY(workingDateISO));
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  /** True only after a successful fetch for the currently selected date. */
+  const [loadOk, setLoadOk] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [selected, setSelected] = useState<CashBookEntry | null>(null);
   const [showActions, setShowActions] = useState(false);
@@ -50,6 +63,8 @@ export default function CashBookScreen() {
   const [migrateNote, setMigrateNote] = useState<string | null>(null);
 
   const shopName = session?.shop_name || "LEMON MANDI";
+  const loadGen = useRef(0);
+  const loadInflightFor = useRef<string | null>(null);
 
   const maybeMigrateLocal = useCallback(async () => {
     try {
@@ -61,33 +76,77 @@ export default function CashBookScreen() {
       }
       const res = await migrateLegacyLocalCashBook();
       if (res.imported > 0) {
-        setMigrateNote(`Imported ${res.imported} local Cash Book entr${res.imported === 1 ? "y" : "ies"} to the server.`);
+        setMigrateNote(
+          `Imported ${res.imported} local Cash Book entr${res.imported === 1 ? "y" : "ies"} to the server.`,
+        );
       }
     } catch {
-      // Do not block the live day load; user can retry later.
+      // Do not block the live day load; migration retries on next focus.
     }
   }, []);
 
-  const load = useCallback(async () => {
-    if (!isOwner) return;
-    try {
-      setLoading(true);
-      setLoadError(null);
-      await maybeMigrateLocal();
-      const next = await fetchCashBookDay(workingDateISO);
-      setDay(next);
-    } catch (e: any) {
-      setLoadError(e?.message || "Could not load Cash Book from server");
-      setDay(EMPTY_DAY(workingDateISO));
-    } finally {
+  const load = useCallback(
+    async (opts?: { soft?: boolean }) => {
+      if (!isOwner) return;
+      const date = workingDateISO;
+      const gen = ++loadGen.current;
+      loadInflightFor.current = date;
+
+      if (!opts?.soft) {
+        setLoading(true);
+        setLoadError(null);
+        // Drop rows from another date immediately so they never appear under the new selection.
+        setDay((prev) => (prev.date === date ? prev : EMPTY_DAY(date)));
+        setLoadOk(false);
+      }
+
+      let attempt = 0;
+      let lastErr: any = null;
+      while (attempt <= MAX_AUTO_RETRIES) {
+        try {
+          if (attempt === 0) await maybeMigrateLocal();
+          const next = await fetchCashBookDay(date);
+          if (gen !== loadGen.current || loadInflightFor.current !== date) return;
+          setDay(next);
+          setLoadError(null);
+          setLoadOk(true);
+          lastErr = null;
+          break;
+        } catch (e: any) {
+          lastErr = e;
+          // Bounded backoff for transient network / cold-start only.
+          const status = e?.status ?? e?.cause?.status;
+          const retryable = status === 0 || status === 502 || status === 503 || status === 504;
+          if (!retryable || attempt === MAX_AUTO_RETRIES) break;
+          await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+          if (gen !== loadGen.current) return;
+          attempt += 1;
+        }
+      }
+
+      if (gen !== loadGen.current) return;
+      if (lastErr) {
+        setLoadError(lastErr?.message || "Could not load Cash Book from server");
+        setLoadOk(false);
+        // Keep previously successful rows only if they belong to this date; otherwise blank shell.
+        setDay((prev) => (prev.date === date && prev.credits.length + prev.debits.length > 0 ? prev : EMPTY_DAY(date)));
+      }
       setLoading(false);
-    }
-  }, [isOwner, workingDateISO, maybeMigrateLocal]);
+    },
+    [isOwner, workingDateISO, maybeMigrateLocal],
+  );
+
+  // Auto-load when the selected date changes (no RETRY button required).
+  useEffect(() => {
+    if (!isOwner) return;
+    void load();
+  }, [isOwner, workingDateISO, load]);
 
   useFocusEffect(
     useCallback(() => {
       if (!isOwner) return;
-      load();
+      // Soft refresh on return from Credit/Debit so the day list updates without flicker.
+      void load({ soft: true });
     }, [isOwner, load]),
   );
 
@@ -160,14 +219,14 @@ export default function CashBookScreen() {
     try {
       setPdfBusy(mode);
       setPdfStatus(null);
-      // Always export the on-screen day snapshot so totals match exactly.
       const result = await exportCashBookPdf(day, displayDate, mode, shopName);
       let msg = "Cash Book PDF is ready.";
       if (result === "shared") msg = "Cash Book PDF opened in the share sheet.";
       else if (result === "downloaded") {
-        msg = mode === "save"
-          ? "Cash Book PDF downloaded. Check your Downloads folder."
-          : "Cash Book PDF downloaded (share unavailable). Check your Downloads folder.";
+        msg =
+          mode === "save"
+            ? "Cash Book PDF downloaded. Check your Downloads folder."
+            : "Cash Book PDF downloaded (share unavailable). Check your Downloads folder.";
       }
       setPdfStatus(msg);
       Alert.alert(result === "shared" ? "Shared" : result === "downloaded" ? (mode === "save" ? "Saved" : "Downloaded") : "Ready", msg);
@@ -180,6 +239,8 @@ export default function CashBookScreen() {
     }
   };
 
+  const showEmptyLabels = loadOk && !loading;
+
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
       <View style={styles.header}>
@@ -189,6 +250,7 @@ export default function CashBookScreen() {
         <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>CASH BOOK</Text>
         </View>
+        {loading ? <ActivityIndicator color={colors.brandPrimary} testID="cash-book-loading" /> : null}
       </View>
 
       {showPicker ? (
@@ -207,7 +269,9 @@ export default function CashBookScreen() {
 
       <ScrollView
         contentContainerStyle={{ padding: spacing.lg, paddingBottom: 40 }}
-        refreshControl={<RefreshControl refreshing={loading} onRefresh={load} tintColor={colors.brandPrimary} />}
+        refreshControl={
+          <RefreshControl refreshing={loading} onRefresh={() => void load()} tintColor={colors.brandPrimary} />
+        }
         showsVerticalScrollIndicator={false}
       >
         <Pressable
@@ -225,12 +289,13 @@ export default function CashBookScreen() {
         {loadError ? (
           <View style={styles.errorBox} testID="cash-book-load-error">
             <Text style={styles.errorText}>{loadError}</Text>
-            <Button label="RETRY" onPress={load} testID="cash-book-retry" />
           </View>
         ) : null}
 
         {migrateNote ? (
-          <Text style={styles.migrateNote} testID="cash-book-migrate-note">{migrateNote}</Text>
+          <Text style={styles.migrateNote} testID="cash-book-migrate-note">
+            {migrateNote}
+          </Text>
         ) : null}
 
         <Text style={styles.sectionLabel}>Add Entry</Text>
@@ -260,14 +325,14 @@ export default function CashBookScreen() {
           <CashBookColumn
             title="CREDIT"
             rows={day.credits}
-            emptyLabel="No credit on this date"
+            emptyLabel={showEmptyLabels ? "No credit on this date" : loading ? "Loading…" : " "}
             testID="cash-book-credit"
             onPressEntry={openEntryActions}
           />
           <CashBookColumn
             title="DEBIT"
             rows={day.debits}
-            emptyLabel="No debit on this date"
+            emptyLabel={showEmptyLabels ? "No debit on this date" : loading ? "Loading…" : " "}
             testID="cash-book-debit"
             onPressEntry={openEntryActions}
           />
@@ -304,7 +369,9 @@ export default function CashBookScreen() {
               pressed && styles.pdfBtnPressed,
               pdfBusy === "save" && { opacity: 0.6 },
             ]}
-            onPress={() => { void onExportPdf("save"); }}
+            onPress={() => {
+              void onExportPdf("save");
+            }}
             disabled={!!pdfBusy}
             testID="cash-book-save-pdf"
           >
@@ -318,7 +385,9 @@ export default function CashBookScreen() {
               pressed && styles.pdfBtnPressed,
               pdfBusy === "share" && { opacity: 0.6 },
             ]}
-            onPress={() => { void onExportPdf("share"); }}
+            onPress={() => {
+              void onExportPdf("share");
+            }}
             disabled={!!pdfBusy}
             testID="cash-book-share-pdf"
           >
@@ -329,7 +398,9 @@ export default function CashBookScreen() {
           </Pressable>
         </View>
         {pdfStatus ? (
-          <Text style={styles.pdfStatus} testID="cash-book-pdf-status">{pdfStatus}</Text>
+          <Text style={styles.pdfStatus} testID="cash-book-pdf-status">
+            {pdfStatus}
+          </Text>
         ) : null}
       </ScrollView>
 
@@ -346,7 +417,9 @@ export default function CashBookScreen() {
                 <Text style={styles.modalTitle}>
                   {selected?.side} · {selected ? money(selected.amount) : ""}
                 </Text>
-                <Text style={styles.modalSub} numberOfLines={2}>{selected?.description}</Text>
+                <Text style={styles.modalSub} numberOfLines={2}>
+                  {selected?.description}
+                </Text>
                 <Pressable style={styles.modalBtn} onPress={onEdit} testID="cash-book-action-edit">
                   <Text style={styles.modalBtnText}>Edit</Text>
                 </Pressable>
@@ -357,7 +430,11 @@ export default function CashBookScreen() {
                 >
                   <Text style={[styles.modalBtnText, styles.modalDanger]}>Delete</Text>
                 </Pressable>
-                <Pressable style={[styles.modalBtn, styles.modalBtnLast]} onPress={closeActions} testID="cash-book-action-cancel">
+                <Pressable
+                  style={[styles.modalBtn, styles.modalBtnLast]}
+                  onPress={closeActions}
+                  testID="cash-book-action-cancel"
+                >
                   <Text style={styles.modalBtnText}>Cancel</Text>
                 </Pressable>
               </>
@@ -368,7 +445,9 @@ export default function CashBookScreen() {
                 {actionError ? <Text style={styles.modalErr}>{actionError}</Text> : null}
                 <Pressable
                   style={[styles.modalBtn, deleting && { opacity: 0.5 }]}
-                  onPress={() => { void onConfirmDelete(); }}
+                  onPress={() => {
+                    void onConfirmDelete();
+                  }}
                   disabled={deleting}
                   testID="cash-book-delete-confirm-btn"
                 >
@@ -419,7 +498,9 @@ function CashBookColumn({
             testID={`cash-book-entry-${r.id}`}
           >
             <Text style={styles.rowAmt}>{money(r.amount)}</Text>
-            <Text style={styles.rowDesc} numberOfLines={2}>{r.description}</Text>
+            <Text style={styles.rowDesc} numberOfLines={2}>
+              {r.description}
+            </Text>
           </Pressable>
         ))
       )}
@@ -438,7 +519,13 @@ const styles = StyleSheet.create({
     borderBottomWidth: 2,
     borderBottomColor: colors.borderStrong,
   },
-  headerTitle: { fontSize: 20, fontWeight: "900", color: colors.onSurface, fontFamily: font.display, letterSpacing: -0.3 },
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: "900",
+    color: colors.onSurface,
+    fontFamily: font.display,
+    letterSpacing: -0.3,
+  },
   denied: { flex: 1, padding: spacing.xl, justifyContent: "center" },
   deniedText: { color: colors.muted, fontFamily: font.display, fontWeight: "700", textAlign: "center" },
   dateRow: {
@@ -448,34 +535,81 @@ const styles = StyleSheet.create({
     marginBottom: spacing.lg,
     backgroundColor: colors.surface,
   },
-  dateLabel: { fontSize: 11, color: colors.muted, fontFamily: font.display, fontWeight: "800", letterSpacing: 1 },
+  dateLabel: {
+    fontSize: 11,
+    color: colors.muted,
+    fontFamily: font.display,
+    fontWeight: "800",
+    letterSpacing: 1,
+  },
   dateValueRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 4 },
   dateValue: { fontSize: 18, fontWeight: "900", color: colors.onSurface, fontFamily: font.display },
   sectionLabel: {
-    fontSize: 11, fontWeight: "800", color: colors.muted, fontFamily: font.display,
-    letterSpacing: 1.2, marginBottom: spacing.sm,
+    fontSize: 11,
+    fontWeight: "800",
+    color: colors.muted,
+    fontFamily: font.display,
+    letterSpacing: 1.2,
+    marginBottom: spacing.sm,
   },
   entryOptions: { flexDirection: "row", gap: spacing.sm },
   entryCard: {
-    flex: 1, borderWidth: 2, borderColor: colors.borderStrong, padding: spacing.md,
-    backgroundColor: colors.surface, gap: 4,
+    flex: 1,
+    borderWidth: 2,
+    borderColor: colors.borderStrong,
+    padding: spacing.md,
+    backgroundColor: colors.surface,
+    gap: 4,
   },
   entryCardPressed: { backgroundColor: colors.surfaceElevated },
   entryCardTitle: { fontSize: 16, fontWeight: "900", color: colors.onSurface, fontFamily: font.display },
   entryCardDesc: { fontSize: 12, color: colors.muted, fontFamily: font.display, fontWeight: "600" },
   cols: { flexDirection: "row", gap: spacing.sm, alignItems: "flex-start" },
-  col: { flex: 1, borderWidth: 2, borderColor: colors.borderStrong, backgroundColor: colors.surface, minHeight: 120 },
-  colTitle: {
-    fontSize: 12, fontWeight: "900", color: colors.onSurface, fontFamily: font.display,
-    letterSpacing: 1, padding: spacing.sm, borderBottomWidth: 2, borderBottomColor: colors.borderStrong,
+  col: {
+    flex: 1,
+    borderWidth: 2,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surface,
+    minHeight: 120,
   },
-  emptyCol: { padding: spacing.md, color: colors.muted, fontFamily: font.display, fontSize: 12, fontWeight: "600" },
-  rowCard: { paddingHorizontal: spacing.sm, paddingVertical: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.border },
+  colTitle: {
+    fontSize: 12,
+    fontWeight: "900",
+    color: colors.onSurface,
+    fontFamily: font.display,
+    letterSpacing: 1,
+    padding: spacing.sm,
+    borderBottomWidth: 2,
+    borderBottomColor: colors.borderStrong,
+  },
+  emptyCol: {
+    padding: spacing.md,
+    color: colors.muted,
+    fontFamily: font.display,
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  rowCard: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
   rowAmt: { fontSize: 14, fontWeight: "900", color: colors.onSurface, fontFamily: font.mono },
-  rowDesc: { fontSize: 12, color: colors.onSurfaceTertiary, fontFamily: font.display, fontWeight: "600", marginTop: 2 },
+  rowDesc: {
+    fontSize: 12,
+    color: colors.onSurfaceTertiary,
+    fontFamily: font.display,
+    fontWeight: "600",
+    marginTop: 2,
+  },
   totals: {
-    marginTop: spacing.lg, borderWidth: 2, borderColor: colors.borderStrong,
-    backgroundColor: colors.surface, padding: spacing.md, gap: 8,
+    marginTop: spacing.lg,
+    borderWidth: 2,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surface,
+    padding: spacing.md,
+    gap: 8,
   },
   totalRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   totalLabel: { fontSize: 13, color: colors.muted, fontFamily: font.display, fontWeight: "700" },
@@ -485,29 +619,79 @@ const styles = StyleSheet.create({
   netValue: { fontSize: 16, fontWeight: "900", color: colors.onSurface, fontFamily: font.mono },
   pdfRow: { flexDirection: "row", gap: spacing.sm },
   pdfBtn: {
-    flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    borderWidth: 2, borderColor: colors.borderStrong, paddingVertical: 12, backgroundColor: colors.surface,
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    borderWidth: 2,
+    borderColor: colors.borderStrong,
+    paddingVertical: 12,
+    backgroundColor: colors.surface,
   },
   pdfBtnPrimary: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },
   pdfBtnPressed: { opacity: 0.85 },
   pdfBtnText: { fontSize: 13, fontWeight: "800", color: colors.onSurface, fontFamily: font.display },
   pdfBtnTextPrimary: { color: colors.onPrimary },
-  pdfStatus: { marginTop: spacing.sm, fontSize: 12, color: colors.muted, fontFamily: font.display, fontWeight: "600" },
+  pdfStatus: {
+    marginTop: spacing.sm,
+    fontSize: 12,
+    color: colors.muted,
+    fontFamily: font.display,
+    fontWeight: "600",
+  },
   errorBox: {
-    borderWidth: 2, borderColor: colors.borderStrong, padding: spacing.md,
-    marginBottom: spacing.md, gap: spacing.sm, backgroundColor: colors.surface,
+    borderWidth: 2,
+    borderColor: colors.borderStrong,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    gap: spacing.sm,
+    backgroundColor: colors.surface,
   },
   errorText: { color: colors.onSurface, fontFamily: font.display, fontWeight: "700", fontSize: 13 },
-  migrateNote: { marginBottom: spacing.md, color: colors.muted, fontFamily: font.display, fontWeight: "600", fontSize: 12 },
+  migrateNote: {
+    marginBottom: spacing.md,
+    color: colors.muted,
+    fontFamily: font.display,
+    fontWeight: "600",
+    fontSize: 12,
+  },
   modalRoot: { flex: 1, justifyContent: "flex-end" },
   modalBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.45)" },
-  modalSheet: { backgroundColor: colors.surface, borderTopWidth: 2, borderColor: colors.borderStrong, padding: spacing.lg },
+  modalSheet: {
+    backgroundColor: colors.surface,
+    borderTopWidth: 2,
+    borderColor: colors.borderStrong,
+    padding: spacing.lg,
+  },
   modalTitle: { fontSize: 16, fontWeight: "900", color: colors.onSurface, fontFamily: font.display },
-  modalSub: { fontSize: 13, color: colors.muted, fontFamily: font.display, marginTop: 4, marginBottom: spacing.md },
-  modalConfirmMsg: { fontSize: 13, color: colors.muted, fontFamily: font.display, marginVertical: spacing.md },
+  modalSub: {
+    fontSize: 13,
+    color: colors.muted,
+    fontFamily: font.display,
+    marginTop: 4,
+    marginBottom: spacing.md,
+  },
+  modalConfirmMsg: {
+    fontSize: 13,
+    color: colors.muted,
+    fontFamily: font.display,
+    marginVertical: spacing.md,
+  },
   modalBtn: { paddingVertical: 14, borderTopWidth: 1, borderTopColor: colors.border },
   modalBtnLast: { borderBottomWidth: 0 },
-  modalBtnText: { fontSize: 15, fontWeight: "800", color: colors.onSurface, fontFamily: font.display, textAlign: "center" },
+  modalBtnText: {
+    fontSize: 15,
+    fontWeight: "800",
+    color: colors.onSurface,
+    fontFamily: font.display,
+    textAlign: "center",
+  },
   modalDanger: { color: "#B91C1C" },
-  modalErr: { color: "#B91C1C", fontFamily: font.display, fontWeight: "700", marginBottom: spacing.sm },
+  modalErr: {
+    color: "#B91C1C",
+    fontFamily: font.display,
+    fontWeight: "700",
+    marginBottom: spacing.sm,
+  },
 });
