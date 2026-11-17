@@ -113,8 +113,10 @@ export default function Reports() {
   const load = useCallback(async () => {
     try {
       setLoading(true);
+      // Date-scoped list must request the raised day limit so Farmer Report matches /dashboard
+      // (legacy default of 500 silently dropped lower patti_no rows on busy days).
       const [ps, vs, profile, st, day] = await Promise.all([
-        api.get<Patti[]>(`/pattis?date=${workingDateISO}`),
+        api.get<Patti[]>(`/pattis?date=${encodeURIComponent(workingDateISO)}&limit=10000`),
         api.get<VendorBill[]>(`/vendor-bills?date=${workingDateISO}`),
         api.get<ShopProfile>("/shop/profile").catch(() => null),
         api.get<Settings>("/settings").catch(() => null),
@@ -152,6 +154,7 @@ export default function Reports() {
     }
   }, [workingDateISO, session?.shop_name, session?.role]);
 
+  // Reloads on focus and whenever workingDateISO changes (load identity updates).
   useFocusEffect(
     useCallback(() => {
       setSelectedDriver(null);
@@ -564,22 +567,30 @@ export default function Reports() {
           keyExtractor={(x) => x.id}
           contentContainerStyle={{ padding: spacing.lg, gap: spacing.sm, paddingBottom: 120 }}
           ListEmptyComponent={
-            loading ? null : (
+            loading ? (
+              <View style={styles.farmerLoading} testID="farmer-loading">
+                <ActivityIndicator color={colors.brandPrimary} />
+              </View>
+            ) : (
               <Empty title="No pattis" subtitle="Generate pattis for this date." testID="farmer-empty" />
             )
           }
           ListHeaderComponent={
             (pattis || []).length ? (
-              <View style={styles.thRow}>
-                <Text style={[styles.th, { flex: 0.5 }]}>PATTI</Text>
-                <Text style={[styles.th, { flex: 0.65 }]}>LOT</Text>
-                <Text style={[styles.th, { flex: 1 }]}>FARMER</Text>
-                <Text style={[styles.th, { flex: 0.45, textAlign: "right" }]}>BAGS</Text>
-                <Text style={[styles.th, { flex: 0.7, textAlign: "right" }]}>BHADA</Text>
-                <Text style={[styles.th, { flex: 0.85, textAlign: "right" }]}>GROSS</Text>
-                <Text style={[styles.th, { flex: 0.85, textAlign: "right" }]}>PAYABLE</Text>
-                <Text style={[styles.th, { flex: 0.75 }]}>RECV</Text>
-              </View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                <View>
+                  <View style={styles.farmThRow} testID="farmer-details-header">
+                    <Text style={[styles.th, styles.farmWPt]}>PATTI</Text>
+                    <Text style={[styles.th, styles.farmWLot]}>LOT</Text>
+                    <Text style={[styles.th, styles.farmWFarm]}>FARMER</Text>
+                    <Text style={[styles.th, styles.farmWBags, styles.farmNum]}>BAGS</Text>
+                    <Text style={[styles.th, styles.farmWMoney, styles.farmNum]}>BHADA</Text>
+                    <Text style={[styles.th, styles.farmWMoney, styles.farmNum]}>GROSS</Text>
+                    <Text style={[styles.th, styles.farmWMoney, styles.farmNum]}>PAYABLE</Text>
+                    <Text style={[styles.th, styles.farmWRecv]}>RECV</Text>
+                  </View>
+                </View>
+              </ScrollView>
             ) : null
           }
           ListFooterComponent={
@@ -594,7 +605,11 @@ export default function Reports() {
               />
             ) : null
           }
-          renderItem={({ item }) => <FarmerDetailsRow p={item} drivers={auctionDrivers} />}
+          renderItem={({ item }) => (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <FarmerDetailsRow p={item} drivers={auctionDrivers} />
+            </ScrollView>
+          )}
         />
       ) : mode === "audit" ? (
         <AuditLogView rows={auditFiltered} search={search} onSearch={setSearch} loading={loading} />
@@ -882,27 +897,38 @@ function DriverPattiRow({ p }: { p: Patti }) {
 function FarmerDetailsRow({ p, drivers }: { p: Patti; drivers: DriverRangeRef[] }) {
   const received = isPattiReceived(p, drivers);
   return (
-    <View style={[styles.row, received && styles.rowReceived]}>
-      <View style={{ flex: 0.5, flexDirection: "row", alignItems: "center", gap: 2 }}>
+    <View style={[styles.farmRow, received && styles.rowReceived]} testID={`farmer-row-${p.id}`}>
+      <View style={[styles.farmWPt, styles.farmCell, { flexDirection: "row", alignItems: "center", gap: 2 }]}>
         {received ? <Text style={styles.check}>✓</Text> : null}
-        <Text style={styles.mono}>#{p.patti_no}</Text>
+        <Text style={styles.mono} numberOfLines={1}>#{p.patti_no}</Text>
       </View>
-      <Text style={[styles.mono, { flex: 0.65 }]} numberOfLines={1}>{lotLabel(p)}</Text>
-      <Text style={[styles.cellDim, { flex: 1 }]} numberOfLines={1}>{p.farmer_name}</Text>
-      <Text style={[styles.mono, { flex: 0.45, textAlign: "right" }]}>{p.total_bags}</Text>
-      <Text style={[styles.mono, { flex: 0.7, textAlign: "right" }]}>{money(p.bhada_total)}</Text>
-      <Text style={[styles.mono, { flex: 0.85, textAlign: "right" }]}>{money(p.farmer_gross)}</Text>
+      <Text style={[styles.mono, styles.farmWLot, styles.farmCell]} numberOfLines={1}>{lotLabel(p)}</Text>
+      <Text style={[styles.cellDim, styles.farmWFarm, styles.farmCell]} numberOfLines={1}>{p.farmer_name}</Text>
+      <Text style={[styles.mono, styles.farmWBags, styles.farmCell, styles.farmNum]} numberOfLines={1}>
+        {p.total_bags}
+      </Text>
+      <Text style={[styles.mono, styles.farmWMoney, styles.farmCell, styles.farmNum]} numberOfLines={1}>
+        {money(p.bhada_total)}
+      </Text>
+      <Text style={[styles.mono, styles.farmWMoney, styles.farmCell, styles.farmNum]} numberOfLines={1}>
+        {money(p.farmer_gross)}
+      </Text>
       <Text
         style={[
           styles.mono,
           styles.strong,
-          { flex: 0.85, textAlign: "right" },
+          styles.farmWMoney,
+          styles.farmCell,
+          styles.farmNum,
           received && styles.strike,
         ]}
+        numberOfLines={1}
       >
         {money(p.net_payable)}
       </Text>
-      <Text style={[styles.cellDim, { flex: 0.75 }]} numberOfLines={1}>{receiverDisplay(p, drivers)}</Text>
+      <Text style={[styles.cellDim, styles.farmWRecv, styles.farmCell]} numberOfLines={1}>
+        {receiverDisplay(p, drivers)}
+      </Text>
     </View>
   );
 }
@@ -1123,6 +1149,36 @@ const styles = StyleSheet.create({
   drvWRecv: { width: 120 },
   drvCell: { fontSize: 11 },
   drvPay: { fontSize: 12, fontWeight: "800", textAlign: "right" },
+  /** Fixed-width Farmer Details columns — avoids overlap on ~390px phones. */
+  farmThRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderBottomWidth: 2,
+    borderColor: colors.borderStrong,
+    paddingBottom: 6,
+    width: 640,
+  },
+  farmRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+    backgroundColor: colors.surface,
+    width: 640,
+  },
+  farmWPt: { width: 56 },
+  farmWLot: { width: 72 },
+  farmWFarm: { width: 120 },
+  farmWBags: { width: 48 },
+  farmWMoney: { width: 96 },
+  farmWRecv: { width: 88 },
+  farmCell: { fontSize: 11 },
+  farmNum: { textAlign: "right" },
+  farmerLoading: { paddingVertical: spacing.xl, alignItems: "center" },
   rowReceived: { backgroundColor: colors.brandSecondary },
   label: { fontSize: 14, fontWeight: "800", color: colors.onSurface, fontFamily: font.display },
   cellDim: { fontSize: 12, fontWeight: "700", color: colors.onSurface, fontFamily: font.display },

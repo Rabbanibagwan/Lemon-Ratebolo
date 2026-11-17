@@ -1887,8 +1887,21 @@ def _patti_read_compat(d: dict) -> dict:
 
 
 @api.get("/pattis", response_model=List[PattiOut])
-async def list_pattis(user=Depends(current_user), date: Optional[str] = None, q: Optional[str] = None,
-                      limit: int = 500, include_deleted: bool = False):
+async def list_pattis(
+    user=Depends(current_user),
+    date: Optional[str] = None,
+    q: Optional[str] = None,
+    limit: Optional[int] = Query(default=None, ge=1, le=20000),
+    include_deleted: bool = False,
+):
+    """List Pattis for the authenticated shop.
+
+    When `date` is set (Auction Book / Farmer Report / day views), default limit is
+    10000 so day totals are not silently truncated vs /dashboard (which has no cap).
+    Without `date`, default remains 500 for general browsing.
+    """
+    # Date-scoped day books must not silently drop rows under the old 500 cap.
+    effective_limit = limit if limit is not None else (10000 if date else 500)
     query: dict = {"shop_id": user["shop_id"]}
     if not include_deleted:
         query["deleted"] = {"$ne": True}
@@ -1930,7 +1943,11 @@ async def list_pattis(user=Depends(current_user), date: Optional[str] = None, q:
                 }
             })
         query["$or"] = or_clauses
-    cur = db.pattis.find(query, {"_id": 0, "shop_id": 0}).sort([("date", -1), ("patti_no", -1)]).limit(limit)
+    cur = (
+        db.pattis.find(query, {"_id": 0, "shop_id": 0})
+        .sort([("date", -1), ("patti_no", -1)])
+        .limit(effective_limit)
+    )
     return [PattiOut(**_patti_read_compat(d)) async for d in cur]
 
 
@@ -2403,11 +2420,10 @@ class DashboardOut(BaseModel):
     total_vendors: int
 
 
-@api.get("/dashboard", response_model=DashboardOut)
-async def dashboard(user=Depends(current_user), date: Optional[str] = None):
-    day = date or _today_str()
+async def _dashboard_patti_agg(shop_id: str, day: str) -> dict:
+    """Shared day aggregation for Dashboard + Farmer Report reconcile (non-deleted only)."""
     pipeline = [
-        {"$match": {"shop_id": user["shop_id"], "date": day, "deleted": {"$ne": True}}},
+        {"$match": {"shop_id": shop_id, "date": day, "deleted": {"$ne": True}}},
         {"$group": {
             "_id": None,
             "pattis": {"$sum": 1},
@@ -2418,7 +2434,13 @@ async def dashboard(user=Depends(current_user), date: Optional[str] = None):
         }},
     ]
     agg = await db.pattis.aggregate(pipeline).to_list(1)
-    row = agg[0] if agg else {"pattis": 0, "bags": 0, "payout": 0.0, "gross": 0.0, "pending": 0}
+    return agg[0] if agg else {"pattis": 0, "bags": 0, "payout": 0.0, "gross": 0.0, "pending": 0}
+
+
+@api.get("/dashboard", response_model=DashboardOut)
+async def dashboard(user=Depends(current_user), date: Optional[str] = None):
+    day = date or _today_str()
+    row = await _dashboard_patti_agg(user["shop_id"], day)
     lots_today = await db.lots.count_documents({"shop_id": user["shop_id"], "date": day})
     total_farmers = await db.farmers.count_documents({"shop_id": user["shop_id"]})
     total_vendors = await db.vendors.count_documents({"shop_id": user["shop_id"]})
@@ -2429,6 +2451,95 @@ async def dashboard(user=Depends(current_user), date: Optional[str] = None):
         today_lots=int(lots_today),
         today_pending=int(row["pending"]),
         total_farmers=total_farmers, total_vendors=total_vendors,
+    )
+
+
+class ReconcilePattiRow(BaseModel):
+    id: str
+    patti_no: int
+    farmer_name: str
+    total_bags: int
+    net_payable: float
+    date: str
+    status: Optional[str] = None
+    included_in_dashboard: bool = True
+    included_in_limit_500: bool
+
+
+class DayReconcileOut(BaseModel):
+    date: str
+    dashboard_pattis: int
+    dashboard_bags: int
+    dashboard_payout: float
+    listed_limit_500_pattis: int
+    listed_limit_500_bags: int
+    listed_limit_500_payout: float
+    full_pattis: int
+    full_bags: int
+    full_payout: float
+    bags_excluded_by_limit_500: int
+    payout_excluded_by_limit_500: float
+    excluded_by_limit_500: List[ReconcilePattiRow]
+
+
+@api.get("/reports/reconcile-day", response_model=DayReconcileOut)
+async def reconcile_day_report(
+    date: str = Query(..., min_length=10, max_length=10),
+    user=Depends(current_user),
+):
+    """Compare Dashboard aggregates vs /pattis?date= under the old 500 cap vs full set.
+
+    Does not modify records. Used to explain Farmer Report undercounts when a day
+    has more than 500 non-deleted Pattis (sorted by patti_no desc).
+    """
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+        raise HTTPException(422, "Invalid date format. Expected YYYY-MM-DD.")
+    shop_id = user["shop_id"]
+    dash = await _dashboard_patti_agg(shop_id, date)
+    rows = [
+        d
+        async for d in db.pattis.find(
+            {"shop_id": shop_id, "date": date, "deleted": {"$ne": True}},
+            {"_id": 0, "id": 1, "patti_no": 1, "farmer_name": 1, "total_bags": 1,
+             "net_payable": 1, "date": 1, "status": 1},
+        ).sort([("patti_no", -1)])
+    ]
+    first500 = rows[:500]
+    excluded = rows[500:]
+
+    def _sum_bags(rs: List[dict]) -> int:
+        return int(sum(int(r.get("total_bags") or 0) for r in rs))
+
+    def _sum_pay(rs: List[dict]) -> float:
+        return _round2(sum(float(r.get("net_payable") or 0) for r in rs))
+
+    return DayReconcileOut(
+        date=date,
+        dashboard_pattis=int(dash["pattis"]),
+        dashboard_bags=int(dash["bags"]),
+        dashboard_payout=_round2(float(dash["payout"])),
+        listed_limit_500_pattis=len(first500),
+        listed_limit_500_bags=_sum_bags(first500),
+        listed_limit_500_payout=_sum_pay(first500),
+        full_pattis=len(rows),
+        full_bags=_sum_bags(rows),
+        full_payout=_sum_pay(rows),
+        bags_excluded_by_limit_500=_sum_bags(excluded),
+        payout_excluded_by_limit_500=_sum_pay(excluded),
+        excluded_by_limit_500=[
+            ReconcilePattiRow(
+                id=str(r.get("id") or ""),
+                patti_no=int(r.get("patti_no") or 0),
+                farmer_name=str(r.get("farmer_name") or ""),
+                total_bags=int(r.get("total_bags") or 0),
+                net_payable=_round2(float(r.get("net_payable") or 0)),
+                date=str(r.get("date") or date),
+                status=r.get("status"),
+                included_in_dashboard=True,
+                included_in_limit_500=False,
+            )
+            for r in excluded
+        ],
     )
 
 
