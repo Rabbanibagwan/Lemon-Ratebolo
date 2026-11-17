@@ -150,6 +150,12 @@ async def lifespan(app: FastAPI):
             await _billing.ensure_indexes()
     except Exception as _e:  # noqa: BLE001
         logger.warning("Startup: billing indexes skipped: %s", _e)
+    try:
+        from cash_book import ensure_cash_book_indexes
+
+        await ensure_cash_book_indexes(db)
+    except Exception as _e:  # noqa: BLE001
+        logger.warning("Startup: cash_book indexes skipped: %s", _e)
     logger.info("Startup: indexes ensured.")
     yield
     # Shutdown
@@ -591,6 +597,10 @@ async def owner_only(user=Depends(current_user)) -> dict:
 import billing as billing_mod
 billing_mod.attach_billing(api, db=db, current_user=current_user, owner_only=owner_only)
 
+# Shop Cash Book (owner-only credit/debit day book) — same MongoDB as other modules.
+import cash_book as cash_book_mod
+cash_book_mod.attach_cash_book(api, db=db, current_user=current_user, owner_only=owner_only)
+
 
 # ---------- Auth routes ----------
 @api.get("/")
@@ -672,6 +682,8 @@ class VendorBillIn(BaseModel):
     lines: List[VendorBillLineIn] = Field(min_length=1)
     vendor_factor: float = Field(default=1.06, gt=0)  # snapshotted; independent of farmer payment_factor
     margin_per_bag: float = Field(ge=0)
+    # Vendor-side only surcharge; never applied to Farmer Patti. Legacy bills omit → 0.
+    extra_per_bag: float = Field(default=0.0, ge=0)
     commission_per_bag: float = Field(ge=0)
     hamali: float = Field(ge=0)  # per-bill absolute amount entered by biller
     cess: float = Field(default=0.0, ge=0)
@@ -684,7 +696,7 @@ class VendorBillLineOut(BaseModel):
     farmer_name: str
     bags: int
     auction_rate: float
-    vendor_rate: float  # auction_rate * vendor_factor + margin_per_bag
+    vendor_rate: float  # auction_rate * vendor_factor + margin_per_bag + extra_per_bag
     amount: float
 
 
@@ -701,6 +713,7 @@ class VendorBillOut(BaseModel):
     goods_total: float
     vendor_factor: float = 1.06
     margin_per_bag: float
+    extra_per_bag: float = 0.0
     commission_per_bag: float
     commission_total: float
     hamali: float
@@ -1220,6 +1233,7 @@ async def _sync_vendor_bills_for_lot(
 
         factor = float(bill.get("vendor_factor") or 1.06)
         margin = float(bill.get("margin_per_bag") or 0)
+        extra = float(bill.get("extra_per_bag") or 0)
         commission_per_bag = float(bill.get("commission_per_bag") or 0)
         lines_out: List[dict] = []
         changed = False
@@ -1233,7 +1247,7 @@ async def _sync_vendor_bills_for_lot(
                 continue
             auction_rate = float(sale["rate_per_bag"])
             bags = int(sale["bags"])
-            vendor_rate = _round2(auction_rate * factor + margin)
+            vendor_rate = _round2(_vendor_selling_rate(auction_rate, factor, margin, extra))
             amount = _round2(bags * vendor_rate)
             lines_out.append({
                 "lot_id": lot_id,
@@ -1877,8 +1891,21 @@ def _patti_read_compat(d: dict) -> dict:
 
 
 @api.get("/pattis", response_model=List[PattiOut])
-async def list_pattis(user=Depends(current_user), date: Optional[str] = None, q: Optional[str] = None,
-                      limit: int = 500, include_deleted: bool = False):
+async def list_pattis(
+    user=Depends(current_user),
+    date: Optional[str] = None,
+    q: Optional[str] = None,
+    limit: Optional[int] = Query(default=None, ge=1, le=20000),
+    include_deleted: bool = False,
+):
+    """List Pattis for the authenticated shop.
+
+    When `date` is set (Auction Book / Farmer Report / day views), default limit is
+    10000 so day totals are not silently truncated vs /dashboard (which has no cap).
+    Without `date`, default remains 500 for general browsing.
+    """
+    # Date-scoped day books must not silently drop rows under the old 500 cap.
+    effective_limit = limit if limit is not None else (10000 if date else 500)
     query: dict = {"shop_id": user["shop_id"]}
     if not include_deleted:
         query["deleted"] = {"$ne": True}
@@ -1920,7 +1947,11 @@ async def list_pattis(user=Depends(current_user), date: Optional[str] = None, q:
                 }
             })
         query["$or"] = or_clauses
-    cur = db.pattis.find(query, {"_id": 0, "shop_id": 0}).sort([("date", -1), ("patti_no", -1)]).limit(limit)
+    cur = (
+        db.pattis.find(query, {"_id": 0, "shop_id": 0})
+        .sort([("date", -1), ("patti_no", -1)])
+        .limit(effective_limit)
+    )
     return [PattiOut(**_patti_read_compat(d)) async for d in cur]
 
 
@@ -2393,11 +2424,10 @@ class DashboardOut(BaseModel):
     total_vendors: int
 
 
-@api.get("/dashboard", response_model=DashboardOut)
-async def dashboard(user=Depends(current_user), date: Optional[str] = None):
-    day = date or _today_str()
+async def _dashboard_patti_agg(shop_id: str, day: str) -> dict:
+    """Shared day aggregation for Dashboard + Farmer Report reconcile (non-deleted only)."""
     pipeline = [
-        {"$match": {"shop_id": user["shop_id"], "date": day, "deleted": {"$ne": True}}},
+        {"$match": {"shop_id": shop_id, "date": day, "deleted": {"$ne": True}}},
         {"$group": {
             "_id": None,
             "pattis": {"$sum": 1},
@@ -2408,7 +2438,13 @@ async def dashboard(user=Depends(current_user), date: Optional[str] = None):
         }},
     ]
     agg = await db.pattis.aggregate(pipeline).to_list(1)
-    row = agg[0] if agg else {"pattis": 0, "bags": 0, "payout": 0.0, "gross": 0.0, "pending": 0}
+    return agg[0] if agg else {"pattis": 0, "bags": 0, "payout": 0.0, "gross": 0.0, "pending": 0}
+
+
+@api.get("/dashboard", response_model=DashboardOut)
+async def dashboard(user=Depends(current_user), date: Optional[str] = None):
+    day = date or _today_str()
+    row = await _dashboard_patti_agg(user["shop_id"], day)
     lots_today = await db.lots.count_documents({"shop_id": user["shop_id"], "date": day})
     total_farmers = await db.farmers.count_documents({"shop_id": user["shop_id"]})
     total_vendors = await db.vendors.count_documents({"shop_id": user["shop_id"]})
@@ -2419,6 +2455,95 @@ async def dashboard(user=Depends(current_user), date: Optional[str] = None):
         today_lots=int(lots_today),
         today_pending=int(row["pending"]),
         total_farmers=total_farmers, total_vendors=total_vendors,
+    )
+
+
+class ReconcilePattiRow(BaseModel):
+    id: str
+    patti_no: int
+    farmer_name: str
+    total_bags: int
+    net_payable: float
+    date: str
+    status: Optional[str] = None
+    included_in_dashboard: bool = True
+    included_in_limit_500: bool
+
+
+class DayReconcileOut(BaseModel):
+    date: str
+    dashboard_pattis: int
+    dashboard_bags: int
+    dashboard_payout: float
+    listed_limit_500_pattis: int
+    listed_limit_500_bags: int
+    listed_limit_500_payout: float
+    full_pattis: int
+    full_bags: int
+    full_payout: float
+    bags_excluded_by_limit_500: int
+    payout_excluded_by_limit_500: float
+    excluded_by_limit_500: List[ReconcilePattiRow]
+
+
+@api.get("/reports/reconcile-day", response_model=DayReconcileOut)
+async def reconcile_day_report(
+    date: str = Query(..., min_length=10, max_length=10),
+    user=Depends(current_user),
+):
+    """Compare Dashboard aggregates vs /pattis?date= under the old 500 cap vs full set.
+
+    Does not modify records. Used to explain Farmer Report undercounts when a day
+    has more than 500 non-deleted Pattis (sorted by patti_no desc).
+    """
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+        raise HTTPException(422, "Invalid date format. Expected YYYY-MM-DD.")
+    shop_id = user["shop_id"]
+    dash = await _dashboard_patti_agg(shop_id, date)
+    rows = [
+        d
+        async for d in db.pattis.find(
+            {"shop_id": shop_id, "date": date, "deleted": {"$ne": True}},
+            {"_id": 0, "id": 1, "patti_no": 1, "farmer_name": 1, "total_bags": 1,
+             "net_payable": 1, "date": 1, "status": 1},
+        ).sort([("patti_no", -1)])
+    ]
+    first500 = rows[:500]
+    excluded = rows[500:]
+
+    def _sum_bags(rs: List[dict]) -> int:
+        return int(sum(int(r.get("total_bags") or 0) for r in rs))
+
+    def _sum_pay(rs: List[dict]) -> float:
+        return _round2(sum(float(r.get("net_payable") or 0) for r in rs))
+
+    return DayReconcileOut(
+        date=date,
+        dashboard_pattis=int(dash["pattis"]),
+        dashboard_bags=int(dash["bags"]),
+        dashboard_payout=_round2(float(dash["payout"])),
+        listed_limit_500_pattis=len(first500),
+        listed_limit_500_bags=_sum_bags(first500),
+        listed_limit_500_payout=_sum_pay(first500),
+        full_pattis=len(rows),
+        full_bags=_sum_bags(rows),
+        full_payout=_sum_pay(rows),
+        bags_excluded_by_limit_500=_sum_bags(excluded),
+        payout_excluded_by_limit_500=_sum_pay(excluded),
+        excluded_by_limit_500=[
+            ReconcilePattiRow(
+                id=str(r.get("id") or ""),
+                patti_no=int(r.get("patti_no") or 0),
+                farmer_name=str(r.get("farmer_name") or ""),
+                total_bags=int(r.get("total_bags") or 0),
+                net_payable=_round2(float(r.get("net_payable") or 0)),
+                date=str(r.get("date") or date),
+                status=r.get("status"),
+                included_in_dashboard=True,
+                included_in_limit_500=False,
+            )
+            for r in excluded
+        ],
     )
 
 
@@ -2596,18 +2721,28 @@ async def _next_bill_no(shop_id: str) -> int:
     return int(c["seq"])
 
 
+def _vendor_selling_rate(auction_rate: float, factor: float, margin_per_bag: float, extra_per_bag: float = 0.0) -> float:
+    """Vendor Bill selling rate only — never used for Farmer Patti.
+
+    rate = auction_rate × vendor_factor + margin_per_bag + extra_per_bag
+    Extra is added once per bag (not through commission/hamali/cess).
+    """
+    return float(auction_rate) * float(factor) + float(margin_per_bag or 0) + float(extra_per_bag or 0)
+
+
 def _compute_bill(body: VendorBillIn) -> tuple[List[dict], int, float, float, float]:
-    """Vendor rate = auction_rate * vendor_factor + margin_per_bag (never touches Farmer Patti).
+    """Vendor rate = auction × factor + margin + extra (never touches Farmer Patti).
     Per-line vendor_rate override (edit price) is allowed and does not change auction_rate."""
     lines: List[dict] = []
     bags = 0
     goods = 0.0
     factor = float(body.vendor_factor)
+    extra = float(getattr(body, "extra_per_bag", 0) or 0)
     for L in body.lines:
         if L.vendor_rate is not None:
             vendor_rate = float(L.vendor_rate)
         else:
-            vendor_rate = L.auction_rate * factor + body.margin_per_bag
+            vendor_rate = _vendor_selling_rate(L.auction_rate, factor, body.margin_per_bag, extra)
         amount = L.bags * vendor_rate
         lines.append({
             "lot_id": L.lot_id, "lot_no": L.lot_no.strip(),
@@ -2895,6 +3030,7 @@ async def _bill_to_out(shop_id: str, doc: dict) -> VendorBillOut:
         total_bags=int(doc["total_bags"]), goods_total=float(doc["goods_total"]),
         vendor_factor=float(doc.get("vendor_factor", 1.0)),  # legacy bills without factor → 1.0
         margin_per_bag=float(doc["margin_per_bag"]),
+        extra_per_bag=float(doc.get("extra_per_bag") or 0),  # legacy bills omit → 0 (totals unchanged)
         commission_per_bag=float(doc["commission_per_bag"]),
         commission_total=float(doc["commission_total"]),
         hamali=float(doc.get("hamali", 0)), cess=float(doc.get("cess", 0)),
@@ -2935,6 +3071,7 @@ async def create_vendor_bill(body: VendorBillIn, user=Depends(current_user)):
         "goods_total": goods,
         "vendor_factor": float(body.vendor_factor),
         "margin_per_bag": float(body.margin_per_bag),
+        "extra_per_bag": float(body.extra_per_bag or 0),
         "commission_per_bag": float(body.commission_per_bag),
         "commission_total": commission,
         "hamali": float(body.hamali),
@@ -3001,6 +3138,7 @@ async def pending_vendor_bills(user=Depends(current_user), date: Optional[str] =
     margin = float(settings_doc.get("vendor_margin_per_bag", 30.0))
     commission_per_bag = float(settings_doc.get("commission_per_bag", 10.0))
     hamali_default = float(settings_doc.get("vendor_hamali_default", 0.0))
+    # Pending preview uses settings margin only; Extra / Bag is chosen when creating the bill.
 
     grouped: dict[str, dict] = {}
     # No date filter — show all unposted sales so vendors never disappear based on working date.
@@ -3011,7 +3149,7 @@ async def pending_vendor_bills(user=Depends(current_user), date: Optional[str] =
             vid = s["vendor_id"]
             bags = int(s.get("bags") or 0)
             auction = float(s.get("rate_per_bag") or 0)
-            vendor_rate = auction * factor + margin
+            vendor_rate = _vendor_selling_rate(auction, factor, margin, 0.0)
             amount = bags * vendor_rate
             row = grouped.get(vid)
             if not row:
@@ -3088,6 +3226,7 @@ async def update_vendor_bill(bill_id: str, body: VendorBillIn, user=Depends(curr
         "goods_total": goods,
         "vendor_factor": float(body.vendor_factor),
         "margin_per_bag": float(body.margin_per_bag),
+        "extra_per_bag": float(body.extra_per_bag or 0),
         "commission_per_bag": float(body.commission_per_bag),
         "commission_total": commission,
         "hamali": float(body.hamali), "cess": float(body.cess),
@@ -3098,10 +3237,10 @@ async def update_vendor_bill(bill_id: str, body: VendorBillIn, user=Depends(curr
         "updated_at": utc_now(),
     }
     before = {k: existing.get(k) for k in ("total_bags", "goods_total", "vendor_factor", "margin_per_bag",
-                                           "commission_per_bag", "commission_total",
+                                           "extra_per_bag", "commission_per_bag", "commission_total",
                                            "hamali", "cess", "grand_total")}
     after = {k: upd[k] for k in ("total_bags", "goods_total", "vendor_factor", "margin_per_bag",
-                                  "commission_per_bag", "commission_total",
+                                  "extra_per_bag", "commission_per_bag", "commission_total",
                                   "hamali", "cess", "grand_total")}
     d = await db.vendor_bills.find_one_and_update(
         {"id": bill_id, "shop_id": user["shop_id"]},
@@ -3506,6 +3645,17 @@ async def ocr_status(user=Depends(current_user)):
             "retries": snap["retries"],
             "fallback_used": snap["fallback_used"],
             "avg_latency_ms": snap["avg_latency_ms"],
+            "p95_request_duration_ms": snap.get("p95_request_duration_ms"),
+            "avg_queue_wait_ms": snap.get("avg_queue_wait_ms"),
+            "p95_queue_wait_ms": snap.get("p95_queue_wait_ms"),
+            "queue_timeouts": snap.get("queue_timeouts"),
+            "by_http_status": snap.get("by_http_status"),
+            "avg_provider_latency_by_model_ms": snap.get("avg_provider_latency_by_model_ms"),
+            "active_provider_calls": snap.get("active_provider_calls"),
+            "queued_waiting": snap.get("queued_waiting"),
+            "max_concurrent": snap.get("max_concurrent"),
+            "queue_wait_timeout_sec": snap.get("queue_wait_timeout_sec"),
+            "concurrency_scope": snap.get("concurrency_scope"),
         },
     }
 

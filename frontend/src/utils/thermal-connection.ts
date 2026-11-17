@@ -17,9 +17,35 @@ export async function printThermalDocument(opts: {
   paperMm: number;
   /** When true, always use the HTML thermal layout (previous Farmer Patti format + QR). */
   preferHtml?: boolean;
+  /**
+   * When true, never fall back to expo-print / Android system Print dialog.
+   * Used by Driver Detail Print — requires Lemon Mandi Bluetooth thermal printer.
+   */
+  requireBluetooth?: boolean;
 }): Promise<void> {
   const prefs = await loadPrinterPrefs();
   const mm = clampPaperMm(opts.paperMm);
+
+  if (opts.requireBluetooth) {
+    if (prefs.connectionType !== "BLUETOOTH") {
+      throw new Error("Select Bluetooth in Settings → Printer.");
+    }
+    if (!prefs.printerId) {
+      throw new Error("Select a Bluetooth printer in Settings → Printer.");
+    }
+    if (!bluetoothHardwareAvailable()) {
+      throw new Error(
+        "Bluetooth printing is not available in this preview. Use the Android app after it is built.",
+      );
+    }
+    const on = await bluetoothPrinterConnected();
+    if (!on) {
+      await connectBluetoothPrinter(prefs.printerId);
+    }
+    await writeEscPos(opts.escposBase64);
+    return;
+  }
+
   const useBt =
     !opts.preferHtml &&
     prefs.connectionType === "BLUETOOTH" &&

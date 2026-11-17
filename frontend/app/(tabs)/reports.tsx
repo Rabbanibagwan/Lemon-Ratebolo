@@ -30,6 +30,8 @@ import {
   receiverDisplay,
   shareXlsx,
   thermalPrintDriverReport,
+  thermalPrintDriverDetailsReport,
+  thermalPrintVendorDetailsReport,
   shareDriverThermalReport,
   vendorReportAoa,
   vendorTotals,
@@ -38,6 +40,7 @@ import { buildAuditLogPdfBytes, buildFarmerDetailsPdfBytes, buildVendorDetailsPd
 import { api, AuctionDay, Patti, PattiAuditLogEntry, Settings, ShopProfile, VendorBill } from "@/src/api";
 import { useAuth } from "@/src/context/AuthContext";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
+import { canUserExportReport } from "@/src/utils/patti-print";
 import { Empty, Input } from "@/src/components/ui";
 import { colors, font, money, spacing } from "@/src/theme";
 
@@ -110,8 +113,10 @@ export default function Reports() {
   const load = useCallback(async () => {
     try {
       setLoading(true);
+      // Date-scoped list must request the raised day limit so Farmer Report matches /dashboard
+      // (legacy default of 500 silently dropped lower patti_no rows on busy days).
       const [ps, vs, profile, st, day] = await Promise.all([
-        api.get<Patti[]>(`/pattis?date=${workingDateISO}`),
+        api.get<Patti[]>(`/pattis?date=${encodeURIComponent(workingDateISO)}&limit=10000`),
         api.get<VendorBill[]>(`/vendor-bills?date=${workingDateISO}`),
         api.get<ShopProfile>("/shop/profile").catch(() => null),
         api.get<Settings>("/settings").catch(() => null),
@@ -149,6 +154,7 @@ export default function Reports() {
     }
   }, [workingDateISO, session?.shop_name, session?.role]);
 
+  // Reloads on focus and whenever workingDateISO changes (load identity updates).
   useFocusEffect(
     useCallback(() => {
       setSelectedDriver(null);
@@ -214,12 +220,13 @@ export default function Reports() {
     }
   };
 
+  /** Individual driver PRINT/SHARE — owner + authorized staff (counter). */
   const exportDriver = (d: DriverSummary, action: "print" | "share") => {
-    if (!isOwner) return;
+    if (!canUserExportReport(session, "driver")) return;
     void runExport(async () => {
       if (action === "print") {
         await thermalPrintDriverReport(d, workingDateISO, merchant, settings, auctionDrivers);
-        notify("Printed", "Driver report preview is open — use Print from that window.");
+        notify("Printed", "Driver report sent to the connected thermal printer.");
       } else {
         const result = await shareDriverThermalReport(d, workingDateISO, merchant, settings, auctionDrivers);
         if (result === "shared") notify("Shared", "Driver report PDF preview is open.");
@@ -227,6 +234,38 @@ export default function Reports() {
           notify("Downloaded", "Driver report PDF downloaded.");
         } else notify("Ready", "Driver report PDF is ready.");
       }
+    });
+  };
+
+  /** Reports → Driver Details list — Bluetooth ESC/POS summary (owner + staff). */
+  const printDriverDetailsThermal = () => {
+    if (!canUserExportReport(session, "driver")) return;
+    void runExport(async () => {
+      const freshSettings = await api.get<Settings>("/settings").catch(() => settings);
+      if (freshSettings) setSettings(freshSettings);
+      await thermalPrintDriverDetailsReport(
+        drivers,
+        workingDateISO,
+        merchant,
+        freshSettings || settings,
+      );
+      notify("Printed", "Driver Details sent to the connected thermal printer.");
+    });
+  };
+
+  /** Reports → Vendor Details — Bluetooth ESC/POS (owner + staff). No PDF/system dialog. */
+  const printVendorDetailsThermal = () => {
+    if (!canUserExportReport(session, "vendor")) return;
+    void runExport(async () => {
+      const freshSettings = await api.get<Settings>("/settings").catch(() => settings);
+      if (freshSettings) setSettings(freshSettings);
+      await thermalPrintVendorDetailsReport(
+        bills || [],
+        workingDateISO,
+        merchant,
+        freshSettings || settings,
+      );
+      notify("Printed", "Vendor Details sent to the connected thermal printer.");
     });
   };
 
@@ -278,13 +317,20 @@ export default function Reports() {
     });
   };
 
-  // Merchant only: Print / Save (PDF·Excel) / Share. Staff may view + search only.
-  const showActions =
+  // Thermal PRINT: owner + staff (Driver list / Vendor Details).
+  const showDriverThermalPrint =
+    canUserExportReport(session, "driver") && mode === "driver" && !driverDetail;
+  const showVendorThermalPrint =
+    canUserExportReport(session, "vendor") && mode === "vendor" && !selectedDriver;
+  // Individual driver PRINT/SHARE: owner + staff (same canUserExportReport gate).
+  const showDriverDetailActions =
+    canUserExportReport(session, "driver") && mode === "driver" && !!driverDetail;
+  // Farmer / Vendor / Audit SAVE·SHARE: merchant (owner) only — not staff admin.
+  const showSaveShare =
     !!isOwner &&
     ((mode === "farmer" && !selectedDriver) ||
       (mode === "vendor" && !selectedDriver) ||
-      (mode === "audit" && !selectedDriver) ||
-      (mode === "driver" && !!driverDetail));
+      (mode === "audit" && !selectedDriver));
 
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
@@ -308,49 +354,94 @@ export default function Reports() {
           {mode === "driver" && !driverDetail ? (
             <Pressable
               style={styles.actionBtn}
-              onPress={() => router.push({ pathname: "/(tabs)/auction", params: { editDrivers: "1" } })}
+              onPress={() =>
+                router.push({
+                  pathname: "/(tabs)/auction",
+                  params: { editDrivers: "1", source: "reports" },
+                })
+              }
               testID="reports-edit-drivers"
             >
               <Ionicons name="car-outline" size={14} color={colors.onSurfaceInverse} />
               <Text style={styles.actionBtnText}>DRIVERS</Text>
             </Pressable>
           ) : null}
-          {showActions ? (
+          {showDriverThermalPrint || showVendorThermalPrint || showDriverDetailActions || showSaveShare ? (
           <View style={styles.headerActions}>
-            <Pressable
-              style={styles.actionBtn}
-              disabled={exporting}
-              onPress={() => {
-                if (mode === "driver" && driverDetail) exportDriver(driverDetail, "print");
-                else if (mode === "farmer") setFormatPicker({ kind: "farmer", action: "save" });
-                else if (mode === "vendor") setFormatPicker({ kind: "vendor", action: "save" });
-                else if (mode === "audit") setFormatPicker({ kind: "audit", action: "save" });
-              }}
-              testID="reports-save"
-            >
-              <Ionicons
-                name={mode === "driver" ? "print-outline" : "download-outline"}
-                size={14}
-                color={colors.onSurfaceInverse}
-              />
-              <Text style={styles.actionBtnText}>
-                {exporting ? "…" : mode === "driver" ? "PRINT" : "SAVE"}
-              </Text>
-            </Pressable>
-            <Pressable
-              style={styles.actionBtn}
-              disabled={exporting}
-              onPress={() => {
-                if (mode === "driver" && driverDetail) exportDriver(driverDetail, "share");
-                else if (mode === "farmer") setFormatPicker({ kind: "farmer", action: "share" });
-                else if (mode === "vendor") setFormatPicker({ kind: "vendor", action: "share" });
-                else if (mode === "audit") setFormatPicker({ kind: "audit", action: "share" });
-              }}
-              testID="reports-share"
-            >
-              <Ionicons name="share-outline" size={14} color={colors.onSurfaceInverse} />
-              <Text style={styles.actionBtnText}>{exporting ? "…" : "SHARE"}</Text>
-            </Pressable>
+            {showDriverThermalPrint ? (
+              <Pressable
+                style={styles.actionBtn}
+                disabled={exporting}
+                onPress={printDriverDetailsThermal}
+                testID="reports-driver-thermal-print"
+              >
+                <Ionicons name="print-outline" size={14} color={colors.onSurfaceInverse} />
+                <Text style={styles.actionBtnText}>{exporting ? "…" : "PRINT"}</Text>
+              </Pressable>
+            ) : null}
+            {showVendorThermalPrint ? (
+              <Pressable
+                style={styles.actionBtn}
+                disabled={exporting}
+                onPress={printVendorDetailsThermal}
+                testID="reports-vendor-thermal-print"
+              >
+                <Ionicons name="print-outline" size={14} color={colors.onSurfaceInverse} />
+                <Text style={styles.actionBtnText}>{exporting ? "…" : "PRINT"}</Text>
+              </Pressable>
+            ) : null}
+            {showDriverDetailActions && driverDetail ? (
+              <Pressable
+                style={styles.actionBtn}
+                disabled={exporting}
+                onPress={() => exportDriver(driverDetail, "print")}
+                testID="reports-driver-detail-print"
+              >
+                <Ionicons name="print-outline" size={14} color={colors.onSurfaceInverse} />
+                <Text style={styles.actionBtnText}>{exporting ? "…" : "PRINT"}</Text>
+              </Pressable>
+            ) : null}
+            {showSaveShare ? (
+              <Pressable
+                style={styles.actionBtn}
+                disabled={exporting}
+                onPress={() => {
+                  if (mode === "farmer") setFormatPicker({ kind: "farmer", action: "save" });
+                  else if (mode === "vendor") setFormatPicker({ kind: "vendor", action: "save" });
+                  else if (mode === "audit") setFormatPicker({ kind: "audit", action: "save" });
+                }}
+                testID="reports-save"
+              >
+                <Ionicons name="download-outline" size={14} color={colors.onSurfaceInverse} />
+                <Text style={styles.actionBtnText}>{exporting ? "…" : "SAVE"}</Text>
+              </Pressable>
+            ) : null}
+            {showDriverDetailActions && driverDetail ? (
+              <Pressable
+                style={styles.actionBtn}
+                disabled={exporting}
+                onPress={() => exportDriver(driverDetail, "share")}
+                testID="reports-share"
+              >
+                <Ionicons name="share-outline" size={14} color={colors.onSurfaceInverse} />
+                <Text style={styles.actionBtnText}>{exporting ? "…" : "SHARE"}</Text>
+              </Pressable>
+            ) : null}
+            {showSaveShare ? (
+              <Pressable
+                style={styles.actionBtn}
+                disabled={exporting}
+                onPress={() => {
+                  if (mode === "farmer") setFormatPicker({ kind: "farmer", action: "share" });
+                  else if (mode === "vendor") setFormatPicker({ kind: "vendor", action: "share" });
+                  else if (mode === "audit") setFormatPicker({ kind: "audit", action: "share" });
+                }}
+                testID="reports-share"
+              >
+                <Ionicons name="share-outline" size={14} color={colors.onSurfaceInverse} />
+                <Text style={styles.actionBtnText}>{exporting ? "…" : "SHARE"}</Text>
+              </Pressable>
+            ) : null}
           </View>
         ) : null}
       </View>
@@ -476,22 +567,30 @@ export default function Reports() {
           keyExtractor={(x) => x.id}
           contentContainerStyle={{ padding: spacing.lg, gap: spacing.sm, paddingBottom: 120 }}
           ListEmptyComponent={
-            loading ? null : (
+            loading ? (
+              <View style={styles.farmerLoading} testID="farmer-loading">
+                <ActivityIndicator color={colors.brandPrimary} />
+              </View>
+            ) : (
               <Empty title="No pattis" subtitle="Generate pattis for this date." testID="farmer-empty" />
             )
           }
           ListHeaderComponent={
             (pattis || []).length ? (
-              <View style={styles.thRow}>
-                <Text style={[styles.th, { flex: 0.5 }]}>PATTI</Text>
-                <Text style={[styles.th, { flex: 0.65 }]}>LOT</Text>
-                <Text style={[styles.th, { flex: 1 }]}>FARMER</Text>
-                <Text style={[styles.th, { flex: 0.45, textAlign: "right" }]}>BAGS</Text>
-                <Text style={[styles.th, { flex: 0.7, textAlign: "right" }]}>BHADA</Text>
-                <Text style={[styles.th, { flex: 0.85, textAlign: "right" }]}>GROSS</Text>
-                <Text style={[styles.th, { flex: 0.85, textAlign: "right" }]}>PAYABLE</Text>
-                <Text style={[styles.th, { flex: 0.75 }]}>RECV</Text>
-              </View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                <View>
+                  <View style={styles.farmThRow} testID="farmer-details-header">
+                    <Text style={[styles.th, styles.farmWPt]}>PATTI</Text>
+                    <Text style={[styles.th, styles.farmWLot]}>LOT</Text>
+                    <Text style={[styles.th, styles.farmWFarm]}>FARMER</Text>
+                    <Text style={[styles.th, styles.farmWBags, styles.farmNum]}>BAGS</Text>
+                    <Text style={[styles.th, styles.farmWMoney, styles.farmNum]}>BHADA</Text>
+                    <Text style={[styles.th, styles.farmWMoney, styles.farmNum]}>GROSS</Text>
+                    <Text style={[styles.th, styles.farmWMoney, styles.farmNum]}>PAYABLE</Text>
+                    <Text style={[styles.th, styles.farmWRecv]}>RECV</Text>
+                  </View>
+                </View>
+              </ScrollView>
             ) : null
           }
           ListFooterComponent={
@@ -506,7 +605,11 @@ export default function Reports() {
               />
             ) : null
           }
-          renderItem={({ item }) => <FarmerDetailsRow p={item} drivers={auctionDrivers} />}
+          renderItem={({ item }) => (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <FarmerDetailsRow p={item} drivers={auctionDrivers} />
+            </ScrollView>
+          )}
         />
       ) : mode === "audit" ? (
         <AuditLogView rows={auditFiltered} search={search} onSearch={setSearch} loading={loading} />
@@ -794,27 +897,38 @@ function DriverPattiRow({ p }: { p: Patti }) {
 function FarmerDetailsRow({ p, drivers }: { p: Patti; drivers: DriverRangeRef[] }) {
   const received = isPattiReceived(p, drivers);
   return (
-    <View style={[styles.row, received && styles.rowReceived]}>
-      <View style={{ flex: 0.5, flexDirection: "row", alignItems: "center", gap: 2 }}>
+    <View style={[styles.farmRow, received && styles.rowReceived]} testID={`farmer-row-${p.id}`}>
+      <View style={[styles.farmWPt, styles.farmCell, { flexDirection: "row", alignItems: "center", gap: 2 }]}>
         {received ? <Text style={styles.check}>✓</Text> : null}
-        <Text style={styles.mono}>#{p.patti_no}</Text>
+        <Text style={styles.mono} numberOfLines={1}>#{p.patti_no}</Text>
       </View>
-      <Text style={[styles.mono, { flex: 0.65 }]} numberOfLines={1}>{lotLabel(p)}</Text>
-      <Text style={[styles.cellDim, { flex: 1 }]} numberOfLines={1}>{p.farmer_name}</Text>
-      <Text style={[styles.mono, { flex: 0.45, textAlign: "right" }]}>{p.total_bags}</Text>
-      <Text style={[styles.mono, { flex: 0.7, textAlign: "right" }]}>{money(p.bhada_total)}</Text>
-      <Text style={[styles.mono, { flex: 0.85, textAlign: "right" }]}>{money(p.farmer_gross)}</Text>
+      <Text style={[styles.mono, styles.farmWLot, styles.farmCell]} numberOfLines={1}>{lotLabel(p)}</Text>
+      <Text style={[styles.cellDim, styles.farmWFarm, styles.farmCell]} numberOfLines={1}>{p.farmer_name}</Text>
+      <Text style={[styles.mono, styles.farmWBags, styles.farmCell, styles.farmNum]} numberOfLines={1}>
+        {p.total_bags}
+      </Text>
+      <Text style={[styles.mono, styles.farmWMoney, styles.farmCell, styles.farmNum]} numberOfLines={1}>
+        {money(p.bhada_total)}
+      </Text>
+      <Text style={[styles.mono, styles.farmWMoney, styles.farmCell, styles.farmNum]} numberOfLines={1}>
+        {money(p.farmer_gross)}
+      </Text>
       <Text
         style={[
           styles.mono,
           styles.strong,
-          { flex: 0.85, textAlign: "right" },
+          styles.farmWMoney,
+          styles.farmCell,
+          styles.farmNum,
           received && styles.strike,
         ]}
+        numberOfLines={1}
       >
         {money(p.net_payable)}
       </Text>
-      <Text style={[styles.cellDim, { flex: 0.75 }]} numberOfLines={1}>{receiverDisplay(p, drivers)}</Text>
+      <Text style={[styles.cellDim, styles.farmWRecv, styles.farmCell]} numberOfLines={1}>
+        {receiverDisplay(p, drivers)}
+      </Text>
     </View>
   );
 }
@@ -1035,6 +1149,36 @@ const styles = StyleSheet.create({
   drvWRecv: { width: 120 },
   drvCell: { fontSize: 11 },
   drvPay: { fontSize: 12, fontWeight: "800", textAlign: "right" },
+  /** Fixed-width Farmer Details columns — avoids overlap on ~390px phones. */
+  farmThRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderBottomWidth: 2,
+    borderColor: colors.borderStrong,
+    paddingBottom: 6,
+    width: 640,
+  },
+  farmRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+    backgroundColor: colors.surface,
+    width: 640,
+  },
+  farmWPt: { width: 56 },
+  farmWLot: { width: 72 },
+  farmWFarm: { width: 120 },
+  farmWBags: { width: 48 },
+  farmWMoney: { width: 96 },
+  farmWRecv: { width: 88 },
+  farmCell: { fontSize: 11 },
+  farmNum: { textAlign: "right" },
+  farmerLoading: { paddingVertical: spacing.xl, alignItems: "center" },
   rowReceived: { backgroundColor: colors.brandSecondary },
   label: { fontSize: 14, fontWeight: "800", color: colors.onSurface, fontFamily: font.display },
   cellDim: { fontSize: 12, fontWeight: "700", color: colors.onSurface, fontFamily: font.display },

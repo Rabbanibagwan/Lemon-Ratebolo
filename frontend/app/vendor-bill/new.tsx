@@ -15,6 +15,8 @@ import { colors, font, money, spacing } from "@/src/theme";
 import { useWorkingDate } from "@/src/context/WorkingDateContext";
 import { DatePickerModal } from "@/src/components/DatePickerModal";
 import { formatDisplayDate, parseISODate, toISODate } from "@/src/utils/date";
+import { createEnterGate, handleEnterAdvance } from "@/src/utils/physical-keyboard";
+import { vendorBillSellingRate } from "@/src/utils/vendor-bill-totals";
 
 type LineDraft = {
   key: string;
@@ -40,6 +42,7 @@ export default function NewVendorBill() {
   const [date, setDate] = useState(workingDateISO);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [margin, setMargin] = useState("30");
+  const [extra, setExtra] = useState("0"); // + Extra / Bag ₹ — vendor-side only
   const [vendorFactor, setVendorFactor] = useState("1.06");
   const [commission, setCommission] = useState("10");
   const [hamali, setHamali] = useState("0");
@@ -51,6 +54,7 @@ export default function NewVendorBill() {
 
   const bagsRefs = useRef<Record<string, TextInput | null>>({});
   const rateRefs = useRef<Record<string, TextInput | null>>({});
+  const lineEnterGate = useRef(createEnterGate()).current;
 
   useEffect(() => {
     (async () => {
@@ -67,6 +71,7 @@ export default function NewVendorBill() {
           setVendor({ id: b.vendor_id, name: b.vendor_name, details: b.vendor_details, phone: null, created_at: b.created_at });
           setDate(b.date);
           setMargin(String(b.margin_per_bag));
+          setExtra(String(b.extra_per_bag ?? 0)); // legacy bills → 0
           setVendorFactor(String(b.vendor_factor ?? 1.06));
           setCommission(String(b.commission_per_bag));
           setHamali(String(b.hamali));
@@ -75,9 +80,10 @@ export default function NewVendorBill() {
           setLines(b.lines.map((l) => {
             const factor = Number(b.vendor_factor ?? 1.06);
             const marginN = Number(b.margin_per_bag) || 0;
-            const formula = l.auction_rate * factor + marginN;
+            const extraN = Number(b.extra_per_bag ?? 0) || 0;
+            const formula = vendorBillSellingRate(l.auction_rate, factor, marginN, extraN);
             // Only keep an explicit override when it differs from the factor formula.
-            // Otherwise leave empty so Vendor factor / margin changes recalculate rates.
+            // Otherwise leave empty so Vendor factor / margin / extra changes recalculate rates.
             const isOverride = Math.abs(Number(l.vendor_rate) - formula) > 0.009;
             return {
               key: newKey(), lot_id: l.lot_id, lot_no: l.lot_no, farmer_name: l.farmer_name,
@@ -141,6 +147,7 @@ export default function NewVendorBill() {
 
   const totals = useMemo(() => {
     const marginN = Number(margin) || 0;
+    const extraN = Number(extra) || 0;
     const factorN = Number(vendorFactor) || 1;
     const commN = Number(commission) || 0;
     const hamaliN = Number(hamali) || 0;
@@ -150,14 +157,17 @@ export default function NewVendorBill() {
       const b = Number(l.bags) || 0;
       const r = Number(l.auction_rate) || 0;
       const override = l.vendor_rate.trim() === "" ? null : Number(l.vendor_rate);
-      const vendorRate = override != null && isFinite(override) ? override : r * factorN + marginN;
+      const vendorRate = override != null && isFinite(override)
+        ? override
+        : vendorBillSellingRate(r, factorN, marginN, extraN);
       bags += b;
       goods += b * vendorRate;
     }
     const commTotal = bags * commN;
+    const extraTotal = bags * extraN;
     const grand = goods + commTotal + hamaliN + cessN;
-    return { bags, goods, commTotal, marginN, factorN, commN, hamaliN, cessN, grand };
-  }, [lines, margin, vendorFactor, commission, hamali, cess]);
+    return { bags, goods, commTotal, extraTotal, marginN, extraN, factorN, commN, hamaliN, cessN, grand };
+  }, [lines, margin, extra, vendorFactor, commission, hamali, cess]);
 
   const save = async (mode: "save" | "print" | "share" = "save") => {
     if (saving) return;
@@ -171,6 +181,7 @@ export default function NewVendorBill() {
       date,
       vendor_factor: Number(vendorFactor) || 1.06,
       margin_per_bag: Number(margin) || 0,
+      extra_per_bag: Number(extra) || 0,
       commission_per_bag: Number(commission) || 0,
       hamali: Number(hamali) || 0,
       cess: Number(cess) || 0,
@@ -283,6 +294,14 @@ export default function NewVendorBill() {
             </View>
           </View>
           <Input label="Cess / Other (total) ₹" value={cess} onChangeText={(v) => setCess(v.replace(/[^0-9.]/g, ""))} keyboardType="decimal-pad" testID="bill-cess" />
+          <Input
+            label="+ Extra / bag ₹"
+            value={extra}
+            onChangeText={(v) => setExtra(v.replace(/[^0-9.]/g, ""))}
+            keyboardType="decimal-pad"
+            hint="Added to every bag on this Vendor Bill only. Does not affect Farmer Patti."
+            testID="bill-extra"
+          />
 
           <Text style={styles.section}>Lines</Text>
 
@@ -311,7 +330,8 @@ export default function NewVendorBill() {
                     keyboardType="number-pad"
                     inputRef={(r) => { bagsRefs.current[l.key] = r; }}
                     returnKeyType="next"
-                    onSubmitEditing={() => rateRefs.current[l.key]?.focus()}
+                    blurOnSubmit={false}
+                    {...handleEnterAdvance(lineEnterGate, () => rateRefs.current[l.key]?.focus())}
                     testID={`bill-bags-${idx}`}
                   />
                 </View>
@@ -323,7 +343,11 @@ export default function NewVendorBill() {
                     keyboardType="decimal-pad"
                     inputRef={(r) => { rateRefs.current[l.key] = r; }}
                     returnKeyType="done"
-                    onSubmitEditing={() => { /* no auto-add; user must tap ADD LINE */ }}
+                    blurOnSubmit
+                    {...handleEnterAdvance(lineEnterGate, () => {
+                      /* no auto-add; user must tap ADD LINE */
+                      rateRefs.current[l.key]?.blur();
+                    })}
                     testID={`bill-rate-${idx}`}
                   />
                 </View>
@@ -334,7 +358,12 @@ export default function NewVendorBill() {
                   l.vendor_rate !== ""
                     ? l.vendor_rate
                     : (Number(l.auction_rate) > 0
-                      ? String(Number(l.auction_rate) * (Number(vendorFactor) || 1) + (Number(margin) || 0))
+                      ? String(vendorBillSellingRate(
+                        Number(l.auction_rate),
+                        Number(vendorFactor) || 1,
+                        Number(margin) || 0,
+                        Number(extra) || 0,
+                      ))
                       : "")
                 }
                 onChangeText={(v) => updateLine(l.key, { vendor_rate: v.replace(/[^0-9.]/g, "") })}
@@ -347,7 +376,12 @@ export default function NewVendorBill() {
                   Line total: {money(Number(l.bags) * (
                     l.vendor_rate.trim() !== ""
                       ? (Number(l.vendor_rate) || 0)
-                      : (Number(l.auction_rate) * (Number(vendorFactor) || 1) + (Number(margin) || 0))
+                      : vendorBillSellingRate(
+                        Number(l.auction_rate),
+                        Number(vendorFactor) || 1,
+                        Number(margin) || 0,
+                        Number(extra) || 0,
+                      )
                   ))}
                 </Text>
               ) : null}
@@ -362,8 +396,11 @@ export default function NewVendorBill() {
           <View style={styles.divider} />
 
           <Text style={styles.section}>Totals</Text>
-          <SummaryRow label="Bags" value={String(totals.bags)} />
-          <SummaryRow label={`Goods (×${totals.factorN} + ₹${totals.marginN}/bag)`} value={money(totals.goods)} />
+          <SummaryRow label="No. of Bags" value={String(totals.bags)} />
+          <SummaryRow label="Lemon" value={money(totals.goods)} />
+          {totals.extraN > 0 ? (
+            <SummaryRow label={`+ Extra (${totals.bags} × ₹${totals.extraN})`} value={money(totals.extraTotal)} />
+          ) : null}
           <SummaryRow label={`Commission (${totals.bags} × ₹${totals.commN})`} value={money(totals.commTotal)} />
           <SummaryRow label="Hamali" value={money(totals.hamaliN)} />
           {totals.cessN > 0 ? <SummaryRow label="Cess / Other" value={money(totals.cessN)} /> : null}

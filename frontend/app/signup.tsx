@@ -4,7 +4,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 
 import { useAuth } from "@/src/context/AuthContext";
-import { apiErrorMessage } from "@/src/api";
+import { authErrorMessage } from "@/src/api";
 import { KeyboardFormScroll } from "@/src/components/KeyboardForm";
 import { Button, Input } from "@/src/components/ui";
 import { colors, font, spacing } from "@/src/theme";
@@ -19,6 +19,7 @@ export default function Signup() {
   const [loading, setLoading] = useState(false);
 
   const onSubmit = async () => {
+    if (loading) return;
     setError(null);
     if (!shopName.trim() || !username.trim() || !password) {
       setError("All fields are required");
@@ -37,7 +38,7 @@ export default function Signup() {
       await signup(shopName.trim(), username.trim(), password);
       router.replace("/(tabs)");
     } catch (e: any) {
-      setError(apiErrorMessage(e, "Signup failed"));
+      setError(authErrorMessage(e, "Signup failed"));
     } finally {
       setLoading(false);
     }

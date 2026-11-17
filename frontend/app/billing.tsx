@@ -79,11 +79,18 @@ export default function BillingScreen() {
   );
   const bagBalanceOff = wallet?.purchase_enabled === false;
 
+  // When Admin disables bag purchase: block PURCHASE / HISTORY purchase paths,
+  // but keep FREE tab reachable for claim (Free Bags must not disappear).
   useEffect(() => {
     if (!bagBalanceOff) return;
-    Alert.alert("Bag Balance unavailable", "Bag purchase is currently unavailable.");
-    router.replace("/");
-  }, [bagBalanceOff, router]);
+    if (tab !== "free") {
+      setTab("free");
+      Alert.alert(
+        "Bag purchase unavailable",
+        "Purchasing bags is currently disabled. Free Bags claim remains available.",
+      );
+    }
+  }, [bagBalanceOff, tab]);
 
   const load = useCallback(async () => {
     if (!isOwner) return;
@@ -204,7 +211,7 @@ export default function BillingScreen() {
     }
   };
 
-  if (!isOwner || bagBalanceOff) {
+  if (!isOwner) {
     return <SafeAreaView style={styles.root} edges={["top"]} />;
   }
 
@@ -281,12 +288,17 @@ export default function BillingScreen() {
         ) : null}
 
         <View style={styles.tabs}>
-          {([
-            ["buy", "PURCHASE"],
-            ["purchases", "HISTORY"],
-            ["usage", "USAGE"],
-            ["free", "FREE"],
-          ] as const).map(([key, label]) => (
+          {(
+            (bagBalanceOff
+              ? ([["free", "FREE"], ["usage", "USAGE"]] as const)
+              : ([
+                  ["buy", "PURCHASE"],
+                  ["purchases", "HISTORY"],
+                  ["usage", "USAGE"],
+                  ["free", "FREE"],
+                ] as const)
+            )
+          ).map(([key, label]) => (
             <Pressable
               key={key}
               onPress={() => setTab(key)}
@@ -300,7 +312,7 @@ export default function BillingScreen() {
           ))}
         </View>
 
-        {tab === "buy" ? (
+        {tab === "buy" && !bagBalanceOff ? (
           <View style={styles.card}>
             <Text style={styles.cardLabel}>PURCHASE BAGS</Text>
             <Text style={styles.hint}>
@@ -326,7 +338,7 @@ export default function BillingScreen() {
           </View>
         ) : null}
 
-        {tab === "purchases" ? (
+        {tab === "purchases" && !bagBalanceOff ? (
           <View style={styles.card}>
             <Text style={styles.cardLabel}>PURCHASE HISTORY</Text>
             {purchases.length === 0 ? (

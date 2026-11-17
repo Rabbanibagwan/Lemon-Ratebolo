@@ -240,6 +240,68 @@ class TestVendorBillCRUD:
         requests.delete(f"{base_url}/api/vendor-bills/{b['id']}",
                         json={"reason": "cleanup"}, headers=H)
 
+    def test_create_vendor_bill_with_extra_per_bag(self, base_url, shop, seed):
+        """extra_per_bag is additive to margin; applies to every bag/line (Vendor Bill only)."""
+        H = shop["headers"]
+        body = {
+            "vendor_id": seed["v2"]["id"],
+            "date": _today(),
+            "vendor_factor": 1.0,
+            "margin_per_bag": 30,
+            "extra_per_bag": 50,
+            "commission_per_bag": 10,
+            "hamali": 0,
+            "cess": 0,
+            "lines": [
+                {"lot_no": "E1", "farmer_name": "Ramanna", "bags": 5, "auction_rate": 2000},
+                {"lot_no": "E2", "farmer_name": "Gowda", "bags": 3, "auction_rate": 1500},
+            ],
+        }
+        r = requests.post(f"{base_url}/api/vendor-bills", json=body, headers=H)
+        assert r.status_code == 201, r.text
+        b = r.json()
+        # Line1: 2000+30+50=2080 → 5×2080=10400; Line2: 1500+30+50=1580 → 3×1580=4740
+        assert b["extra_per_bag"] == 50.0
+        assert b["lines"][0]["vendor_rate"] == 2080.0
+        assert b["lines"][0]["amount"] == 10400.0
+        assert b["lines"][1]["vendor_rate"] == 1580.0
+        assert b["lines"][1]["amount"] == 4740.0
+        assert b["total_bags"] == 8
+        assert b["goods_total"] == 15140.0
+        # Commission still bags × commission_per_bag only (extra not double-counted)
+        assert b["commission_total"] == 80.0
+        assert b["grand_total"] == 15220.0  # 15140 + 80
+        # Persist + restore
+        got = requests.get(f"{base_url}/api/vendor-bills/{b['id']}", headers=H).json()
+        assert got["extra_per_bag"] == 50.0
+        assert got["goods_total"] == 15140.0
+        requests.delete(f"{base_url}/api/vendor-bills/{b['id']}",
+                        json={"reason": "cleanup"}, headers=H)
+
+    def test_create_vendor_bill_extra_defaults_zero(self, base_url, shop, seed):
+        """Omitting extra_per_bag must match legacy totals (backward compatible)."""
+        H = shop["headers"]
+        body = {
+            "vendor_id": seed["v2"]["id"],
+            "date": _today(),
+            "vendor_factor": 1.0,
+            "margin_per_bag": 30,
+            "commission_per_bag": 10,
+            "hamali": 0,
+            "cess": 0,
+            "lines": [{"lot_no": "Z0", "farmer_name": "Ramanna",
+                       "bags": 5, "auction_rate": 1500}],
+        }
+        r = requests.post(f"{base_url}/api/vendor-bills", json=body, headers=H)
+        assert r.status_code == 201, r.text
+        b = r.json()
+        assert b.get("extra_per_bag", 0) == 0.0
+        assert b["lines"][0]["vendor_rate"] == 1530.0
+        assert b["goods_total"] == 7650.0
+        assert b["grand_total"] == 7700.0
+        requests.delete(f"{base_url}/api/vendor-bills/{b['id']}",
+                        json={"reason": "cleanup"}, headers=H)
+
     def test_list_bills_by_vendor(self, base_url, shop, seed):
         H = shop["headers"]
         r = requests.get(f"{base_url}/api/vendor-bills",

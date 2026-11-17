@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   FlatList, Modal, Pressable,
   RefreshControl, StyleSheet, Text, TextInput, View,
@@ -11,6 +11,28 @@ import { api, Farmer, Vendor } from "@/src/api";
 import { KeyboardFormAvoid } from "@/src/components/KeyboardForm";
 import { Button, Empty, Input } from "@/src/components/ui";
 import { colors, font, spacing } from "@/src/theme";
+import {
+  createEnterGate,
+  handleEnterAdvance,
+  isEnterKey,
+  isEscapeKey,
+} from "@/src/utils/physical-keyboard";
+
+function mergeKeyHandlers(
+  enter: ReturnType<typeof handleEnterAdvance>,
+  onEscape: () => void,
+) {
+  return {
+    onSubmitEditing: enter.onSubmitEditing,
+    onKeyPress: (e: { nativeEvent: { key: string } }) => {
+      if (isEscapeKey(e.nativeEvent.key)) {
+        onEscape();
+        return;
+      }
+      if (isEnterKey(e.nativeEvent.key)) enter.onKeyPress(e);
+    },
+  };
+}
 
 type Tab = "farmers" | "vendors";
 
@@ -28,6 +50,11 @@ export default function Directory() {
   const [details, setDetails] = useState(""); // vendor-only: Shop name / Village
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const nameRef = useRef<TextInput | null>(null);
+  const detailsRef = useRef<TextInput | null>(null);
+  const phoneRef = useRef<TextInput | null>(null);
+  const villageRef = useRef<TextInput | null>(null);
+  const modalEnterGate = useRef(createEnterGate()).current;
 
   const load = useCallback(async () => {
     try {
@@ -98,6 +125,11 @@ export default function Directory() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const saveFromKeyboard = () => {
+    if (saving) return;
+    void save();
   };
 
   const remove = async () => {
@@ -214,6 +246,17 @@ export default function Directory() {
               autoCapitalize="words"
               placeholder="Full name"
               testID="modal-name"
+              inputRef={nameRef}
+              autoFocus
+              returnKeyType="next"
+              blurOnSubmit={false}
+              {...mergeKeyHandlers(
+                handleEnterAdvance(modalEnterGate, () => {
+                  if (modal?.kind === "vendors") detailsRef.current?.focus();
+                  else phoneRef.current?.focus();
+                }),
+                close,
+              )}
             />
             {modal?.kind === "vendors" && (
               <Input
@@ -223,6 +266,13 @@ export default function Directory() {
                 placeholder="e.g. MM Traders, Indi"
                 autoCapitalize="words"
                 testID="modal-details"
+                inputRef={detailsRef}
+                returnKeyType="next"
+                blurOnSubmit={false}
+                {...mergeKeyHandlers(
+                  handleEnterAdvance(modalEnterGate, () => phoneRef.current?.focus()),
+                  close,
+                )}
               />
             )}
             <Input
@@ -232,6 +282,14 @@ export default function Directory() {
               placeholder="10-digit mobile"
               keyboardType="phone-pad"
               testID="modal-phone"
+              inputRef={phoneRef}
+              returnKeyType="done"
+              blurOnSubmit={false}
+              {...mergeKeyHandlers(
+                // Farmer: Name → Phone → Save (village optional). Vendor: … → Phone → Save.
+                handleEnterAdvance(modalEnterGate, saveFromKeyboard),
+                close,
+              )}
             />
             {modal?.kind === "farmers" && (
               <Input
@@ -240,6 +298,13 @@ export default function Directory() {
                 onChangeText={setVillage}
                 placeholder="Village / town"
                 testID="modal-village"
+                inputRef={villageRef}
+                returnKeyType="done"
+                blurOnSubmit={false}
+                {...mergeKeyHandlers(
+                  handleEnterAdvance(modalEnterGate, saveFromKeyboard),
+                  close,
+                )}
               />
             )}
 

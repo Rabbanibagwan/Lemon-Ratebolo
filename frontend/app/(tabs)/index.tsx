@@ -105,22 +105,28 @@ export default function Home() {
           <KPI label="Pending" value={String(data?.today_pending ?? 0)} accent={(data?.today_pending ?? 0) > 0} testID="kpi-pending" />
         </View>
 
+        {/* Free Bags claim stays available even when Admin disables bag purchase. */}
+        {isOwner && wallet && (wallet.free_available_to_claim || 0) > 0 ? (
+          <>
+            <Text style={[styles.sectionLabel, { marginTop: spacing.xl }]}>Free Bags</Text>
+            <Pressable
+              style={styles.freeClaimHome}
+              onPress={() => router.push({ pathname: "/billing", params: { tab: "free" } })}
+              testID="home-free-bags-claim"
+            >
+              <Text style={styles.freeClaimHomeTitle}>
+                🎁 You have received {wallet.free_available_to_claim!.toLocaleString()} free bags
+              </Text>
+              <Text style={styles.freeClaimHomeSub}>Claim them now to add them to your Bag Balance.</Text>
+              <Text style={styles.freeClaimHomeCta}>CLAIM FREE BAGS →</Text>
+            </Pressable>
+          </>
+        ) : null}
+
+        {/* Bag Balance purchase card — hidden when Admin disables bag purchase. */}
         {isOwner && wallet && bagBalanceOn ? (
           <>
             <Text style={[styles.sectionLabel, { marginTop: spacing.xl }]}>Bag Balance</Text>
-            {(wallet.free_available_to_claim || 0) > 0 ? (
-              <Pressable
-                style={styles.freeClaimHome}
-                onPress={() => router.push({ pathname: "/billing", params: { tab: "free" } })}
-                testID="home-free-bags-claim"
-              >
-                <Text style={styles.freeClaimHomeTitle}>
-                  🎁 You have received {wallet.free_available_to_claim!.toLocaleString()} free bags
-                </Text>
-                <Text style={styles.freeClaimHomeSub}>Claim them now to add them to your Bag Balance.</Text>
-                <Text style={styles.freeClaimHomeCta}>CLAIM FREE BAGS →</Text>
-              </Pressable>
-            ) : null}
             <Pressable
               style={styles.bagCard}
               onPress={() => router.push("/billing")}
@@ -162,7 +168,12 @@ export default function Home() {
         <Text style={[styles.sectionLabel, { marginTop: spacing.xl }]}>Driver</Text>
         <Pressable
           style={({ pressed }) => [styles.setDriverBtn, pressed && { opacity: 0.9 }]}
-          onPress={() => router.push({ pathname: "/(tabs)/auction", params: { editDrivers: "1" } })}
+          onPress={() =>
+            router.push({
+              pathname: "/(tabs)/auction",
+              params: { editDrivers: "1", source: "dashboard" },
+            })
+          }
           testID="quick-set-driver"
         >
           <Ionicons name="car-outline" size={22} color={colors.onBrandPrimary} />
@@ -173,6 +184,27 @@ export default function Home() {
           <Ionicons name="chevron-forward" size={18} color={colors.onBrandPrimary} />
         </Pressable>
 
+        {/* Cash Book — owner only; full CREDIT/DEBIT UI lives on /cash-book */}
+        {isOwner ? (
+          <>
+            <Text style={[styles.sectionLabel, { marginTop: spacing.xl }]}>Cash Book</Text>
+            <Pressable
+              style={({ pressed }) => [styles.cashBookCard, pressed && { backgroundColor: colors.surfaceSecondary }]}
+              onPress={() => router.push("/cash-book")}
+              testID="home-cash-book"
+            >
+              <View style={styles.cashBookIconBox}>
+                <Ionicons name="wallet-outline" size={28} color={colors.onSurface} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.cashBookTitle}>CASH BOOK</Text>
+                <Text style={styles.cashBookDesc}>Credit & debit entries by selected date</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={22} color={colors.muted} />
+            </Pressable>
+          </>
+        ) : null}
+
         <Text style={[styles.sectionLabel, { marginTop: spacing.xl }]}>Quick Actions</Text>
         <View style={styles.quickRow}>
           <QuickTile icon="search-outline" label="Search" onPress={() => router.push("/search")} testID="quick-search" />
@@ -180,6 +212,7 @@ export default function Home() {
           <QuickTile icon="add-circle-outline" label="Create Action Diary" onPress={() => router.push("/action-diary")} testID="quick-action-diary" />
           <QuickTile icon="document-text-outline" label="Patti Details" onPress={() => router.push("/(tabs)/history")} testID="quick-pattis" />
           <QuickTile icon="cash-outline" label="Vendors" onPress={() => router.push("/vendors")} testID="quick-vendors" />
+          <QuickTile icon="grid-outline" label="Chart" onPress={() => router.push("/chart" as any)} testID="quick-chart" />
           {isOwner && <QuickTile icon="book-outline" label="Account Ledger" onPress={() => router.push("/account-ledger")} testID="quick-ledger" />}
           {isOwner && bagBalanceOn && <QuickTile icon="bag-handle-outline" label="Bag Balance" onPress={() => router.push("/billing")} testID="quick-billing" />}
         </View>
@@ -308,4 +341,14 @@ const styles = StyleSheet.create({
   bagWarn: { fontSize: 13, color: "#B45309", fontFamily: font.display, fontWeight: "700", marginTop: 2 },
   bagLine: { fontSize: 12, color: colors.onSurface, fontFamily: font.mono, marginTop: 2 },
   bagCta: { marginTop: 8, fontSize: 12, letterSpacing: 1, fontWeight: "900", fontFamily: font.display, color: colors.brandPrimary },
+  cashBookCard: {
+    flexDirection: "row", alignItems: "center", gap: spacing.md,
+    borderWidth: 2, borderColor: colors.borderStrong, padding: spacing.md, backgroundColor: colors.surface,
+  },
+  cashBookIconBox: {
+    width: 52, height: 52, borderWidth: 2, borderColor: colors.borderStrong,
+    alignItems: "center", justifyContent: "center",
+  },
+  cashBookTitle: { fontSize: 15, fontWeight: "900", fontFamily: font.display, letterSpacing: 0.8, color: colors.onSurface },
+  cashBookDesc: { fontSize: 12, color: colors.muted, fontFamily: font.display, marginTop: 2, fontWeight: "600" },
 });
