@@ -34,6 +34,7 @@ After EAS finishes, copy fields from the EAS JSON/`build:view` output into the t
 | OCR exact-match + staff/QR tip APK | Android | preview | `ec743a5d-70c3-4aa1-8f5d-b960c72bcead` | FINISHED | `8f5a085238c5d0040e715db3a4de33bd632ed80f` | OCR exact-only (33 PASS), staff driver print, vendor QR/bags/cut, Cash Book live API code |
 | Login OCR isolation APK | Android | preview | `cbd082ec-c3ea-4b67-bce0-57bdaef57475` | FINISHED | `1b9aea214bd776b2242f2d3ddabaa5b97bc0e73b` | Login no longer shows OCR timeout; authErrorMessage + 120s AUTH timeout |
 | Brand icon + circular loader APK | Android | preview | `5f161778-d17f-45ee-8ad8-566f3e27e94b` | FINISHED | `002ac5045bbf9900250539634d5c03b3724dd5d7` | Official logo icon + BrandLogo zoom; ActivityIndicator loaders restored |
+| Vendor Bill Extra / Bag APK | Android | preview | _(pending EAS)_ | pending | _(this tip)_ | Extra / Bag on Vendor Bill only; Cash Book stay-on-entry; Farmer Report totals; versionCode 4 |
 
 ## Preview provenance (fill per run)
 
