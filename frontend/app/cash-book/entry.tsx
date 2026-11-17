@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -19,6 +27,19 @@ import {
   updateCashBookEntry,
   type CashBookSide,
 } from "@/src/utils/cash-book-store";
+
+function notify(title: string, body: string) {
+  // RN Alert buttons are unreliable on Expo web / iPhone Safari — use window.alert there.
+  if (Platform.OS === "web" && typeof window !== "undefined") {
+    window.alert(`${title}\n\n${body}`);
+    return;
+  }
+  Alert.alert(title, body);
+}
+
+function newClientRequestId(side: CashBookSide, dateISO: string): string {
+  return `ui-${side}-${dateISO}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
 export default function CashBookEntryScreen() {
   const router = useRouter();
@@ -40,10 +61,8 @@ export default function CashBookEntryScreen() {
   const [saving, setSaving] = useState(false);
   /** Sync guard: React state alone cannot block rapid double-taps before re-render. */
   const savingRef = useRef(false);
-  /** Stable idempotency key for this screen session (prevents duplicate saves on retry/double-tap). */
-  const clientRequestIdRef = useRef(
-    `ui-${sideFromParam}-${workingDateISO}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-  );
+  /** Stable idempotency key until a save succeeds (prevents duplicates on retry/double-tap). */
+  const clientRequestIdRef = useRef(newClientRequestId(sideFromParam, workingDateISO));
   const [loadingEdit, setLoadingEdit] = useState(isEdit);
 
   useEffect(() => {
@@ -76,6 +95,15 @@ export default function CashBookEntryScreen() {
     () => (entryDateISO === workingDateISO ? workingDisplay : formatDisplayDate(entryDate)),
     [entryDateISO, workingDateISO, workingDisplay, entryDate],
   );
+
+  const returnToCashBook = () => {
+    // Prefer back so we do not stack another Cash Book screen.
+    if (typeof router.canGoBack === "function" && router.canGoBack()) {
+      router.back();
+      return;
+    }
+    router.replace("/cash-book");
+  };
 
   const save = async () => {
     if (!isOwner) return;
@@ -112,13 +140,28 @@ export default function CashBookEntryScreen() {
           clientRequestId: clientRequestIdRef.current,
         });
       }
-      Alert.alert("Cash Book", isEdit ? "Entry updated." : `${side} saved.`, [
-        { text: "OK", onPress: () => router.back() },
-      ]);
+
+      // Persistence confirmed — reset form fields, keep selected date, then leave.
+      setAmount("");
+      setDescription("");
+      setError(null);
+      if (!isEdit) {
+        setEntryDateISO(workingDateISO);
+        clientRequestIdRef.current = newClientRequestId(side, workingDateISO);
+      }
+
+      const successMsg = isEdit
+        ? "Entry updated."
+        : side === "CREDIT"
+          ? "Credit saved successfully"
+          : "Debit saved successfully";
+      notify("Cash Book", successMsg);
+      returnToCashBook();
     } catch (e: any) {
+      // Keep amount/description so the user can retry safely.
       const msg = apiErrorMessage(e, e?.message || "Could not save entry");
       setError(msg);
-      Alert.alert("Cash Book", msg);
+      notify("Cash Book", msg);
     } finally {
       savingRef.current = false;
       setSaving(false);
