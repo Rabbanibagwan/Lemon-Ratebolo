@@ -34,7 +34,7 @@ After EAS finishes, copy fields from the EAS JSON/`build:view` output into the t
 | OCR exact-match + staff/QR tip APK | Android | preview | `ec743a5d-70c3-4aa1-8f5d-b960c72bcead` | FINISHED | `8f5a085238c5d0040e715db3a4de33bd632ed80f` | OCR exact-only (33 PASS), staff driver print, vendor QR/bags/cut, Cash Book live API code |
 | Login OCR isolation APK | Android | preview | `cbd082ec-c3ea-4b67-bce0-57bdaef57475` | FINISHED | `1b9aea214bd776b2242f2d3ddabaa5b97bc0e73b` | Login no longer shows OCR timeout; authErrorMessage + 120s AUTH timeout |
 | Brand icon + circular loader APK | Android | preview | `5f161778-d17f-45ee-8ad8-566f3e27e94b` | FINISHED | `002ac5045bbf9900250539634d5c03b3724dd5d7` | Official logo icon + BrandLogo zoom; ActivityIndicator loaders restored |
-| Vendor Bill Extra / Bag APK | Android | preview | _(pending EAS)_ | pending | _(this tip)_ | Extra / Bag on Vendor Bill only; Cash Book stay-on-entry; Farmer Report totals; versionCode 4 |
+| Vendor Bill Extra / Bag APK | Android | preview | `806fbc19-8ed9-47e2-b827-954060260b16` | FINISHED | `d046246227eff3496eb88e023ba55a76965d3c4c` | Extra / Bag on Vendor Bill only; Cash Book stay-on-entry; Farmer Report totals; versionCode 4 |
 
 ## Preview provenance (fill per run)
 
@@ -52,15 +52,15 @@ After EAS finishes, copy fields from the EAS JSON/`build:view` output into the t
 
 | Field | Value |
 |---|---|
-| Branch | `cursor/permanent-feature-recovery-80c6` |
-| Full commit SHA | `002ac5045bbf9900250539634d5c03b3724dd5d7` |
+| Branch | `cursor/vendor-bill-extra-per-bag-80c6` |
+| Full commit SHA | `d046246227eff3496eb88e023ba55a76965d3c4c` |
 | App version | 1.0.1 |
-| versionCode | 3 |
-| EAS build ID | `5f161778-d17f-45ee-8ad8-566f3e27e94b` |
-| EAS URL | https://expo.dev/accounts/rabanibagawan/projects/lemon-ratebolo/builds/5f161778-d17f-45ee-8ad8-566f3e27e94b |
-| APK URL | https://expo.dev/artifacts/eas/dp6te0GSCmjT9UqxQs2zdGQzow5ZtyzGppXY7WT1G5E.apk |
-| Inventory revision SHA | `002ac50` |
-| Release gate | 18 PASS / 0 FAIL / 2 PHYSICAL |
+| versionCode | 4 |
+| EAS build ID | `806fbc19-8ed9-47e2-b827-954060260b16` |
+| EAS URL | https://expo.dev/accounts/rabanibagawan/projects/lemon-ratebolo/builds/806fbc19-8ed9-47e2-b827-954060260b16 |
+| APK URL | https://expo.dev/artifacts/eas/m2zdNIagwnz35-XnL63Ktj_3TZjFdzjY2gEgNqxkf8U.apk |
+| Inventory revision SHA | `d046246` |
+| Release gate | 21 PASS / 0 FAIL / 2 PHYSICAL |
 | Physical printer | PHYSICAL TEST REQUIRED |
 
 ## iOS IPA provenance (fill per build)
