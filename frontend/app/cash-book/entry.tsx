@@ -96,15 +96,6 @@ export default function CashBookEntryScreen() {
     [entryDateISO, workingDateISO, workingDisplay, entryDate],
   );
 
-  const returnToCashBook = () => {
-    // Prefer back so we do not stack another Cash Book screen.
-    if (typeof router.canGoBack === "function" && router.canGoBack()) {
-      router.back();
-      return;
-    }
-    router.replace("/cash-book");
-  };
-
   const save = async () => {
     if (!isOwner) return;
     if (savingRef.current) return;
@@ -141,14 +132,15 @@ export default function CashBookEntryScreen() {
         });
       }
 
-      // Persistence confirmed — reset form fields, keep selected date, then leave.
-      setAmount("");
-      setDescription("");
-      setError(null);
+      // Persistence confirmed — clear amount/description, keep selected date,
+      // stay on this entry screen so the next transaction can be entered immediately.
+      // Cash Book reloads when the user later presses Back (useFocusEffect).
       if (!isEdit) {
-        setEntryDateISO(workingDateISO);
-        clientRequestIdRef.current = newClientRequestId(side, workingDateISO);
+        setAmount("");
+        setDescription("");
+        clientRequestIdRef.current = newClientRequestId(side, entryDateISO);
       }
+      setError(null);
 
       const successMsg = isEdit
         ? "Entry updated."
@@ -156,7 +148,6 @@ export default function CashBookEntryScreen() {
           ? "Credit saved successfully"
           : "Debit saved successfully";
       notify("Cash Book", successMsg);
-      returnToCashBook();
     } catch (e: any) {
       // Keep amount/description so the user can retry safely.
       const msg = apiErrorMessage(e, e?.message || "Could not save entry");

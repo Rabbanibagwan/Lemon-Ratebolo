@@ -45,9 +45,14 @@ assert(entry.includes("ActivityIndicator"), "entry loading uses circular indicat
 assert(entry.includes("Credit saved successfully"), "credit success copy present");
 assert(entry.includes("Debit saved successfully"), "debit success copy present");
 assert(entry.includes('setAmount("")') && entry.includes('setDescription("")'), "clears amount/description after confirmed save");
-assert(entry.includes("returnToCashBook") || entry.includes("router.back()"), "returns to Cash Book after save");
+assert(
+  entry.includes("stay on this entry screen") || entry.includes("next transaction"),
+  "stays on Credit/Debit entry after CLOSE (does not auto-navigate away)",
+);
+assert(!/returnToCashBook\(\)/.test(entry), "does not auto-navigate to Cash Book after save");
 assert(entry.includes("savingRef.current"), "blocks double-tap while saving");
 assert(entry.includes("disabled={saving}"), "SAVE disabled while saving");
+assert(entry.includes("newClientRequestId"), "mints a fresh idempotency key for the next entry");
 assert(backend.includes("attach_cash_book"), "backend module attach present");
 assert(backend.includes('"/cash-book/day"'), "backend day route present");
 assert(server.includes("attach_cash_book"), "server wires cash_book module");
