@@ -152,13 +152,15 @@ def test_ocr_capacity_stages_mocked_provider():
     print("OCR_CAPACITY_HARNESS_RESULTS", json.dumps(results))
 
 
-def test_cash_book_has_no_backend_api_surface():
-    """Architectural guard: Cash Book must not appear as a backend route."""
+def test_cash_book_backend_api_is_wired():
+    """Cash Book live API must be registered on the shared /api router."""
     from pathlib import Path
 
-    server = Path(__file__).resolve().parents[1] / "server.py"
-    text = server.read_text(encoding="utf-8")
-    assert "/cash-book" not in text
-    assert '@api.post("/cash-book' not in text
-    assert '@api.get("/cash-book' not in text
-    assert "CashBook" not in text
+    root = Path(__file__).resolve().parents[1]
+    server = (root / "server.py").read_text(encoding="utf-8")
+    cash = (root / "cash_book.py").read_text(encoding="utf-8")
+    assert "attach_cash_book" in server
+    assert "ensure_cash_book_indexes" in server
+    assert '"/cash-book/day"' in cash
+    assert '"/cash-book/entries"' in cash
+    assert "CashBookDayOut" in cash

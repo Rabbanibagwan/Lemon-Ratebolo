@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -40,6 +40,10 @@ export default function CashBookEntryScreen() {
   const [saving, setSaving] = useState(false);
   /** Sync guard: React state alone cannot block rapid double-taps before re-render. */
   const savingRef = useRef(false);
+  /** Stable idempotency key for this screen session (prevents duplicate saves on retry/double-tap). */
+  const clientRequestIdRef = useRef(
+    `ui-${sideFromParam}-${workingDateISO}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  );
   const [loadingEdit, setLoadingEdit] = useState(isEdit);
 
   useEffect(() => {
@@ -105,10 +109,12 @@ export default function CashBookEntryScreen() {
           amount: n,
           description: description.trim(),
           date: entryDateISO,
-          clientRequestId: `ui-${side}-${entryDateISO}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          clientRequestId: clientRequestIdRef.current,
         });
       }
-      router.back();
+      Alert.alert("Cash Book", isEdit ? "Entry updated." : `${side} saved.`, [
+        { text: "OK", onPress: () => router.back() },
+      ]);
     } catch (e: any) {
       const msg = apiErrorMessage(e, e?.message || "Could not save entry");
       setError(msg);
@@ -165,7 +171,10 @@ export default function CashBookEntryScreen() {
         keyboardShouldPersistTaps="handled"
       >
         {loadingEdit ? (
-          <Text style={styles.hint}>Loading entry…</Text>
+          <View style={styles.loadingBox} testID="cash-book-entry-loading">
+            <ActivityIndicator color={colors.brandPrimary} />
+            <Text style={styles.hint}>Loading entry…</Text>
+          </View>
         ) : (
           <>
             <Input
@@ -175,6 +184,7 @@ export default function CashBookEntryScreen() {
               keyboardType="decimal-pad"
               placeholder="0"
               testID="cash-book-amount"
+              editable={!saving}
             />
             <Input
               label="DESCRIPTION"
@@ -182,6 +192,7 @@ export default function CashBookEntryScreen() {
               onChangeText={setDescription}
               placeholder={side === "CREDIT" ? "e.g. Cash Sale" : "e.g. Hamali"}
               testID="cash-book-description"
+              editable={!saving}
             />
 
             <Text style={styles.label}>DATE</Text>
@@ -194,6 +205,7 @@ export default function CashBookEntryScreen() {
                 style={styles.dateBox}
                 onPress={() => setShowPicker(true)}
                 testID="cash-book-entry-date"
+                disabled={saving}
               >
                 <Text style={styles.dateVal}>{entryDisplay}</Text>
                 <Ionicons name="calendar-outline" size={16} color={colors.onSurface} />
@@ -210,6 +222,7 @@ export default function CashBookEntryScreen() {
               label={isEdit ? "SAVE CHANGES" : `SAVE ${side}`}
               onPress={save}
               loading={saving}
+              disabled={saving}
               testID="cash-book-save"
             />
           </>
@@ -237,6 +250,7 @@ const styles = StyleSheet.create({
   },
   dateVal: { fontSize: 16, fontFamily: font.mono, fontWeight: "700", color: colors.onSurface },
   hint: { fontSize: 11, color: colors.muted, fontFamily: font.display, marginTop: 6, marginBottom: spacing.md },
+  loadingBox: { alignItems: "center", gap: spacing.sm, paddingVertical: spacing.xl },
   err: { color: "#B91C1C", fontFamily: font.display, fontWeight: "700", marginBottom: spacing.sm },
   denied: { padding: spacing.lg, paddingTop: spacing.xl },
   deniedText: { color: colors.onSurface, fontFamily: font.display, fontWeight: "700", fontSize: 15, lineHeight: 22 },
